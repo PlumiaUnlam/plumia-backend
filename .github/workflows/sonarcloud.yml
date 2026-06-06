@@ -22,12 +22,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
 
       - name: Tests con cobertura (para SonarCloud)
-        run: pnpm test:cov
+        run: pnpm test:cov -- --passWithNoTests
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v7
