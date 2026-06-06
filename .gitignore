@@ -4,6 +4,9 @@
 /build
 /tmp
 
+# Enforce pnpm — ignore npm lockfile
+package-lock.json
+
 # Logs
 logs
 *.log
