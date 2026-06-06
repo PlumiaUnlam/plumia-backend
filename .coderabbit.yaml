@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "es-ES"
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  path_instructions:
+    - path: "src/**/*.ts"
+      instructions: |
+        Revisa prácticas básicas de backend NestJS/TypeScript: evitar any innecesario,
+        console.log/debugger, secretos hardcodeados, catch que silencian errores,
+        lógica de negocio dentro de controllers, DTOs sin validación y acoplamiento
+        evidente entre domain, application e infrastructure.
+    - path: ".github/workflows/**/*"
+      instructions: |
+        Revisa que los workflows sean reproducibles, usen versiones fijas cuando aplique,
+        no expongan secretos y no dupliquen checks innecesariamente.
+
+chat:
+  auto_reply: true
