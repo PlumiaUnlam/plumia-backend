@@ -29,6 +29,8 @@ export class AuthService {
   }
 
   async register(
+    name: string,
+    lastname: string,
     email: string,
     password: string,
   ): Promise<{ access_token: string }> {
@@ -36,7 +38,7 @@ export class AuthService {
     if (existing) {
       throw new ConflictException('Email already in use');
     }
-    const user = await this.userService.create(email, password);
+    const user = await this.userService.create(name, lastname, email, password);
     return this.login(user);
   }
 }

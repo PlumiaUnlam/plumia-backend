@@ -14,9 +14,12 @@ describe('AuthService', () => {
 
   const mockUser = {
     id: 'uuid-1',
+    name: 'John',
+    lastname: 'Doe',
     email: 'test@test.com',
     passwordHash: 'hashed_password',
     createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(async () => {
@@ -107,15 +110,26 @@ describe('AuthService', () => {
       userService.findByEmail.mockResolvedValue(undefined);
       userService.create.mockResolvedValue({
         id: 'uuid-1',
+        name: 'John',
+        lastname: 'Doe',
         email: 'new@test.com',
+        passwordHash: 'hashed',
         createdAt: new Date(),
+        updatedAt: new Date(),
       });
       jwtService.sign.mockReturnValue('jwt_token');
 
-      const result = await authService.register('new@test.com', 'password123');
+      const result = await authService.register(
+        'John',
+        'Doe',
+        'new@test.com',
+        'password123',
+      );
 
       expect(result).toEqual({ access_token: 'jwt_token' });
       expect(userService.create.mock.calls[0]).toEqual([
+        'John',
+        'Doe',
         'new@test.com',
         'password123',
       ]);
@@ -125,7 +139,7 @@ describe('AuthService', () => {
       userService.findByEmail.mockResolvedValue(mockUser);
 
       await expect(
-        authService.register('test@test.com', 'password123'),
+        authService.register('John', 'Doe', 'test@test.com', 'password123'),
       ).rejects.toThrow(new ConflictException('Email already in use'));
       expect(userService.create.mock.calls).toHaveLength(0);
     });
