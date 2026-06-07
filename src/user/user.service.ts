@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 import { User } from './user.entity';
 
 type PublicUser = Omit<User, 'passwordHash'>;
@@ -9,12 +9,12 @@ type PublicUser = Omit<User, 'passwordHash'>;
 export class UserService {
   private readonly users: User[] = [];
 
-  async findByEmail(email: string): Promise<User | undefined> {
-    return this.users.find((u) => u.email === email);
+  findByEmail(email: string): Promise<User | undefined> {
+    return Promise.resolve(this.users.find((u) => u.email === email));
   }
 
-  async findById(id: string): Promise<User | undefined> {
-    return this.users.find((u) => u.id === id);
+  findById(id: string): Promise<User | undefined> {
+    return Promise.resolve(this.users.find((u) => u.id === id));
   }
 
   async create(email: string, password: string): Promise<PublicUser> {
@@ -26,7 +26,10 @@ export class UserService {
       createdAt: new Date(),
     };
     this.users.push(user);
-    const { passwordHash: _, ...publicUser } = user;
-    return publicUser;
+    return {
+      id: user.id,
+      email: user.email,
+      createdAt: user.createdAt,
+    };
   }
 }

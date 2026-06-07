@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Test, TestingModule } from '@nestjs/testing';
+import { Test, type TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
 import { UserService } from '../user/user.service';
 import { AuthService } from './auth.service';
@@ -95,7 +95,7 @@ describe('AuthService', () => {
       });
 
       expect(result).toEqual({ access_token: 'jwt_token' });
-      expect(jwtService.sign).toHaveBeenCalledWith({
+      expect(jwtService.sign.mock.calls[0]?.[0]).toEqual({
         sub: 'uuid-1',
         email: 'test@test.com',
       });
@@ -115,10 +115,10 @@ describe('AuthService', () => {
       const result = await authService.register('new@test.com', 'password123');
 
       expect(result).toEqual({ access_token: 'jwt_token' });
-      expect(userService.create).toHaveBeenCalledWith(
+      expect(userService.create.mock.calls[0]).toEqual([
         'new@test.com',
         'password123',
-      );
+      ]);
     });
 
     it('should throw ConflictException when email is already registered', async () => {
@@ -127,7 +127,7 @@ describe('AuthService', () => {
       await expect(
         authService.register('test@test.com', 'password123'),
       ).rejects.toThrow(new ConflictException('Email already in use'));
-      expect(userService.create).not.toHaveBeenCalled();
+      expect(userService.create.mock.calls).toHaveLength(0);
     });
   });
 });
