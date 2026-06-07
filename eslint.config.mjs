@@ -33,7 +33,7 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
-      'eqeqeq': ['warn', 'always'],
+      eqeqeq: ['warn', 'always'],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       'no-debugger': 'error',
       // Fuerza `import type` para imports solo de tipos (reduce coupling en runtime)
@@ -44,7 +44,7 @@ export default tseslint.config(
           fixStyle: 'inline-type-imports',
         },
       ],
-      'prettier/prettier': ['error', { endOfLine: 'auto' }],
+      'prettier/prettier': ['error', { endOfLine: 'lf' }],
     },
   },
 );

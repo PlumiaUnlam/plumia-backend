@@ -1,6 +1,6 @@
 {
-    "material-icon-theme.activeIconPack": "nest",
-    "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "always",
-  },
+  "material-icon-theme.activeIconPack": "nest",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "always"
+  }
 }
