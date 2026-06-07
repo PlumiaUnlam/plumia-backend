@@ -11,14 +11,26 @@ reviews:
   path_instructions:
     - path: 'src/**/*.ts'
       instructions: |
-        Revisa prácticas básicas de backend NestJS/TypeScript: evitar any innecesario,
-        console.log/debugger, secretos hardcodeados, catch que silencian errores,
-        lógica de negocio dentro de controllers, DTOs sin validación y acoplamiento
-        evidente entre domain, application e infrastructure.
+        Revisa prácticas backend NestJS/TypeScript según la arquitectura PlumIA:
+        monolito modular, Clean/Hexagonal, contratos primero y separación
+        domain/application/infrastructure. Señala any innecesario, promesas sin await,
+        console/debugger, secretos hardcodeados, catch que silencian errores, logs de
+        manuscritos/API keys/datos personales, lógica de negocio dentro de controllers,
+        DTOs sin validación y acoplamiento directo a Prisma, BullMQ, proveedores IA o
+        HTTP fuera de infrastructure.
+    - path: 'src/**/domain/**/*.ts'
+      instructions: |
+        Domain debe contener entidades, value objects, errores y reglas puras. No debe
+        importar NestJS, Prisma, Redis, HTTP, BullMQ ni infrastructure/application.
+    - path: 'src/**/application/**/*.ts'
+      instructions: |
+        Application define puertos/interfaces y casos de uso. No debe depender de
+        infrastructure concreta; si necesita datos de otro módulo, debe usar una interfaz.
     - path: '.github/workflows/**/*'
       instructions: |
         Revisa que los workflows sean reproducibles, usen versiones fijas cuando aplique,
-        no expongan secretos y no dupliquen checks innecesariamente.
+        ejecuten lint, typecheck, tests y build, no expongan secretos y no dupliquen
+        checks innecesariamente.
 
 chat:
   auto_reply: true
