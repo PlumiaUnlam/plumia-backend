@@ -29,10 +29,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Lint (sin autofix)
-        run: pnpm exec eslint "{src,apps,libs,test}/**/*.ts"
+        run: pnpm lint
 
       - name: Typecheck
-        run: pnpm exec tsc --noEmit
+        run: pnpm typecheck
 
   # ── 2. Tests y cobertura ──────────────────────────────────────────────────
   test:
