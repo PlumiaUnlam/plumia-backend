@@ -31,7 +31,10 @@ describe('LocalStrategy', () => {
         email: 'test@test.com',
       });
 
-      const result = await localStrategy.validate('test@test.com', 'password123');
+      const result = await localStrategy.validate(
+        'test@test.com',
+        'password123',
+      );
 
       expect(authService.validateUser).toHaveBeenCalledWith(
         'test@test.com',

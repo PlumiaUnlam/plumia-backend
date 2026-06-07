@@ -43,7 +43,7 @@ describe('JwtAuthGuard', () => {
 
       const parentCanActivate = jest
         .spyOn(Object.getPrototypeOf(JwtAuthGuard.prototype), 'canActivate')
-        .mockReturnValue(true as unknown as boolean);
+        .mockReturnValue(true);
 
       const result = guard.canActivate(mockContext);
 

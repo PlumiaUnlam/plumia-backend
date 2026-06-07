@@ -29,7 +29,10 @@ describe('RegisterDto', () => {
   });
 
   it('should fail when email is invalid', async () => {
-    const dto = plainToInstance(RegisterDto, { ...valid, email: 'not-an-email' });
+    const dto = plainToInstance(RegisterDto, {
+      ...valid,
+      email: 'not-an-email',
+    });
     const errors = await validate(dto);
     expect(errors.some((e) => e.property === 'email')).toBe(true);
   });
