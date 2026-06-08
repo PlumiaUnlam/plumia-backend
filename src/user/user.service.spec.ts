@@ -1,15 +1,16 @@
 import { Test, type TestingModule } from '@nestjs/testing';
-import type { Prisma, User } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { UserService } from './user.service';
+import { UserService, type UserEntity } from './user.service';
 
 jest.mock('bcryptjs');
 
+type BcryptHash = (password: string, salt: number) => Promise<string>;
+
 interface MockPrismaService {
   user: {
-    findUnique: jest.Mock<Promise<User | null>, [Prisma.UserFindUniqueArgs]>;
-    create: jest.Mock<Promise<User>, [Prisma.UserCreateArgs]>;
+    findUnique: jest.Mock;
+    create: jest.Mock;
   };
 }
 
@@ -17,7 +18,7 @@ describe('UserService', () => {
   let userService: UserService;
   let prisma: MockPrismaService;
 
-  const mockUser: User = {
+  const mockUser: UserEntity = {
     id: 'uuid-1',
     name: 'John',
     lastname: 'Doe',
@@ -93,7 +94,9 @@ describe('UserService', () => {
 
   describe('create', () => {
     it('should hash the password and persist the user', async () => {
-      jest.mocked(bcrypt.hash).mockResolvedValue('hashed_password');
+      jest
+        .mocked(bcrypt.hash as BcryptHash)
+        .mockResolvedValue('hashed_password');
       prisma.user.create.mockResolvedValue(mockUser);
 
       const result = await userService.create(
