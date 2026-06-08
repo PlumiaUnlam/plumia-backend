@@ -15,10 +15,14 @@ export class AuthService {
     password: string,
   ): Promise<{ id: string; email: string } | null> {
     const user = await this.userService.findByEmail(email);
-    if (!user) return null;
+    if (!user) {
+      return null;
+    }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) return null;
+    if (!isMatch) {
+      return null;
+    }
 
     return { id: user.id, email: user.email };
   }
