@@ -1,5 +1,5 @@
 import { Test, type TestingModule } from '@nestjs/testing';
-import { LocalAuthGuard } from './local-auth.guard';
+import { LocalAuthGuard } from '../../../../src/auth/guards/local-auth.guard';
 
 describe('LocalAuthGuard', () => {
   let guard: LocalAuthGuard;

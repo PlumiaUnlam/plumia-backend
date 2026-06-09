@@ -1,6 +1,6 @@
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { LoginDto } from './login.dto';
+import { LoginDto } from '../../../../src/auth/dto/login.dto';
 
 describe('LoginDto', () => {
   const valid = { email: 'test@test.com', password: 'password123' };

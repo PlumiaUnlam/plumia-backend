@@ -1,8 +1,8 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PlanType, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../prisma/prisma.service';
-import { UserService, type UserEntity } from './user.service';
+import { PrismaService } from '../../../src/prisma/prisma.service';
+import { UserService, type UserEntity } from '../../../src/user/user.service';
 
 jest.mock('bcryptjs');
 

@@ -2,8 +2,8 @@ import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PlanType, UserRole } from '@prisma/client';
-import { UserService } from '../../user/user.service';
-import { JwtStrategy } from './jwt.strategy';
+import { JwtStrategy } from '../../../../src/auth/strategies/jwt.strategy';
+import { UserService } from '../../../../src/user/user.service';
 
 describe('JwtStrategy', () => {
   let jwtStrategy: JwtStrategy;

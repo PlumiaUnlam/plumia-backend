@@ -1,6 +1,6 @@
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { RegisterDto } from './register.dto';
+import { RegisterDto } from '../../../../src/auth/dto/register.dto';
 
 describe('RegisterDto', () => {
   const valid = {

@@ -9,6 +9,7 @@ import { ChatModule } from './chat/chat.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { ManuscriptModule } from './manuscript/manuscript.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProjectsModule } from './projects/projects.module';
 import { PublishingModule } from './publishing/publishing.module';
 import { ReadingModule } from './reading/reading.module';
 import { SystemModule } from './system/system.module';
@@ -19,6 +20,7 @@ import { UserModule } from './user/user.module';
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     UserModule,
+    ProjectsModule,
     AuthModule,
     ManuscriptModule,
     KnowledgeModule,
