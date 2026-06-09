@@ -7,14 +7,17 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 FROM base AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 COPY . .
+RUN pnpm exec prisma generate
 RUN pnpm build
 
 # ── Production deps ───────────────────────────────────────────────────────────
 FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile --prod
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
