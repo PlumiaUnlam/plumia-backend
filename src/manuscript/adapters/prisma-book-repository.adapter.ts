@@ -1,0 +1,96 @@
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import {
+  BookRecord,
+  BookRepository,
+  CreateBookData,
+  UpdateBookData,
+} from '../ports/book-repository.port';
+
+@Injectable()
+export class PrismaBookRepository implements BookRepository {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async createForUser(
+    userId: string,
+    data: CreateBookData,
+  ): Promise<BookRecord | null> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: data.projectId, userId, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!project) {
+      return null;
+    }
+
+    return this.prisma.book.create({
+      data: {
+        projectId: data.projectId,
+        title: data.title,
+        sortKey: data.sortKey,
+      },
+    });
+  }
+
+  findByIdForUser(userId: string, bookId: string): Promise<BookRecord | null> {
+    return this.prisma.book.findFirst({
+      where: { id: bookId, deletedAt: null, project: { userId } },
+    });
+  }
+
+  async updateForUser(
+    userId: string,
+    bookId: string,
+    data: UpdateBookData,
+  ): Promise<BookRecord | null> {
+    const book = await this.findOwnedBook(userId, bookId);
+    if (!book) {
+      return null;
+    }
+
+    return this.prisma.book.update({
+      where: { id: bookId },
+      data: {
+        ...(data.title !== undefined ? { title: data.title } : {}),
+        ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
+      },
+    });
+  }
+
+  async softDeleteForUser(
+    userId: string,
+    bookId: string,
+    deletedAt: Date,
+  ): Promise<BookRecord | null> {
+    const book = await this.findOwnedBook(userId, bookId);
+    if (!book) {
+      return null;
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.scene.updateMany({
+        where: { chapter: { bookId }, deletedAt: null },
+        data: { deletedAt },
+      });
+      await tx.chapter.updateMany({
+        where: { bookId, deletedAt: null },
+        data: { deletedAt },
+      });
+      return tx.book.update({
+        where: { id: bookId },
+        data: { deletedAt },
+      });
+    });
+  }
+
+  private findOwnedBook(
+    userId: string,
+    bookId: string,
+  ): Promise<{ id: string } | null> {
+    return this.prisma.book.findFirst({
+      where: { id: bookId, deletedAt: null, project: { userId } },
+      select: { id: true },
+    });
+  }
+}

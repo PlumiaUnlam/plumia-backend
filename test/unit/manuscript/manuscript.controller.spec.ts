@@ -4,7 +4,10 @@ import {
   type ProjectWithTreeRecord,
 } from '../../../src/manuscript/ports/project-repository.port';
 import { ManuscriptController } from '../../../src/manuscript/manuscript.controller';
+import { BookService } from '../../../src/manuscript/services/book.service';
+import { ChapterService } from '../../../src/manuscript/services/chapter.service';
 import { ProjectService } from '../../../src/manuscript/services/project.service';
+import { SceneService } from '../../../src/manuscript/services/scene.service';
 
 describe('ManuscriptController', () => {
   let controller: ManuscriptController;
@@ -37,6 +40,34 @@ describe('ManuscriptController', () => {
             create: jest.fn(),
             getById: jest.fn(),
             update: jest.fn(),
+            remove: jest.fn(),
+          },
+        },
+        {
+          provide: BookService,
+          useValue: {
+            create: jest.fn(),
+            getById: jest.fn(),
+            update: jest.fn(),
+            remove: jest.fn(),
+          },
+        },
+        {
+          provide: ChapterService,
+          useValue: {
+            create: jest.fn(),
+            getById: jest.fn(),
+            update: jest.fn(),
+            remove: jest.fn(),
+          },
+        },
+        {
+          provide: SceneService,
+          useValue: {
+            create: jest.fn(),
+            getById: jest.fn(),
+            update: jest.fn(),
+            updateContent: jest.fn(),
             remove: jest.fn(),
           },
         },
