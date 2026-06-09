@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { PlanType, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { UserService } from '../user/user.service';
 import { AuthService } from './auth.service';
@@ -20,6 +21,11 @@ describe('AuthService', () => {
     passwordHash: 'hashed_password',
     createdAt: new Date(),
     updatedAt: new Date(),
+    displayName: null,
+    avatarUrl: null,
+    role: UserRole.AUTHOR,
+    plan: PlanType.FREE,
+    deletedAt: null,
   };
 
   beforeEach(async () => {
@@ -116,6 +122,11 @@ describe('AuthService', () => {
         passwordHash: 'hashed',
         createdAt: new Date(),
         updatedAt: new Date(),
+        displayName: null,
+        avatarUrl: null,
+        role: UserRole.AUTHOR,
+        plan: PlanType.FREE,
+        deletedAt: null,
       });
       jwtService.sign.mockReturnValue('jwt_token');
 

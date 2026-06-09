@@ -1,4 +1,5 @@
 import { Test, type TestingModule } from '@nestjs/testing';
+import { PlanType, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserService, type UserEntity } from './user.service';
@@ -26,6 +27,11 @@ describe('UserService', () => {
     passwordHash: 'hashed_password',
     createdAt: new Date(),
     updatedAt: new Date(),
+    displayName: null,
+    avatarUrl: null,
+    role: UserRole.AUTHOR,
+    plan: PlanType.FREE,
+    deletedAt: null,
   };
 
   beforeEach(async () => {
