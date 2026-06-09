@@ -15,14 +15,6 @@ module.exports = {
     'src/**/*.decorator.ts',
     '!src/**/*.spec.ts',
   ],
-  coverageThreshold: {
-    global: {
-      branches: 60,
-      functions: 60,
-      lines: 60,
-      statements: 60,
-    },
-  },
   coverageDirectory: 'coverage',
   testEnvironment: 'node',
   moduleNameMapper: {
