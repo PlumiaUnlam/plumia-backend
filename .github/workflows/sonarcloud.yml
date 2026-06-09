@@ -25,8 +25,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Unit tests
-        run: pnpm test -- --passWithNoTests
+      - name: Generar coverage para SonarCloud
+        run: pnpm exec jest --coverage --passWithNoTests
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v7
