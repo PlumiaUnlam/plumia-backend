@@ -3,14 +3,12 @@ import {
   type ProjectRecord,
   type ProjectWithTreeRecord,
 } from '../../../src/manuscript/ports/project-repository.port';
-import { ManuscriptController } from '../../../src/manuscript/manuscript.controller';
-import { BookService } from '../../../src/manuscript/services/book.service';
-import { ChapterService } from '../../../src/manuscript/services/chapter.service';
+import { ProjectsController } from '../../../src/manuscript/controllers/projects.controller';
+import { ProjectStatus } from '../../../src/manuscript/domain/project-status';
 import { ProjectService } from '../../../src/manuscript/services/project.service';
-import { SceneService } from '../../../src/manuscript/services/scene.service';
 
-describe('ManuscriptController', () => {
-  let controller: ManuscriptController;
+describe('ProjectsController', () => {
+  let controller: ProjectsController;
   let service: jest.Mocked<ProjectService>;
 
   const req = { user: { id: 'user-1', email: 'author@plumia.test' } };
@@ -23,7 +21,7 @@ describe('ManuscriptController', () => {
     genre: 'Fantasy',
     genreRules: null,
     wordCountTarget: null,
-    status: 'draft',
+    status: ProjectStatus.DRAFT,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -31,7 +29,7 @@ describe('ManuscriptController', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ManuscriptController],
+      controllers: [ProjectsController],
       providers: [
         {
           provide: ProjectService,
@@ -43,38 +41,10 @@ describe('ManuscriptController', () => {
             remove: jest.fn(),
           },
         },
-        {
-          provide: BookService,
-          useValue: {
-            create: jest.fn(),
-            getById: jest.fn(),
-            update: jest.fn(),
-            remove: jest.fn(),
-          },
-        },
-        {
-          provide: ChapterService,
-          useValue: {
-            create: jest.fn(),
-            getById: jest.fn(),
-            update: jest.fn(),
-            remove: jest.fn(),
-          },
-        },
-        {
-          provide: SceneService,
-          useValue: {
-            create: jest.fn(),
-            getById: jest.fn(),
-            update: jest.fn(),
-            updateContent: jest.fn(),
-            remove: jest.fn(),
-          },
-        },
       ],
     }).compile();
 
-    controller = module.get(ManuscriptController);
+    controller = module.get(ProjectsController);
     service = module.get(ProjectService);
   });
 
@@ -83,7 +53,20 @@ describe('ManuscriptController', () => {
 
     const result = await controller.listProjects(req);
 
-    expect(result).toEqual([project]);
+    expect(result).toEqual([
+      {
+        id: project.id,
+        userId: project.userId,
+        title: project.title,
+        description: project.description,
+        genre: project.genre,
+        genreRules: project.genreRules,
+        wordCountTarget: project.wordCountTarget,
+        status: project.status,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+      },
+    ]);
     expect(service.listByUser).toHaveBeenCalledWith('user-1');
   });
 
@@ -93,7 +76,8 @@ describe('ManuscriptController', () => {
 
     const result = await controller.createProject(req, dto);
 
-    expect(result).toEqual(project);
+    expect(result).not.toHaveProperty('deletedAt');
+    expect(result).toMatchObject({ id: project.id, title: project.title });
     expect(service.create).toHaveBeenCalledWith('user-1', dto);
   });
 
@@ -124,7 +108,8 @@ describe('ManuscriptController', () => {
 
     const result = await controller.getProjectById(req, 'project-1');
 
-    expect(result).toEqual(projectTree);
+    expect(result).not.toHaveProperty('deletedAt');
+    expect(result.books).toEqual(projectTree.books);
     expect(service.getById).toHaveBeenCalledWith('user-1', 'project-1');
   });
 
@@ -134,7 +119,8 @@ describe('ManuscriptController', () => {
 
     const result = await controller.updateProject(req, 'project-1', dto);
 
-    expect(result).toEqual(project);
+    expect(result).not.toHaveProperty('deletedAt');
+    expect(result).toMatchObject({ id: project.id, title: project.title });
     expect(service.update).toHaveBeenCalledWith('user-1', 'project-1', dto);
   });
 
@@ -143,7 +129,8 @@ describe('ManuscriptController', () => {
 
     const result = await controller.removeProject(req, 'project-1');
 
-    expect(result).toEqual(project);
+    expect(result).not.toHaveProperty('deletedAt');
+    expect(result).toMatchObject({ id: project.id, title: project.title });
     expect(service.remove).toHaveBeenCalledWith('user-1', 'project-1');
   });
 });

@@ -1,7 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateSceneDto } from '../dto/scenes/create-scene.dto';
 import { UpdateSceneContentDto } from '../dto/scenes/update-scene-content.dto';
-import { UpdateSceneDto } from '../dto/scenes/update-scene.dto';
+import { UpdateSceneMetadataDto } from '../dto/scenes/update-scene-metadata.dto';
 import {
   SCENE_REPOSITORY,
   type CreateSceneData,
@@ -53,7 +53,7 @@ export class SceneService {
   async update(
     userId: string,
     sceneId: string,
-    dto: UpdateSceneDto,
+    dto: UpdateSceneMetadataDto,
   ): Promise<SceneRecord> {
     const scene = await this.sceneRepository.updateForUser(
       userId,

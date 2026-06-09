@@ -1,10 +1,10 @@
 import { PartialType } from '@nestjs/mapped-types';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional } from 'class-validator';
+import { ProjectStatus } from '../../domain/project-status';
 import { CreateProjectDto } from './create-project.dto';
 
 export class UpdateProjectDto extends PartialType(CreateProjectDto) {
-  @IsString()
-  @MaxLength(50)
+  @IsEnum(ProjectStatus)
   @IsOptional()
-  status?: string;
+  status?: ProjectStatus;
 }

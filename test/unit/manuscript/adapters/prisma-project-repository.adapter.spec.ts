@@ -1,6 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../../../src/prisma/prisma.service';
 import { PrismaProjectRepository } from '../../../../src/manuscript/adapters/prisma-project-repository.adapter';
+import { ProjectStatus } from '../../../../src/manuscript/domain/project-status';
 import { type ProjectRecord } from '../../../../src/manuscript/ports/project-repository.port';
 
 interface MockPrismaService {
@@ -26,7 +27,7 @@ describe('PrismaProjectRepository', () => {
     genre: 'Fantasy',
     genreRules: null,
     wordCountTarget: null,
-    status: 'draft',
+    status: ProjectStatus.DRAFT,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -174,7 +175,7 @@ describe('PrismaProjectRepository', () => {
 
     const result = await repository.updateForUser('user-1', 'project-1', {
       title: 'New title',
-      status: 'active',
+      status: ProjectStatus.ACTIVE,
     });
 
     expect(result).toEqual(project);

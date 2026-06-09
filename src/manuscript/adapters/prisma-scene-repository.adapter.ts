@@ -127,10 +127,6 @@ export class PrismaSceneRepository implements SceneRepository {
     return {
       ...(data.title !== undefined ? { title: data.title } : {}),
       ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
-      ...(data.content !== undefined
-        ? { content: data.content as Prisma.InputJsonValue }
-        : {}),
-      ...(data.wordCount !== undefined ? { wordCount: data.wordCount } : {}),
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.order !== undefined ? { order: data.order } : {}),
     };

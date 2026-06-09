@@ -6,6 +6,7 @@ import {
   type ProjectRepository,
   type ProjectWithTreeRecord,
 } from '../../../src/manuscript/ports/project-repository.port';
+import { ProjectStatus } from '../../../src/manuscript/domain/project-status';
 import { ProjectService } from '../../../src/manuscript/services/project.service';
 
 describe('ProjectService', () => {
@@ -21,7 +22,7 @@ describe('ProjectService', () => {
     genre: 'Fantasy',
     genreRules: { magic: 'finite' },
     wordCountTarget: 90000,
-    status: 'draft',
+    status: ProjectStatus.DRAFT,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -120,14 +121,14 @@ describe('ProjectService', () => {
 
     const result = await service.update('user-1', 'project-1', {
       title: 'New title',
-      status: 'active',
+      status: ProjectStatus.ACTIVE,
     });
 
     expect(result).toEqual(project);
     expect(repository.updateForUser).toHaveBeenCalledWith(
       'user-1',
       'project-1',
-      { title: 'New title', status: 'active' },
+      { title: 'New title', status: ProjectStatus.ACTIVE },
     );
   });
 

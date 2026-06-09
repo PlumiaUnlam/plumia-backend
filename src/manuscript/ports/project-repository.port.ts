@@ -1,3 +1,5 @@
+import type { ProjectStatus } from '../domain/project-status';
+
 export const PROJECT_REPOSITORY = Symbol('PROJECT_REPOSITORY');
 
 export interface ProjectRecord {
@@ -8,7 +10,7 @@ export interface ProjectRecord {
   genre: string | null;
   genreRules: unknown;
   wordCountTarget: number | null;
-  status: string;
+  status: ProjectStatus;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
@@ -51,7 +53,7 @@ export interface UpdateProjectData {
   genre?: string;
   genreRules?: Record<string, unknown>;
   wordCountTarget?: number;
-  status?: string;
+  status?: ProjectStatus;
 }
 
 export interface ProjectRepository {

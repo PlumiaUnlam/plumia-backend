@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Project } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { toProjectStatus } from '../domain/project-status';
 import {
   CreateProjectData,
   ProjectRecord,
@@ -52,15 +53,16 @@ const projectTreeSelect = {
 export class PrismaProjectRepository implements ProjectRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  listByUser(userId: string): Promise<ProjectRecord[]> {
-    return this.prisma.project.findMany({
+  async listByUser(userId: string): Promise<ProjectRecord[]> {
+    const projects = await this.prisma.project.findMany({
       where: { userId, deletedAt: null },
       orderBy: { updatedAt: 'desc' },
     });
+    return projects.map((project) => this.toProjectRecord(project));
   }
 
-  create(data: CreateProjectData): Promise<ProjectRecord> {
-    return this.prisma.project.create({
+  async create(data: CreateProjectData): Promise<ProjectRecord> {
+    const project = await this.prisma.project.create({
       data: {
         userId: data.userId,
         title: data.title,
@@ -76,16 +78,26 @@ export class PrismaProjectRepository implements ProjectRepository {
           : {}),
       },
     });
+    return this.toProjectRecord(project);
   }
 
-  findByIdForUser(
+  async findByIdForUser(
     userId: string,
     projectId: string,
   ): Promise<ProjectWithTreeRecord | null> {
-    return this.prisma.project.findFirst({
+    const project = await this.prisma.project.findFirst({
       where: { id: projectId, userId, deletedAt: null },
       select: projectTreeSelect,
     });
+
+    if (!project) {
+      return null;
+    }
+
+    return {
+      ...this.toProjectRecord(project),
+      books: project.books,
+    };
   }
 
   async updateForUser(
@@ -98,7 +110,7 @@ export class PrismaProjectRepository implements ProjectRepository {
       return null;
     }
 
-    return this.prisma.project.update({
+    const updatedProject = await this.prisma.project.update({
       where: { id: projectId },
       data: {
         ...(data.title !== undefined ? { title: data.title } : {}),
@@ -115,6 +127,7 @@ export class PrismaProjectRepository implements ProjectRepository {
         ...(data.status !== undefined ? { status: data.status } : {}),
       },
     });
+    return this.toProjectRecord(updatedProject);
   }
 
   async softDeleteForUser(
@@ -152,10 +165,11 @@ export class PrismaProjectRepository implements ProjectRepository {
         where: { projectId, deletedAt: null },
         data: { deletedAt },
       });
-      return tx.project.update({
+      const deletedProject = await tx.project.update({
         where: { id: projectId },
         data: { deletedAt },
       });
+      return this.toProjectRecord(deletedProject);
     });
   }
 
@@ -167,5 +181,21 @@ export class PrismaProjectRepository implements ProjectRepository {
       where: { id: projectId, userId, deletedAt: null },
       select: { id: true },
     });
+  }
+
+  private toProjectRecord(project: Project): ProjectRecord {
+    return {
+      id: project.id,
+      userId: project.userId,
+      title: project.title,
+      description: project.description,
+      genre: project.genre,
+      genreRules: project.genreRules,
+      wordCountTarget: project.wordCountTarget,
+      status: toProjectStatus(project.status),
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      deletedAt: project.deletedAt,
+    };
   }
 }

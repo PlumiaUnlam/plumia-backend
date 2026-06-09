@@ -3,7 +3,10 @@ import { PrismaBookRepository } from './adapters/prisma-book-repository.adapter'
 import { PrismaChapterRepository } from './adapters/prisma-chapter-repository.adapter';
 import { PrismaProjectRepository } from './adapters/prisma-project-repository.adapter';
 import { PrismaSceneRepository } from './adapters/prisma-scene-repository.adapter';
-import { ManuscriptController } from './manuscript.controller';
+import { BooksController } from './controllers/books.controller';
+import { ChaptersController } from './controllers/chapters.controller';
+import { ProjectsController } from './controllers/projects.controller';
+import { ScenesController } from './controllers/scenes.controller';
 import { ManuscriptService } from './manuscript.service';
 import { BOOK_REPOSITORY } from './ports/book-repository.port';
 import { CHAPTER_REPOSITORY } from './ports/chapter-repository.port';
@@ -15,7 +18,12 @@ import { ProjectService } from './services/project.service';
 import { SceneService } from './services/scene.service';
 
 @Module({
-  controllers: [ManuscriptController],
+  controllers: [
+    ProjectsController,
+    BooksController,
+    ChaptersController,
+    ScenesController,
+  ],
   providers: [
     ManuscriptService,
     ProjectService,

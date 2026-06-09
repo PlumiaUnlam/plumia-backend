@@ -1,0 +1,32 @@
+import type { SceneStatus } from '@prisma/client';
+import type { SceneRecord } from '../../ports/scene-repository.port';
+
+export class SceneResponseDto {
+  id!: string;
+  chapterId!: string;
+  title!: string | null;
+  sortKey!: string;
+  content!: unknown;
+  wordCount!: number;
+  povCharacterId!: string | null;
+  status!: SceneStatus;
+  order!: number;
+  createdAt!: Date;
+  updatedAt!: Date;
+
+  static from(record: SceneRecord): SceneResponseDto {
+    return {
+      id: record.id,
+      chapterId: record.chapterId,
+      title: record.title,
+      sortKey: record.sortKey,
+      content: record.content,
+      wordCount: record.wordCount,
+      povCharacterId: record.povCharacterId,
+      status: record.status,
+      order: record.order,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    };
+  }
+}

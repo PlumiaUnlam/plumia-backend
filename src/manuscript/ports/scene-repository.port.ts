@@ -31,8 +31,6 @@ export interface CreateSceneData {
 export interface UpdateSceneData {
   title?: string;
   sortKey?: string;
-  content?: Record<string, unknown>;
-  wordCount?: number;
   status?: SceneStatus;
   order?: number;
 }
