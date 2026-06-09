@@ -1,6 +1,7 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { PlanType, UserRole } from '@prisma/client';
 import { UserService } from '../../user/user.service';
 import { JwtStrategy } from './jwt.strategy';
 
@@ -16,6 +17,11 @@ describe('JwtStrategy', () => {
     passwordHash: 'hashed_password',
     createdAt: new Date(),
     updatedAt: new Date(),
+    displayName: null,
+    avatarUrl: null,
+    role: UserRole.AUTHOR,
+    plan: PlanType.FREE,
+    deletedAt: null,
   };
 
   beforeEach(async () => {
