@@ -127,7 +127,7 @@ Multi-stage Dockerfile (base → deps → build → runner) using Node 22 Alpine
 
 ## Pending / future phases
 
-The schema, the migration (generated, **not yet applied**), the 9 bounded-context modules, and the search Ports & Adapters layer are in place. Still to implement:
+The schema, the migration, the 9 bounded-context modules, and the search Ports & Adapters layer are in place. Still to implement:
 
 - **Apply the migration**: `pnpm exec prisma migrate deploy`, then verify with `pnpm exec prisma migrate status`. Required before any search/CRUD works end-to-end.
 - **CRUD + endpoints per context**: domain services/controllers are empty scaffolds (`manuscript`, `audit`, `publishing`, `reading`, `analytics`, `system`, and most of `chat`/`knowledge`). Add DTOs (`class-validator`), service logic, and routes.
@@ -135,5 +135,3 @@ The schema, the migration (generated, **not yet applied**), the 9 bounded-contex
 - **Integration tests for adapters**: `PgVectorStore` / `PgEntitySearch` need a DB with the migration applied (unit-test services by mocking the ports).
 - **Soft-delete cascade** (Project → Book/Chapter/Scene; Scene → mark `Chunk.is_dirty`) and **temporal non-overlap validation** for `EntityState`/`Relationship` — deferred to the application layer (only simple CHECKs exist in SQL).
 - **Outbox processing**: the `Outbox` table exists (transactional outbox) but has no worker/dispatcher.
-- **Enum values**: confirmed for `UserRole` (`AUTHOR`/`READER`) and `PlanType` (`FREE`/`PRO`); the rest are inferred from defaults — validate against the official doc (section 1) before relying on them.
-- **Known pre-existing build/lint errors** (unrelated to the DB work) in `src/main.ts` and `src/auth/dto/*` — `pnpm run build` is currently red because of these.
