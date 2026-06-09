@@ -1,15 +1,24 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { UserService } from './user.service';
+import { UserService, type UserEntity } from './user.service';
 
 jest.mock('bcryptjs');
 
+type BcryptHash = (password: string, salt: number) => Promise<string>;
+
+interface MockPrismaService {
+  user: {
+    findUnique: jest.Mock;
+    create: jest.Mock;
+  };
+}
+
 describe('UserService', () => {
   let userService: UserService;
-  let prisma: jest.Mocked<PrismaService>;
+  let prisma: MockPrismaService;
 
-  const mockUser = {
+  const mockUser: UserEntity = {
     id: 'uuid-1',
     name: 'John',
     lastname: 'Doe',
@@ -38,12 +47,12 @@ describe('UserService', () => {
     }).compile();
 
     userService = module.get(UserService);
-    prisma = module.get(PrismaService);
+    prisma = module.get<MockPrismaService>(PrismaService);
   });
 
   describe('findByEmail', () => {
     it('should return the user when found', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      prisma.user.findUnique.mockResolvedValue(mockUser);
 
       const result = await userService.findByEmail('test@test.com');
 
@@ -54,7 +63,7 @@ describe('UserService', () => {
     });
 
     it('should return null when no user matches the email', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+      prisma.user.findUnique.mockResolvedValue(null);
 
       const result = await userService.findByEmail('missing@test.com');
 
@@ -64,7 +73,7 @@ describe('UserService', () => {
 
   describe('findById', () => {
     it('should return the user when found', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      prisma.user.findUnique.mockResolvedValue(mockUser);
 
       const result = await userService.findById('uuid-1');
 
@@ -75,7 +84,7 @@ describe('UserService', () => {
     });
 
     it('should return null when no user matches the id', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+      prisma.user.findUnique.mockResolvedValue(null);
 
       const result = await userService.findById('uuid-999');
 
@@ -85,8 +94,10 @@ describe('UserService', () => {
 
   describe('create', () => {
     it('should hash the password and persist the user', async () => {
-      (bcrypt.hash as jest.Mock).mockResolvedValue('hashed_password');
-      (prisma.user.create as jest.Mock).mockResolvedValue(mockUser);
+      jest
+        .mocked(bcrypt.hash as BcryptHash)
+        .mockResolvedValue('hashed_password');
+      prisma.user.create.mockResolvedValue(mockUser);
 
       const result = await userService.create(
         'John',

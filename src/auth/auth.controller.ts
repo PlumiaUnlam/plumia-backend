@@ -11,12 +11,14 @@ export class AuthController {
 
   @UseGuards(LocalAuthGuard)
   @Post('login')
-  login(@Request() req: { user: { id: string; email: string } }) {
+  login(@Request() req: { user: { id: string; email: string } }): {
+    access_token: string;
+  } {
     return this.authService.login(req.user);
   }
 
   @Post('register')
-  register(@Body() dto: RegisterDto) {
+  register(@Body() dto: RegisterDto): Promise<{ access_token: string }> {
     return this.authService.register(
       dto.name,
       dto.lastname,

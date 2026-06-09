@@ -64,7 +64,7 @@ describe('AuthService', () => {
     });
 
     it('should return null when user does not exist', async () => {
-      userService.findByEmail.mockResolvedValue(undefined);
+      userService.findByEmail.mockResolvedValue(null);
 
       const result = await authService.validateUser(
         'notfound@test.com',
@@ -107,7 +107,7 @@ describe('AuthService', () => {
 
   describe('register', () => {
     it('should create user and return access_token', async () => {
-      userService.findByEmail.mockResolvedValue(undefined);
+      userService.findByEmail.mockResolvedValue(null);
       userService.create.mockResolvedValue({
         id: 'uuid-1',
         name: 'John',
