@@ -30,6 +30,14 @@ export default tseslint.config(
     },
   },
 
+  // ─── Test files: unbound-method is a false positive on jest.Mocked<T> ────
+  {
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
+
   // ─── Reglas generales TypeScript ─────────────────────────────────────────
   {
     rules: {

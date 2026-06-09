@@ -1,0 +1,791 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [pgcrypto, pg_trgm, vector]
+}
+
+// ============================================================
+// Enums globales (valores confirmados con la doc oficial).
+// ============================================================
+
+enum UserRole {
+  AUTHOR
+  READER
+}
+
+enum PlanType {
+  FREE
+  PRO
+}
+
+enum JobType {
+  CHAT
+  AUDIT
+  EMBEDDING
+  ENTITY_EXTRACTION
+  SUMMARY
+  IMAGE_GENERATION
+  EXPORT
+}
+
+enum EntityType {
+  CHARACTER
+  LOCATION
+  OBJECT
+  ORGANIZATION
+  EVENT
+  CONCEPT
+}
+
+enum SceneStatus {
+  DRAFT
+  IN_PROGRESS
+  REVIEW
+  DONE
+}
+
+enum EpistemicType {
+  OBJECTIVE
+  SUBJECTIVE
+  UNRELIABLE
+  SPECULATIVE
+}
+
+enum RelationType {
+  ALLY
+  ENEMY
+  FAMILY
+  ROMANTIC
+  MENTOR
+  RIVAL
+  MEMBER_OF
+  LOCATED_IN
+  OWNS
+  KNOWS
+}
+
+enum ProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AuditLevel {
+  INTRA_SCENE
+  INTER_SCENE
+  GLOBAL
+}
+
+enum AuditSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AuditCategory {
+  CONTINUITY
+  TIMELINE
+  CHARACTER
+  PLOT
+  WORLDBUILDING
+}
+
+enum AuditStatus {
+  ACTIVE
+  RESOLVED
+  DISMISSED
+}
+
+enum ExportFormat {
+  PDF
+  EPUB
+  DOCX
+  MARKDOWN
+}
+
+enum ExportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ============================================================
+// 2.1 Auth y Usuarios
+// ============================================================
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  // --- campos del auth propio existente (no renombrar) ---
+  name         String
+  lastname     String
+  email        String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(6)
+  // --- campos agregados desde la doc ---
+  displayName  String?   @map("display_name") @db.VarChar(100)
+  avatarUrl    String?   @map("avatar_url") @db.VarChar(500)
+  role         UserRole  @default(AUTHOR)
+  plan         PlanType  @default(FREE)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  apiKeys           UserApiKey[]
+  tokenLedgers      TokenLedger[]
+  subscription      Subscription?
+  projects          Project[]
+  reviewedProposals EntityProposal[] @relation("ProposalReviewer")
+  resolvedAlerts    AuditAlert[]     @relation("AlertResolver")
+  exportJobs        ExportJob[]
+  writingSessions   WritingSession[]
+  writingGoals      WritingGoal[]
+}
+
+model UserApiKey {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  provider     String   @db.VarChar(50)
+  encryptedKey String   @map("encrypted_key")
+  iv           Bytes
+  tag          Bytes
+  keyPrefix    String   @map("key_prefix") @db.VarChar(20)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_apikey_user")
+  @@index([provider], map: "idx_apikey_provider")
+  @@map("user_api_key")
+}
+
+model TokenLedger {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  projectId    String   @map("project_id") @db.Uuid
+  jobType      JobType  @map("job_type")
+  provider     String   @db.VarChar(50)
+  model        String   @db.VarChar(100)
+  inputTokens  Int      @map("input_tokens")
+  outputTokens Int      @map("output_tokens")
+  costUsd      Decimal  @map("cost_usd") @db.Decimal(10, 6)
+  byokUsed     Boolean  @default(false) @map("byok_used")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user    User    @relation(fields: [userId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([userId, createdAt], map: "idx_ledger_user_date")
+  @@index([projectId], map: "idx_ledger_project")
+  @@map("token_ledger")
+}
+
+model Subscription {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @unique @map("user_id") @db.Uuid
+  plan      PlanType
+  startedAt DateTime  @map("started_at") @db.Timestamptz(6)
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(6)
+  autoRenew Boolean   @default(false) @map("auto_renew")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "idx_sub_user")
+  @@map("subscription")
+}
+
+// ============================================================
+// 2.2 Manuscrito
+// ============================================================
+
+model Project {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  title           String    @db.VarChar(200)
+  description     String?
+  genre           String?   @db.VarChar(100)
+  genreRules      Json?     @map("genre_rules") @db.JsonB
+  wordCountTarget Int?      @map("word_count_target")
+  status          String    @default("draft") @db.VarChar(50)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  books               Book[]
+  entities            Entity[]
+  relationships       Relationship[]
+  entityProposals     EntityProposal[]
+  auditAlerts         AuditAlert[]
+  auditFalsePositives AuditFalsePositive[]
+  chatThreads         ChatThread[]
+  chunks              Chunk[]
+  summaries           Summary[]
+  versions            Version[]
+  exportJobs          ExportJob[]
+  storyboardNotes     StoryboardNote[]
+  shareLinks          ShareLink[]
+  writingSessions     WritingSession[]
+  writingGoals        WritingGoal[]
+  tokenLedgers        TokenLedger[]
+
+  @@index([userId], map: "idx_project_user")
+  @@index([status], map: "idx_project_status")
+  @@map("project")
+}
+
+model Book {
+  id        String    @id @default(uuid()) @db.Uuid
+  projectId String    @map("project_id") @db.Uuid
+  title     String    @db.VarChar(200)
+  sortKey   String    @map("sort_key") @db.VarChar(50)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chapters Chapter[]
+
+  @@unique([projectId, sortKey])
+  @@index([projectId], map: "idx_book_project")
+  @@index([sortKey], map: "idx_book_sort")
+  @@map("book")
+}
+
+model Chapter {
+  id        String      @id @default(uuid()) @db.Uuid
+  bookId    String      @map("book_id") @db.Uuid
+  title     String      @db.VarChar(200)
+  sortKey   String      @map("sort_key") @db.VarChar(50)
+  status    SceneStatus @default(DRAFT)
+  wordCount Int         @default(0) @map("word_count")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  book            Book             @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  scenes          Scene[]
+  chatThreads     ChatThread[]
+  storyboardNotes StoryboardNote[]
+  readerComments  ReaderComment[]
+
+  @@unique([bookId, sortKey])
+  @@index([bookId], map: "idx_chapter_book")
+  @@index([sortKey], map: "idx_chapter_sort")
+  @@map("chapter")
+}
+
+model Scene {
+  id             String      @id @default(uuid()) @db.Uuid
+  chapterId      String      @map("chapter_id") @db.Uuid
+  title          String?     @db.VarChar(200)
+  sortKey        String      @map("sort_key") @db.VarChar(50)
+  content        Json?       @db.JsonB
+  contentHash    String?     @map("content_hash") @db.VarChar(64)
+  wordCount      Int         @default(0) @map("word_count")
+  povCharacterId String?     @map("pov_character_id") @db.Uuid
+  status         SceneStatus @default(DRAFT)
+  order          Int         @default(0)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt      DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  chapter         Chapter          @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  povCharacter    Entity?          @relation("ScenePov", fields: [povCharacterId], references: [id])
+  chunks          Chunk[]
+  statesValidFrom EntityState[]    @relation("EntityStateValidFrom")
+  statesValidTo   EntityState[]    @relation("EntityStateValidTo")
+  facts           Fact[]
+  relsValidFrom   Relationship[]   @relation("RelationshipValidFrom")
+  relsValidTo     Relationship[]   @relation("RelationshipValidTo")
+  auditAlerts     AuditAlert[]
+  entityProposals EntityProposal[]
+  readerComments  ReaderComment[]
+  writingSessions WritingSession[]
+
+  @@unique([chapterId, sortKey])
+  @@index([chapterId], map: "idx_scene_chapter")
+  @@index([contentHash], map: "idx_scene_hash")
+  @@index([sortKey], map: "idx_scene_sort")
+  @@index([povCharacterId], map: "idx_scene_pov")
+  @@map("scene")
+}
+
+// ============================================================
+// 2.3 Knowledge Base
+// ============================================================
+
+model Entity {
+  id               String     @id @default(uuid()) @db.Uuid
+  projectId        String     @map("project_id") @db.Uuid
+  canonicalName    String     @map("canonical_name") @db.VarChar(200)
+  aliases          String[]   @default([])
+  type             EntityType
+  description      String?
+  attributes       Json       @default("{}") @db.JsonB
+  imageUrl         String?    @map("image_url") @db.VarChar(500)
+  confidenceScore  Decimal    @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  source           String     @default("author_manual") @db.VarChar(50)
+  userLockedFields String[]   @default([]) @map("user_locked_fields")
+  isActive         Boolean    @default(true) @map("is_active")
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt        DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  povScenes       Scene[]          @relation("ScenePov")
+  states          EntityState[]
+  facts           Fact[]           @relation("FactEntity")
+  narratedFacts   Fact[]           @relation("FactNarrator")
+  relsAsSource    Relationship[]   @relation("RelationshipSource")
+  relsAsTarget    Relationship[]   @relation("RelationshipTarget")
+  proposals       EntityProposal[]
+  generatedImages GeneratedImage[]
+
+  @@index([projectId], map: "idx_entity_project")
+  @@index([type], map: "idx_entity_type")
+  @@index([isActive], map: "idx_entity_active")
+  @@map("entity")
+}
+
+model EntityState {
+  id               String        @id @default(uuid()) @db.Uuid
+  entityId         String        @map("entity_id") @db.Uuid
+  attributeKey     String        @map("attribute_key") @db.VarChar(100)
+  fromValue        String?       @map("from_value")
+  toValue          String?       @map("to_value")
+  validFromSceneId String        @map("valid_from_scene_id") @db.Uuid
+  validToSceneId   String?       @map("valid_to_scene_id") @db.Uuid
+  epistemicType    EpistemicType @default(OBJECTIVE) @map("epistemic_type")
+  confidenceScore  Decimal       @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  source           String        @default("ai_proposed") @db.VarChar(50)
+  narrativeOrder   Int?          @map("narrative_order")
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  entity         Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  validFromScene Scene  @relation("EntityStateValidFrom", fields: [validFromSceneId], references: [id])
+  validToScene   Scene? @relation("EntityStateValidTo", fields: [validToSceneId], references: [id])
+
+  @@index([entityId], map: "idx_state_entity")
+  @@index([validFromSceneId], map: "idx_state_valid_from")
+  @@index([validFromSceneId, validToSceneId], map: "idx_state_window")
+  @@map("entity_state")
+}
+
+model Fact {
+  id              String        @id @default(uuid()) @db.Uuid
+  entityId        String        @map("entity_id") @db.Uuid
+  content         String
+  epistemicType   EpistemicType @map("epistemic_type")
+  sourceSceneId   String        @map("source_scene_id") @db.Uuid
+  narratorId      String?       @map("narrator_id") @db.Uuid
+  confidenceScore Decimal       @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  isRetconned     Boolean       @default(false) @map("is_retconned")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  entity      Entity  @relation("FactEntity", fields: [entityId], references: [id], onDelete: Cascade)
+  sourceScene Scene   @relation(fields: [sourceSceneId], references: [id])
+  narrator    Entity? @relation("FactNarrator", fields: [narratorId], references: [id])
+
+  @@index([entityId], map: "idx_fact_entity")
+  @@index([sourceSceneId], map: "idx_fact_scene")
+  @@index([epistemicType], map: "idx_fact_epistemic")
+  @@map("fact")
+}
+
+model Relationship {
+  id               String        @id @default(uuid()) @db.Uuid
+  projectId        String        @map("project_id") @db.Uuid
+  sourceEntityId   String        @map("source_entity_id") @db.Uuid
+  targetEntityId   String        @map("target_entity_id") @db.Uuid
+  relationType     RelationType  @map("relation_type")
+  description      String?
+  validFromSceneId String        @map("valid_from_scene_id") @db.Uuid
+  validToSceneId   String?       @map("valid_to_scene_id") @db.Uuid
+  epistemicType    EpistemicType @default(OBJECTIVE) @map("epistemic_type")
+  confidenceScore  Decimal       @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  source           String        @default("ai_proposed") @db.VarChar(50)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project        Project @relation(fields: [projectId], references: [id])
+  sourceEntity   Entity  @relation("RelationshipSource", fields: [sourceEntityId], references: [id])
+  targetEntity   Entity  @relation("RelationshipTarget", fields: [targetEntityId], references: [id])
+  validFromScene Scene   @relation("RelationshipValidFrom", fields: [validFromSceneId], references: [id])
+  validToScene   Scene?  @relation("RelationshipValidTo", fields: [validToSceneId], references: [id])
+
+  @@unique([sourceEntityId, targetEntityId, relationType, validFromSceneId])
+  @@index([sourceEntityId], map: "idx_rel_source")
+  @@index([targetEntityId], map: "idx_rel_target")
+  @@index([validFromSceneId, validToSceneId], map: "idx_rel_window")
+  @@index([relationType], map: "idx_rel_type")
+  @@map("relationship")
+}
+
+model EntityProposal {
+  id               String         @id @default(uuid()) @db.Uuid
+  projectId        String         @map("project_id") @db.Uuid
+  sceneId          String         @map("scene_id") @db.Uuid
+  entityId         String?        @map("entity_id") @db.Uuid
+  proposedData     Json           @map("proposed_data") @db.JsonB
+  status           ProposalStatus @default(PENDING)
+  confidenceScore  Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  resolutionReason String?        @map("resolution_reason")
+  reviewedById     String?        @map("reviewed_by_id") @db.Uuid
+  reviewedAt       DateTime?      @map("reviewed_at") @db.Timestamptz(6)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project    Project @relation(fields: [projectId], references: [id])
+  scene      Scene   @relation(fields: [sceneId], references: [id])
+  entity     Entity? @relation(fields: [entityId], references: [id])
+  reviewedBy User?   @relation("ProposalReviewer", fields: [reviewedById], references: [id])
+
+  @@index([projectId], map: "idx_proposal_project")
+  @@index([status], map: "idx_proposal_status")
+  @@index([entityId], map: "idx_proposal_entity")
+  @@map("entity_proposal")
+}
+
+// ============================================================
+// 2.4 Auditoria - Plot Police
+// ============================================================
+
+model AuditAlert {
+  id                 String        @id @default(uuid()) @db.Uuid
+  projectId          String        @map("project_id") @db.Uuid
+  sceneId            String        @map("scene_id") @db.Uuid
+  detectionLevel     AuditLevel    @map("detection_level")
+  severity           AuditSeverity
+  category           AuditCategory
+  title              String        @db.VarChar(300)
+  description        String?
+  sourceConflict     Json          @map("source_conflict") @db.JsonB
+  explanation        String?
+  confidence         Decimal       @default(1.0) @db.Decimal(3, 2)
+  status             AuditStatus   @default(ACTIVE)
+  anchorStableNodeId String?       @map("anchor_stable_node_id") @db.VarChar(100)
+  anchorTextQuote    String?       @map("anchor_text_quote")
+  anchorPrefix       String?       @map("anchor_prefix")
+  anchorSuffix       String?       @map("anchor_suffix")
+  anchorContentHash  String?       @map("anchor_content_hash") @db.VarChar(64)
+  resolvedById       String?       @map("resolved_by_id") @db.Uuid
+  resolvedAt         DateTime?     @map("resolved_at") @db.Timestamptz(6)
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project        Project              @relation(fields: [projectId], references: [id])
+  scene          Scene                @relation(fields: [sceneId], references: [id])
+  resolvedBy     User?                @relation("AlertResolver", fields: [resolvedById], references: [id])
+  falsePositives AuditFalsePositive[]
+
+  @@index([projectId], map: "idx_alert_project")
+  @@index([sceneId], map: "idx_alert_scene")
+  @@index([detectionLevel], map: "idx_alert_level")
+  @@index([severity], map: "idx_alert_severity")
+  @@index([status], map: "idx_alert_status")
+  @@map("audit_alert")
+}
+
+model AuditFalsePositive {
+  id                 String   @id @default(uuid()) @db.Uuid
+  projectId          String   @map("project_id") @db.Uuid
+  alertId            String   @map("alert_id") @db.Uuid
+  offendingTextQuote String   @map("offending_text_quote")
+  explanation        String
+  incorrectPattern   String   @map("incorrect_pattern")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project Project    @relation(fields: [projectId], references: [id])
+  alert   AuditAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@index([projectId], map: "idx_fp_project")
+  @@map("audit_false_positive")
+}
+
+// ============================================================
+// 2.5 Chat y Embeddings
+// ============================================================
+
+model ChatThread {
+  id                 String   @id @default(uuid()) @db.Uuid
+  projectId          String   @map("project_id") @db.Uuid
+  title              String   @default("Nueva conversacion") @db.VarChar(200)
+  isArchived         Boolean  @default(false) @map("is_archived")
+  antiSpoilerEnabled Boolean  @default(true) @map("anti_spoiler_enabled")
+  currentChapterId   String?  @map("current_chapter_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  currentChapter Chapter?      @relation(fields: [currentChapterId], references: [id])
+  messages       ChatMessage[]
+
+  @@index([projectId], map: "idx_thread_project")
+  @@index([isArchived], map: "idx_thread_archived")
+  @@map("chat_thread")
+}
+
+model ChatMessage {
+  id           String   @id @default(uuid()) @db.Uuid
+  threadId     String   @map("thread_id") @db.Uuid
+  role         String   @db.VarChar(20)
+  content      String
+  sources      Json?    @db.JsonB
+  inputTokens  Int?     @map("input_tokens")
+  outputTokens Int?     @map("output_tokens")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId], map: "idx_msg_thread")
+  @@index([createdAt], map: "idx_msg_created")
+  @@map("chat_message")
+}
+
+model Chunk {
+  id          String                       @id @default(uuid()) @db.Uuid
+  projectId   String                       @map("project_id") @db.Uuid
+  sceneId     String                       @map("scene_id") @db.Uuid
+  content     String
+  embedding   Unsupported("vector(1536)")?
+  tokenCount  Int                          @map("token_count")
+  chunkIndex  Int                          @map("chunk_index")
+  isDirty     Boolean                      @default(false) @map("is_dirty")
+  contentHash String?                      @map("content_hash") @db.VarChar(64)
+  createdAt   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id])
+  scene   Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([sceneId, chunkIndex])
+  @@index([sceneId], map: "idx_chunk_scene")
+  @@index([isDirty], map: "idx_chunk_dirty")
+  @@map("chunk")
+}
+
+model Summary {
+  id              String   @id @default(uuid()) @db.Uuid
+  projectId       String   @map("project_id") @db.Uuid
+  parentSummaryId String?  @map("parent_summary_id") @db.Uuid
+  scopeType       String   @map("scope_type") @db.VarChar(20)
+  scopeId         String   @map("scope_id") @db.Uuid
+  title           String?  @db.VarChar(300)
+  content         String
+  source          String   @default("ai_generated") @db.VarChar(20)
+  isDirty         Boolean  @default(false) @map("is_dirty")
+  tokenCount      Int?     @map("token_count")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project  Project   @relation(fields: [projectId], references: [id])
+  parent   Summary?  @relation("SummaryParent", fields: [parentSummaryId], references: [id])
+  children Summary[] @relation("SummaryParent")
+
+  @@index([projectId], map: "idx_summary_project")
+  @@index([scopeType, scopeId], map: "idx_summary_scope")
+  @@index([isDirty], map: "idx_summary_dirty")
+  @@map("summary")
+}
+
+// ============================================================
+// 2.6 Versiones, Exportacion, Visual
+// ============================================================
+
+model Version {
+  id             String   @id @default(uuid()) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  label          String?  @db.VarChar(200)
+  type           String   @default("manual") @db.VarChar(20)
+  storageKey     String   @map("storage_key") @db.VarChar(500)
+  checksumSha256 String   @map("checksum_sha256") @db.Char(64)
+  wordCount      Int?     @map("word_count")
+  entityCount    Int?     @map("entity_count")
+  sceneCount     Int?     @map("scene_count")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project    Project     @relation(fields: [projectId], references: [id])
+  shareLinks ShareLink[]
+
+  @@index([projectId], map: "idx_version_project")
+  @@index([type], map: "idx_version_type")
+  @@map("version")
+}
+
+model ExportJob {
+  id            String       @id @default(uuid()) @db.Uuid
+  projectId     String       @map("project_id") @db.Uuid
+  userId        String       @map("user_id") @db.Uuid
+  format        ExportFormat
+  scopeType     String       @map("scope_type") @db.VarChar(20)
+  scopeId       String?      @map("scope_id") @db.Uuid
+  template      String       @default("classic") @db.VarChar(50)
+  options       Json?        @db.JsonB
+  status        ExportStatus @default(QUEUED)
+  progress      Int          @default(0)
+  storageKey    String?      @map("storage_key") @db.VarChar(500)
+  fileSizeBytes BigInt?      @map("file_size_bytes")
+  errorMessage  String?      @map("error_message")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt   DateTime?    @map("completed_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([projectId], map: "idx_export_project")
+  @@index([status], map: "idx_export_status")
+  @@map("export_job")
+}
+
+model GeneratedImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  entityId   String   @map("entity_id") @db.Uuid
+  prompt     String
+  storageKey String   @map("storage_key") @db.VarChar(500)
+  imageType  String   @map("image_type") @db.VarChar(20)
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@index([entityId], map: "idx_image_entity")
+  @@index([isPrimary], map: "idx_image_primary")
+  @@map("generated_image")
+}
+
+model StoryboardNote {
+  id                String   @id @default(uuid()) @db.Uuid
+  projectId         String   @map("project_id") @db.Uuid
+  chapterId         String?  @map("chapter_id") @db.Uuid
+  content           String
+  color             String   @default("#7c4dff") @db.VarChar(7)
+  entityIds         String[] @default([]) @map("entity_ids") @db.Uuid
+  noteType          String   @default("text") @map("note_type") @db.VarChar(20)
+  audioStorageKey   String?  @map("audio_storage_key") @db.VarChar(500)
+  audioDurationSecs Int?     @map("audio_duration_secs")
+  sortKey           String   @map("sort_key") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project  @relation(fields: [projectId], references: [id])
+  chapter Chapter? @relation(fields: [chapterId], references: [id])
+
+  @@index([projectId], map: "idx_note_project")
+  @@index([chapterId], map: "idx_note_chapter")
+  @@index([sortKey], map: "idx_note_sort")
+  @@map("storyboard_note")
+}
+
+// ============================================================
+// 2.7 Lectura, Analiticas, Sistema
+// ============================================================
+
+model ShareLink {
+  id            String    @id @default(uuid()) @db.Uuid
+  projectId     String    @map("project_id") @db.Uuid
+  versionId     String?   @map("version_id") @db.Uuid
+  slug          String    @unique @db.Char(36)
+  passwordHash  String?   @map("password_hash") @db.VarChar(60)
+  expiresAt     DateTime? @map("expires_at") @db.Timestamptz(6)
+  allowComments Boolean   @default(true) @map("allow_comments")
+  includeWiki   Boolean   @default(false) @map("include_wiki")
+  maxReaders    Int?      @map("max_readers")
+  readerCount   Int       @default(0) @map("reader_count")
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project  Project         @relation(fields: [projectId], references: [id])
+  version  Version?        @relation(fields: [versionId], references: [id])
+  comments ReaderComment[]
+
+  @@index([projectId], map: "idx_share_project")
+  @@index([slug], map: "idx_share_slug")
+  @@index([expiresAt], map: "idx_share_expires")
+  @@map("share_link")
+}
+
+model ReaderComment {
+  id          String   @id @default(uuid()) @db.Uuid
+  shareLinkId String   @map("share_link_id") @db.Uuid
+  sceneId     String?  @map("scene_id") @db.Uuid
+  chapterId   String?  @map("chapter_id") @db.Uuid
+  displayName String   @map("display_name") @db.VarChar(100)
+  body        String
+  isVisible   Boolean  @default(false) @map("is_visible")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  shareLink ShareLink @relation(fields: [shareLinkId], references: [id], onDelete: Cascade)
+  scene     Scene?    @relation(fields: [sceneId], references: [id])
+  chapter   Chapter?  @relation(fields: [chapterId], references: [id])
+
+  @@index([shareLinkId], map: "idx_comment_share")
+  @@index([isVisible], map: "idx_comment_visible")
+  @@map("reader_comment")
+}
+
+model WritingSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  projectId    String    @map("project_id") @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  sceneId      String?   @map("scene_id") @db.Uuid
+  startedAt    DateTime  @map("started_at") @db.Timestamptz(6)
+  endedAt      DateTime? @map("ended_at") @db.Timestamptz(6)
+  durationSecs Int?      @map("duration_secs")
+  wordsAdded   Int       @default(0) @map("words_added")
+  wordsDeleted Int       @default(0) @map("words_deleted")
+  wordsNet     Int       @default(0) @map("words_net")
+  keystrokes   Int       @default(0)
+  avgWpm       Decimal?  @map("avg_wpm") @db.Decimal(5, 1)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+  scene   Scene?  @relation(fields: [sceneId], references: [id])
+
+  @@index([userId, startedAt], map: "idx_session_user_date")
+  @@index([projectId], map: "idx_session_project")
+  @@map("writing_session")
+}
+
+model WritingGoal {
+  id           String    @id @default(uuid()) @db.Uuid
+  projectId    String    @map("project_id") @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  goalType     String    @map("goal_type") @db.VarChar(20)
+  targetWords  Int       @map("target_words")
+  currentWords Int       @default(0) @map("current_words")
+  deadline     DateTime? @db.Timestamptz(6)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "idx_goal_user")
+  @@index([isActive], map: "idx_goal_active")
+  @@map("writing_goal")
+}
+
+model Outbox {
+  id            String    @id @default(uuid()) @db.Uuid
+  aggregateType String    @map("aggregate_type") @db.VarChar(100)
+  aggregateId   String    @map("aggregate_id") @db.Uuid
+  eventType     String    @map("event_type") @db.VarChar(100)
+  payload       Json      @db.JsonB
+  createdAt     DateTime  @map("created_at") @db.Timestamptz(6)
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz(6)
+
+  @@index([processedAt], map: "idx_outbox_processed")
+  @@map("outbox")
+}
