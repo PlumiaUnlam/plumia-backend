@@ -2,13 +2,13 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import {
   type ProjectRecord,
   type ProjectWithTreeRecord,
-} from '../../../src/projects/ports/project-repository.port';
-import { ProjectsController } from '../../../src/projects/projects.controller';
-import { ProjectsService } from '../../../src/projects/projects.service';
+} from '../../../src/manuscript/ports/project-repository.port';
+import { ManuscriptController } from '../../../src/manuscript/manuscript.controller';
+import { ProjectService } from '../../../src/manuscript/services/project.service';
 
-describe('ProjectsController', () => {
-  let controller: ProjectsController;
-  let service: jest.Mocked<ProjectsService>;
+describe('ManuscriptController', () => {
+  let controller: ManuscriptController;
+  let service: jest.Mocked<ProjectService>;
 
   const req = { user: { id: 'user-1', email: 'author@plumia.test' } };
   const now = new Date('2026-06-09T00:00:00.000Z');
@@ -28,10 +28,10 @@ describe('ProjectsController', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ProjectsController],
+      controllers: [ManuscriptController],
       providers: [
         {
-          provide: ProjectsService,
+          provide: ProjectService,
           useValue: {
             listByUser: jest.fn(),
             create: jest.fn(),
@@ -43,14 +43,14 @@ describe('ProjectsController', () => {
       ],
     }).compile();
 
-    controller = module.get(ProjectsController);
-    service = module.get(ProjectsService);
+    controller = module.get(ManuscriptController);
+    service = module.get(ProjectService);
   });
 
   it('lists projects for the authenticated user', async () => {
     service.listByUser.mockResolvedValue([project]);
 
-    const result = await controller.list(req);
+    const result = await controller.listProjects(req);
 
     expect(result).toEqual([project]);
     expect(service.listByUser).toHaveBeenCalledWith('user-1');
@@ -60,17 +60,38 @@ describe('ProjectsController', () => {
     const dto = { title: 'Plum draft', genre: 'Fantasy' };
     service.create.mockResolvedValue(project);
 
-    const result = await controller.create(req, dto);
+    const result = await controller.createProject(req, dto);
 
     expect(result).toEqual(project);
     expect(service.create).toHaveBeenCalledWith('user-1', dto);
   });
 
   it('returns a project tree for the authenticated user', async () => {
-    const projectTree: ProjectWithTreeRecord = { ...project, books: [] };
+    const projectTree: ProjectWithTreeRecord = {
+      ...project,
+      books: [
+        {
+          id: 'book-1',
+          title: 'Book one',
+          chapters: [
+            {
+              id: 'chapter-1',
+              title: 'Chapter one',
+              scenes: [
+                {
+                  id: 'scene-1',
+                  title: 'Opening',
+                  wordCount: 1200,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
     service.getById.mockResolvedValue(projectTree);
 
-    const result = await controller.getById(req, 'project-1');
+    const result = await controller.getProjectById(req, 'project-1');
 
     expect(result).toEqual(projectTree);
     expect(service.getById).toHaveBeenCalledWith('user-1', 'project-1');
@@ -80,7 +101,7 @@ describe('ProjectsController', () => {
     const dto = { title: 'New title' };
     service.update.mockResolvedValue(project);
 
-    const result = await controller.update(req, 'project-1', dto);
+    const result = await controller.updateProject(req, 'project-1', dto);
 
     expect(result).toEqual(project);
     expect(service.update).toHaveBeenCalledWith('user-1', 'project-1', dto);
@@ -89,7 +110,7 @@ describe('ProjectsController', () => {
   it('removes a project for the authenticated user', async () => {
     service.remove.mockResolvedValue(project);
 
-    const result = await controller.remove(req, 'project-1');
+    const result = await controller.removeProject(req, 'project-1');
 
     expect(result).toEqual(project);
     expect(service.remove).toHaveBeenCalledWith('user-1', 'project-1');

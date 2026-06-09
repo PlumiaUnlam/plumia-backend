@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
@@ -31,7 +31,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     //  throw new UnauthorizedException();
     //}
 
-
-    return Promise.resolve({ id: "5427d530-246e-4c45-8f98-4c5747f4eddb", email: 'user@example.com' });
+    return Promise.resolve({
+      id: '5427d530-246e-4c45-8f98-4c5747f4eddb',
+      email: 'user@example.com',
+    });
   }
 }

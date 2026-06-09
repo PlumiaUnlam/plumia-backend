@@ -5,11 +5,11 @@ import {
   type ProjectRecord,
   type ProjectRepository,
   type ProjectWithTreeRecord,
-} from '../../../src/projects/ports/project-repository.port';
-import { ProjectsService } from '../../../src/projects/projects.service';
+} from '../../../src/manuscript/ports/project-repository.port';
+import { ProjectService } from '../../../src/manuscript/services/project.service';
 
-describe('ProjectsService', () => {
-  let service: ProjectsService;
+describe('ProjectService', () => {
+  let service: ProjectService;
   let repository: jest.Mocked<ProjectRepository>;
 
   const now = new Date('2026-06-09T00:00:00.000Z');
@@ -30,7 +30,7 @@ describe('ProjectsService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        ProjectsService,
+        ProjectService,
         {
           provide: PROJECT_REPOSITORY,
           useValue: {
@@ -44,7 +44,7 @@ describe('ProjectsService', () => {
       ],
     }).compile();
 
-    service = module.get(ProjectsService);
+    service = module.get(ProjectService);
     repository = module.get(PROJECT_REPOSITORY);
   });
 
@@ -74,7 +74,28 @@ describe('ProjectsService', () => {
   });
 
   it('returns a project tree when found', async () => {
-    const projectTree: ProjectWithTreeRecord = { ...project, books: [] };
+    const projectTree: ProjectWithTreeRecord = {
+      ...project,
+      books: [
+        {
+          id: 'book-1',
+          title: 'Book one',
+          chapters: [
+            {
+              id: 'chapter-1',
+              title: 'Chapter one',
+              scenes: [
+                {
+                  id: 'scene-1',
+                  title: 'Opening',
+                  wordCount: 1200,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
     repository.findByIdForUser.mockResolvedValue(projectTree);
 
     const result = await service.getById('user-1', 'project-1');

@@ -16,41 +16,19 @@ export interface ProjectRecord {
 
 export interface ProjectSceneRecord {
   id: string;
-  chapterId: string;
   title: string | null;
-  sortKey: string;
-  content: unknown;
-  contentHash: string | null;
   wordCount: number;
-  povCharacterId: string | null;
-  status: string;
-  order: number;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
 }
 
 export interface ProjectChapterRecord {
   id: string;
-  bookId: string;
   title: string;
-  sortKey: string;
-  status: string;
-  wordCount: number;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
   scenes: ProjectSceneRecord[];
 }
 
 export interface ProjectBookRecord {
   id: string;
-  projectId: string;
   title: string;
-  sortKey: string;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
   chapters: ProjectChapterRecord[];
 }
 

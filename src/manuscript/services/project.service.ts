@@ -1,16 +1,16 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { CreateProjectDto } from './dto/create-project.dto';
-import { UpdateProjectDto } from './dto/update-project.dto';
+import { CreateProjectDto } from '../dto/projects/create-project.dto';
+import { UpdateProjectDto } from '../dto/projects/update-project.dto';
 import {
   PROJECT_REPOSITORY,
   type CreateProjectData,
   type ProjectRecord,
   type ProjectRepository,
   type ProjectWithTreeRecord,
-} from './ports/project-repository.port';
+} from '../ports/project-repository.port';
 
 @Injectable()
-export class ProjectsService {
+export class ProjectService {
   constructor(
     @Inject(PROJECT_REPOSITORY)
     private readonly projectRepository: ProjectRepository,

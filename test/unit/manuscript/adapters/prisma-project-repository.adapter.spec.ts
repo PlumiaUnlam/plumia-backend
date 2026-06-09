@@ -1,7 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../../../src/prisma/prisma.service';
-import { PrismaProjectRepository } from '../../../../src/projects/adapters/prisma-project-repository.adapter';
-import { type ProjectRecord } from '../../../../src/projects/ports/project-repository.port';
+import { PrismaProjectRepository } from '../../../../src/manuscript/adapters/prisma-project-repository.adapter';
+import { type ProjectRecord } from '../../../../src/manuscript/ports/project-repository.port';
 
 interface MockPrismaService {
   project: {
@@ -87,16 +87,74 @@ describe('PrismaProjectRepository', () => {
   });
 
   it('finds a project tree owned by the user', async () => {
-    prisma.project.findFirst.mockResolvedValue({ ...project, books: [] });
+    const projectTree = {
+      ...project,
+      books: [
+        {
+          id: 'book-1',
+          title: 'Book one',
+          chapters: [
+            {
+              id: 'chapter-1',
+              title: 'Chapter one',
+              scenes: [
+                {
+                  id: 'scene-1',
+                  title: 'Opening',
+                  wordCount: 1200,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    prisma.project.findFirst.mockResolvedValue(projectTree);
 
     const result = await repository.findByIdForUser('user-1', 'project-1');
 
-    expect(result).toEqual({ ...project, books: [] });
-    expect(prisma.project.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'project-1', userId: 'user-1', deletedAt: null },
-      }),
-    );
+    expect(result).toEqual(projectTree);
+    expect(prisma.project.findFirst).toHaveBeenCalledWith({
+      where: { id: 'project-1', userId: 'user-1', deletedAt: null },
+      select: {
+        id: true,
+        userId: true,
+        title: true,
+        description: true,
+        genre: true,
+        genreRules: true,
+        wordCountTarget: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        deletedAt: true,
+        books: {
+          where: { deletedAt: null },
+          orderBy: { sortKey: 'asc' },
+          select: {
+            id: true,
+            title: true,
+            chapters: {
+              where: { deletedAt: null },
+              orderBy: { sortKey: 'asc' },
+              select: {
+                id: true,
+                title: true,
+                scenes: {
+                  where: { deletedAt: null },
+                  orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
+                  select: {
+                    id: true,
+                    title: true,
+                    wordCount: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
   });
 
   it('returns null when updating a missing project', async () => {

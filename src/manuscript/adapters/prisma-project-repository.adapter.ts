@@ -9,24 +9,44 @@ import {
   UpdateProjectData,
 } from '../ports/project-repository.port';
 
-const projectTreeInclude = {
+const projectTreeSelect = {
+  id: true,
+  userId: true,
+  title: true,
+  description: true,
+  genre: true,
+  genreRules: true,
+  wordCountTarget: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAt: true,
   books: {
     where: { deletedAt: null },
     orderBy: { sortKey: 'asc' },
-    include: {
+    select: {
+      id: true,
+      title: true,
       chapters: {
         where: { deletedAt: null },
         orderBy: { sortKey: 'asc' },
-        include: {
+        select: {
+          id: true,
+          title: true,
           scenes: {
             where: { deletedAt: null },
             orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
+            select: {
+              id: true,
+              title: true,
+              wordCount: true,
+            },
           },
         },
       },
     },
   },
-} satisfies Prisma.ProjectInclude;
+} satisfies Prisma.ProjectSelect;
 
 @Injectable()
 export class PrismaProjectRepository implements ProjectRepository {
@@ -64,7 +84,7 @@ export class PrismaProjectRepository implements ProjectRepository {
   ): Promise<ProjectWithTreeRecord | null> {
     return this.prisma.project.findFirst({
       where: { id: projectId, userId, deletedAt: null },
-      include: projectTreeInclude,
+      select: projectTreeSelect,
     });
   }
 
