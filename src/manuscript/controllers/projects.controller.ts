@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -41,7 +42,7 @@ export class ProjectsController {
   @Get(':id')
   async getProjectById(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ProjectWithTreeResponseDto> {
     const project = await this.projectService.getById(req.user.id, id);
     return ProjectWithTreeResponseDto.from(project);
@@ -50,7 +51,7 @@ export class ProjectsController {
   @Patch(':id')
   async updateProject(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProjectDto,
   ): Promise<ProjectResponseDto> {
     const project = await this.projectService.update(req.user.id, id, dto);
@@ -60,7 +61,7 @@ export class ProjectsController {
   @Delete(':id')
   async removeProject(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ProjectResponseDto> {
     const project = await this.projectService.remove(req.user.id, id);
     return ProjectResponseDto.from(project);

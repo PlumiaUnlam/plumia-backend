@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Put,
@@ -23,7 +24,7 @@ export class ScenesController {
   @Post('chapters/:chapterId/scenes')
   async createScene(
     @Request() req: AuthenticatedRequest,
-    @Param('chapterId') chapterId: string,
+    @Param('chapterId', ParseUUIDPipe) chapterId: string,
     @Body() dto: CreateSceneDto,
   ): Promise<SceneResponseDto> {
     const scene = await this.sceneService.create(req.user.id, chapterId, dto);
@@ -33,7 +34,7 @@ export class ScenesController {
   @Get('scenes/:id')
   async getSceneById(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<SceneResponseDto> {
     const scene = await this.sceneService.getById(req.user.id, id);
     return SceneResponseDto.from(scene);
@@ -42,7 +43,7 @@ export class ScenesController {
   @Patch('scenes/:id')
   async updateScene(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSceneMetadataDto,
   ): Promise<SceneResponseDto> {
     const scene = await this.sceneService.update(req.user.id, id, dto);
@@ -52,7 +53,7 @@ export class ScenesController {
   @Put('scenes/:id/content')
   async updateSceneContent(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSceneContentDto,
   ): Promise<SceneResponseDto> {
     const scene = await this.sceneService.updateContent(req.user.id, id, dto);
@@ -62,7 +63,7 @@ export class ScenesController {
   @Delete('scenes/:id')
   async removeScene(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<SceneResponseDto> {
     const scene = await this.sceneService.remove(req.user.id, id);
     return SceneResponseDto.from(scene);

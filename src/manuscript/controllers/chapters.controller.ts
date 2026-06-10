@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -21,7 +22,7 @@ export class ChaptersController {
   @Post('books/:bookId/chapters')
   async createChapter(
     @Request() req: AuthenticatedRequest,
-    @Param('bookId') bookId: string,
+    @Param('bookId', ParseUUIDPipe) bookId: string,
     @Body() dto: CreateChapterDto,
   ): Promise<ChapterResponseDto> {
     const chapter = await this.chapterService.create(req.user.id, bookId, dto);
@@ -31,7 +32,7 @@ export class ChaptersController {
   @Get('chapters/:id')
   async getChapterById(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ChapterResponseDto> {
     const chapter = await this.chapterService.getById(req.user.id, id);
     return ChapterResponseDto.from(chapter);
@@ -40,7 +41,7 @@ export class ChaptersController {
   @Patch('chapters/:id')
   async updateChapter(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateChapterDto,
   ): Promise<ChapterResponseDto> {
     const chapter = await this.chapterService.update(req.user.id, id, dto);
@@ -50,7 +51,7 @@ export class ChaptersController {
   @Delete('chapters/:id')
   async removeChapter(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ChapterResponseDto> {
     const chapter = await this.chapterService.remove(req.user.id, id);
     return ChapterResponseDto.from(chapter);

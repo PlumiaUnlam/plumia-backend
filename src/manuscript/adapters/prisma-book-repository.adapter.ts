@@ -6,6 +6,7 @@ import {
   CreateBookData,
   UpdateBookData,
 } from '../ports/book-repository.port';
+import { translatePrismaConflict } from './prisma-error';
 
 @Injectable()
 export class PrismaBookRepository implements BookRepository {
@@ -24,13 +25,17 @@ export class PrismaBookRepository implements BookRepository {
       return null;
     }
 
-    return this.prisma.book.create({
-      data: {
-        projectId: data.projectId,
-        title: data.title,
-        sortKey: data.sortKey,
-      },
-    });
+    try {
+      return await this.prisma.book.create({
+        data: {
+          projectId: data.projectId,
+          title: data.title,
+          sortKey: data.sortKey,
+        },
+      });
+    } catch (error: unknown) {
+      translatePrismaConflict(error);
+    }
   }
 
   findByIdForUser(userId: string, bookId: string): Promise<BookRecord | null> {
@@ -44,13 +49,18 @@ export class PrismaBookRepository implements BookRepository {
     bookId: string,
     data: UpdateBookData,
   ): Promise<BookRecord | null> {
-    const result = await this.prisma.book.updateMany({
-      where: { id: bookId, deletedAt: null, project: { userId } },
-      data: {
-        ...(data.title !== undefined ? { title: data.title } : {}),
-        ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
-      },
-    });
+    let result: { count: number };
+    try {
+      result = await this.prisma.book.updateMany({
+        where: { id: bookId, deletedAt: null, project: { userId } },
+        data: {
+          ...(data.title !== undefined ? { title: data.title } : {}),
+          ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
+        },
+      });
+    } catch (error: unknown) {
+      translatePrismaConflict(error);
+    }
 
     if (result.count === 0) {
       return null;

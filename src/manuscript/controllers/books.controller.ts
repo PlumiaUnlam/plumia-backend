@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -21,7 +22,7 @@ export class BooksController {
   @Post('projects/:projectId/books')
   async createBook(
     @Request() req: AuthenticatedRequest,
-    @Param('projectId') projectId: string,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() dto: CreateBookDto,
   ): Promise<BookResponseDto> {
     const book = await this.bookService.create(req.user.id, projectId, dto);
@@ -31,7 +32,7 @@ export class BooksController {
   @Get('books/:id')
   async getBookById(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<BookResponseDto> {
     const book = await this.bookService.getById(req.user.id, id);
     return BookResponseDto.from(book);
@@ -40,7 +41,7 @@ export class BooksController {
   @Patch('books/:id')
   async updateBook(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBookDto,
   ): Promise<BookResponseDto> {
     const book = await this.bookService.update(req.user.id, id, dto);
@@ -50,7 +51,7 @@ export class BooksController {
   @Delete('books/:id')
   async removeBook(
     @Request() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<BookResponseDto> {
     const book = await this.bookService.remove(req.user.id, id);
     return BookResponseDto.from(book);

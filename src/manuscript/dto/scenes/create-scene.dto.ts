@@ -1,13 +1,13 @@
 import {
   IsEnum,
   IsInt,
-  IsObject,
   IsOptional,
   IsString,
   MaxLength,
   Min,
 } from 'class-validator';
 import { SceneStatus } from '../../domain/scene-status';
+import { IsTipTapDocument } from './tiptap-document.validator';
 
 export class CreateSceneDto {
   @IsString()
@@ -19,7 +19,7 @@ export class CreateSceneDto {
   @MaxLength(50)
   sortKey!: string;
 
-  @IsObject()
+  @IsTipTapDocument()
   @IsOptional()
   content?: Record<string, unknown>;
 

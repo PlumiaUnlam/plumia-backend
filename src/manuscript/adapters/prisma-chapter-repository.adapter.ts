@@ -8,6 +8,7 @@ import {
   CreateChapterData,
   UpdateChapterData,
 } from '../ports/chapter-repository.port';
+import { translatePrismaConflict } from './prisma-error';
 
 @Injectable()
 export class PrismaChapterRepository implements ChapterRepository {
@@ -26,14 +27,19 @@ export class PrismaChapterRepository implements ChapterRepository {
       return null;
     }
 
-    const chapter = await this.prisma.chapter.create({
-      data: {
-        bookId: data.bookId,
-        title: data.title,
-        sortKey: data.sortKey,
-        ...(data.status !== undefined ? { status: data.status } : {}),
-      },
-    });
+    let chapter: Chapter;
+    try {
+      chapter = await this.prisma.chapter.create({
+        data: {
+          bookId: data.bookId,
+          title: data.title,
+          sortKey: data.sortKey,
+          ...(data.status !== undefined ? { status: data.status } : {}),
+        },
+      });
+    } catch (error: unknown) {
+      translatePrismaConflict(error);
+    }
     return this.toChapterRecord(chapter);
   }
 
@@ -57,18 +63,23 @@ export class PrismaChapterRepository implements ChapterRepository {
     chapterId: string,
     data: UpdateChapterData,
   ): Promise<ChapterRecord | null> {
-    const result = await this.prisma.chapter.updateMany({
-      where: {
-        id: chapterId,
-        deletedAt: null,
-        book: { project: { userId } },
-      },
-      data: {
-        ...(data.title !== undefined ? { title: data.title } : {}),
-        ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
-        ...(data.status !== undefined ? { status: data.status } : {}),
-      },
-    });
+    let result: { count: number };
+    try {
+      result = await this.prisma.chapter.updateMany({
+        where: {
+          id: chapterId,
+          deletedAt: null,
+          book: { project: { userId } },
+        },
+        data: {
+          ...(data.title !== undefined ? { title: data.title } : {}),
+          ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
+          ...(data.status !== undefined ? { status: data.status } : {}),
+        },
+      });
+    } catch (error: unknown) {
+      translatePrismaConflict(error);
+    }
 
     if (result.count === 0) {
       return null;

@@ -1,7 +1,8 @@
-import { IsInt, IsObject, IsOptional, Min } from 'class-validator';
+import { IsInt, IsOptional, Min } from 'class-validator';
+import { IsTipTapDocument } from './tiptap-document.validator';
 
 export class UpdateSceneContentDto {
-  @IsObject()
+  @IsTipTapDocument()
   content!: Record<string, unknown>;
 
   @IsInt()
