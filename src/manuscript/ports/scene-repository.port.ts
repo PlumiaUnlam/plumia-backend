@@ -1,4 +1,4 @@
-import type { SceneStatus } from '@prisma/client';
+import type { SceneStatus } from '../domain/scene-status';
 
 export const SCENE_REPOSITORY = Symbol('SCENE_REPOSITORY');
 

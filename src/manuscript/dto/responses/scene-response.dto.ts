@@ -1,4 +1,4 @@
-import type { SceneStatus } from '@prisma/client';
+import type { SceneStatus } from '../../domain/scene-status';
 import type { SceneRecord } from '../../ports/scene-repository.port';
 
 export class SceneResponseDto {

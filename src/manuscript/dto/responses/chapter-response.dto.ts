@@ -1,4 +1,4 @@
-import type { SceneStatus } from '@prisma/client';
+import type { ChapterStatus } from '../../domain/scene-status';
 import type { ChapterRecord } from '../../ports/chapter-repository.port';
 
 export class ChapterResponseDto {
@@ -6,7 +6,7 @@ export class ChapterResponseDto {
   bookId!: string;
   title!: string;
   sortKey!: string;
-  status!: SceneStatus;
+  status!: ChapterStatus;
   wordCount!: number;
   createdAt!: Date;
   updatedAt!: Date;

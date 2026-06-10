@@ -10,6 +10,7 @@ interface MockPrismaService {
     create: jest.Mock;
     findFirst: jest.Mock;
     update: jest.Mock;
+    updateMany: jest.Mock;
   };
   $transaction: jest.Mock;
 }
@@ -45,6 +46,7 @@ describe('PrismaProjectRepository', () => {
               create: jest.fn(),
               findFirst: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn(),
             },
             $transaction: jest.fn(),
           },
@@ -159,19 +161,23 @@ describe('PrismaProjectRepository', () => {
   });
 
   it('returns null when updating a missing project', async () => {
-    prisma.project.findFirst.mockResolvedValue(null);
+    prisma.project.updateMany.mockResolvedValue({ count: 0 });
 
     const result = await repository.updateForUser('user-1', 'missing', {
       title: 'New title',
     });
 
     expect(result).toBeNull();
+    expect(prisma.project.updateMany).toHaveBeenCalledWith({
+      where: { id: 'missing', userId: 'user-1', deletedAt: null },
+      data: { title: 'New title' },
+    });
     expect(prisma.project.update).not.toHaveBeenCalled();
   });
 
   it('updates an owned project', async () => {
-    prisma.project.findFirst.mockResolvedValue({ id: 'project-1' });
-    prisma.project.update.mockResolvedValue(project);
+    prisma.project.updateMany.mockResolvedValue({ count: 1 });
+    prisma.project.findFirst.mockResolvedValue(project);
 
     const result = await repository.updateForUser('user-1', 'project-1', {
       title: 'New title',
@@ -179,10 +185,14 @@ describe('PrismaProjectRepository', () => {
     });
 
     expect(result).toEqual(project);
-    expect(prisma.project.update).toHaveBeenCalledWith({
-      where: { id: 'project-1' },
+    expect(prisma.project.updateMany).toHaveBeenCalledWith({
+      where: { id: 'project-1', userId: 'user-1', deletedAt: null },
       data: { title: 'New title', status: 'active' },
     });
+    expect(prisma.project.findFirst).toHaveBeenCalledWith({
+      where: { id: 'project-1', userId: 'user-1', deletedAt: null },
+    });
+    expect(prisma.project.update).not.toHaveBeenCalled();
   });
 
   it('soft deletes an owned project and its manuscript tree in one transaction', async () => {
@@ -191,12 +201,15 @@ describe('PrismaProjectRepository', () => {
       scene: { updateMany: jest.fn() },
       chapter: { updateMany: jest.fn() },
       book: { updateMany: jest.fn() },
-      project: { update: jest.fn().mockResolvedValue(project) },
+      project: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValue(project),
+      },
     };
-    prisma.project.findFirst.mockResolvedValue({ id: 'project-1' });
     prisma.$transaction.mockImplementation(
-      async (callback: (transaction: typeof tx) => Promise<ProjectRecord>) =>
-        callback(tx),
+      async (
+        callback: (transaction: typeof tx) => Promise<ProjectRecord | null>,
+      ) => callback(tx),
     );
 
     const result = await repository.softDeleteForUser(
@@ -221,9 +234,12 @@ describe('PrismaProjectRepository', () => {
       where: { projectId: 'project-1', deletedAt: null },
       data: { deletedAt },
     });
-    expect(tx.project.update).toHaveBeenCalledWith({
-      where: { id: 'project-1' },
+    expect(tx.project.updateMany).toHaveBeenCalledWith({
+      where: { id: 'project-1', userId: 'user-1', deletedAt: null },
       data: { deletedAt },
+    });
+    expect(tx.project.findFirst).toHaveBeenCalledWith({
+      where: { id: 'project-1', userId: 'user-1' },
     });
   });
 });

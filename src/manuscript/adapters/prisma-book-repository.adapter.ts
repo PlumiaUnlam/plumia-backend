@@ -44,18 +44,19 @@ export class PrismaBookRepository implements BookRepository {
     bookId: string,
     data: UpdateBookData,
   ): Promise<BookRecord | null> {
-    const book = await this.findOwnedBook(userId, bookId);
-    if (!book) {
-      return null;
-    }
-
-    return this.prisma.book.update({
-      where: { id: bookId },
+    const result = await this.prisma.book.updateMany({
+      where: { id: bookId, deletedAt: null, project: { userId } },
       data: {
         ...(data.title !== undefined ? { title: data.title } : {}),
         ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
       },
     });
+
+    if (result.count === 0) {
+      return null;
+    }
+
+    return this.findByIdForUser(userId, bookId);
   }
 
   async softDeleteForUser(
@@ -63,12 +64,16 @@ export class PrismaBookRepository implements BookRepository {
     bookId: string,
     deletedAt: Date,
   ): Promise<BookRecord | null> {
-    const book = await this.findOwnedBook(userId, bookId);
-    if (!book) {
-      return null;
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      const result = await tx.book.updateMany({
+        where: { id: bookId, deletedAt: null, project: { userId } },
+        data: { deletedAt },
+      });
+
+      if (result.count === 0) {
+        return null;
+      }
+
       await tx.scene.updateMany({
         where: { chapter: { bookId }, deletedAt: null },
         data: { deletedAt },
@@ -77,20 +82,10 @@ export class PrismaBookRepository implements BookRepository {
         where: { bookId, deletedAt: null },
         data: { deletedAt },
       });
-      return tx.book.update({
-        where: { id: bookId },
-        data: { deletedAt },
-      });
-    });
-  }
 
-  private findOwnedBook(
-    userId: string,
-    bookId: string,
-  ): Promise<{ id: string } | null> {
-    return this.prisma.book.findFirst({
-      where: { id: bookId, deletedAt: null, project: { userId } },
-      select: { id: true },
+      return tx.book.findFirst({
+        where: { id: bookId, project: { userId } },
+      });
     });
   }
 }

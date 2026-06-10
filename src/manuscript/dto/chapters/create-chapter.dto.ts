@@ -1,4 +1,3 @@
-import { SceneStatus } from '@prisma/client';
 import {
   IsEnum,
   IsNotEmpty,
@@ -6,6 +5,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { SceneStatus } from '../../domain/scene-status';
 
 export class CreateChapterDto {
   @IsString()

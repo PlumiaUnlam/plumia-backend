@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
+import { type Chapter } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { toSceneStatus } from '../domain/scene-status';
 import {
   ChapterRecord,
   ChapterRepository,
@@ -24,7 +26,7 @@ export class PrismaChapterRepository implements ChapterRepository {
       return null;
     }
 
-    return this.prisma.chapter.create({
+    const chapter = await this.prisma.chapter.create({
       data: {
         bookId: data.bookId,
         title: data.title,
@@ -32,19 +34,22 @@ export class PrismaChapterRepository implements ChapterRepository {
         ...(data.status !== undefined ? { status: data.status } : {}),
       },
     });
+    return this.toChapterRecord(chapter);
   }
 
-  findByIdForUser(
+  async findByIdForUser(
     userId: string,
     chapterId: string,
   ): Promise<ChapterRecord | null> {
-    return this.prisma.chapter.findFirst({
+    const chapter = await this.prisma.chapter.findFirst({
       where: {
         id: chapterId,
         deletedAt: null,
         book: { project: { userId } },
       },
     });
+
+    return chapter ? this.toChapterRecord(chapter) : null;
   }
 
   async updateForUser(
@@ -52,19 +57,24 @@ export class PrismaChapterRepository implements ChapterRepository {
     chapterId: string,
     data: UpdateChapterData,
   ): Promise<ChapterRecord | null> {
-    const chapter = await this.findOwnedChapter(userId, chapterId);
-    if (!chapter) {
-      return null;
-    }
-
-    return this.prisma.chapter.update({
-      where: { id: chapterId },
+    const result = await this.prisma.chapter.updateMany({
+      where: {
+        id: chapterId,
+        deletedAt: null,
+        book: { project: { userId } },
+      },
       data: {
         ...(data.title !== undefined ? { title: data.title } : {}),
         ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
         ...(data.status !== undefined ? { status: data.status } : {}),
       },
     });
+
+    if (result.count === 0) {
+      return null;
+    }
+
+    return this.findByIdForUser(userId, chapterId);
   }
 
   async softDeleteForUser(
@@ -72,34 +82,44 @@ export class PrismaChapterRepository implements ChapterRepository {
     chapterId: string,
     deletedAt: Date,
   ): Promise<ChapterRecord | null> {
-    const chapter = await this.findOwnedChapter(userId, chapterId);
-    if (!chapter) {
-      return null;
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      const result = await tx.chapter.updateMany({
+        where: {
+          id: chapterId,
+          deletedAt: null,
+          book: { project: { userId } },
+        },
+        data: { deletedAt },
+      });
+
+      if (result.count === 0) {
+        return null;
+      }
+
       await tx.scene.updateMany({
         where: { chapterId, deletedAt: null },
         data: { deletedAt },
       });
-      return tx.chapter.update({
-        where: { id: chapterId },
-        data: { deletedAt },
+
+      const chapter = await tx.chapter.findFirst({
+        where: { id: chapterId, book: { project: { userId } } },
       });
+
+      return chapter ? this.toChapterRecord(chapter) : null;
     });
   }
 
-  private findOwnedChapter(
-    userId: string,
-    chapterId: string,
-  ): Promise<{ id: string } | null> {
-    return this.prisma.chapter.findFirst({
-      where: {
-        id: chapterId,
-        deletedAt: null,
-        book: { project: { userId } },
-      },
-      select: { id: true },
-    });
+  private toChapterRecord(chapter: Chapter): ChapterRecord {
+    return {
+      id: chapter.id,
+      bookId: chapter.bookId,
+      title: chapter.title,
+      sortKey: chapter.sortKey,
+      status: toSceneStatus(chapter.status),
+      wordCount: chapter.wordCount,
+      createdAt: chapter.createdAt,
+      updatedAt: chapter.updatedAt,
+      deletedAt: chapter.deletedAt,
+    };
   }
 }

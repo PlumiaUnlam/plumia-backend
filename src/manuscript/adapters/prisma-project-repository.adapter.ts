@@ -105,13 +105,8 @@ export class PrismaProjectRepository implements ProjectRepository {
     projectId: string,
     data: UpdateProjectData,
   ): Promise<ProjectRecord | null> {
-    const project = await this.findOwnedProject(userId, projectId);
-    if (!project) {
-      return null;
-    }
-
-    const updatedProject = await this.prisma.project.update({
-      where: { id: projectId },
+    const result = await this.prisma.project.updateMany({
+      where: { id: projectId, userId, deletedAt: null },
       data: {
         ...(data.title !== undefined ? { title: data.title } : {}),
         ...(data.description !== undefined
@@ -127,7 +122,12 @@ export class PrismaProjectRepository implements ProjectRepository {
         ...(data.status !== undefined ? { status: data.status } : {}),
       },
     });
-    return this.toProjectRecord(updatedProject);
+
+    if (result.count === 0) {
+      return null;
+    }
+
+    return this.findRecordByIdForUser(userId, projectId);
   }
 
   async softDeleteForUser(
@@ -135,12 +135,16 @@ export class PrismaProjectRepository implements ProjectRepository {
     projectId: string,
     deletedAt: Date,
   ): Promise<ProjectRecord | null> {
-    const project = await this.findOwnedProject(userId, projectId);
-    if (!project) {
-      return null;
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      const result = await tx.project.updateMany({
+        where: { id: projectId, userId, deletedAt: null },
+        data: { deletedAt },
+      });
+
+      if (result.count === 0) {
+        return null;
+      }
+
       await tx.scene.updateMany({
         where: {
           chapter: {
@@ -165,22 +169,24 @@ export class PrismaProjectRepository implements ProjectRepository {
         where: { projectId, deletedAt: null },
         data: { deletedAt },
       });
-      const deletedProject = await tx.project.update({
-        where: { id: projectId },
-        data: { deletedAt },
+
+      const deletedProject = await tx.project.findFirst({
+        where: { id: projectId, userId },
       });
-      return this.toProjectRecord(deletedProject);
+
+      return deletedProject ? this.toProjectRecord(deletedProject) : null;
     });
   }
 
-  private findOwnedProject(
+  private async findRecordByIdForUser(
     userId: string,
     projectId: string,
-  ): Promise<{ id: string } | null> {
-    return this.prisma.project.findFirst({
+  ): Promise<ProjectRecord | null> {
+    const project = await this.prisma.project.findFirst({
       where: { id: projectId, userId, deletedAt: null },
-      select: { id: true },
     });
+
+    return project ? this.toProjectRecord(project) : null;
   }
 
   private toProjectRecord(project: Project): ProjectRecord {

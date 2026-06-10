@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Scene } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { toSceneStatus } from '../domain/scene-status';
 import {
   CreateSceneData,
   SceneRecord,
@@ -30,7 +31,7 @@ export class PrismaSceneRepository implements SceneRepository {
       return null;
     }
 
-    return this.prisma.scene.create({
+    const scene = await this.prisma.scene.create({
       data: {
         chapterId: data.chapterId,
         sortKey: data.sortKey,
@@ -43,19 +44,22 @@ export class PrismaSceneRepository implements SceneRepository {
         ...(data.order !== undefined ? { order: data.order } : {}),
       },
     });
+    return this.toSceneRecord(scene);
   }
 
-  findByIdForUser(
+  async findByIdForUser(
     userId: string,
     sceneId: string,
   ): Promise<SceneRecord | null> {
-    return this.prisma.scene.findFirst({
+    const scene = await this.prisma.scene.findFirst({
       where: {
         id: sceneId,
         deletedAt: null,
         chapter: { book: { project: { userId } } },
       },
     });
+
+    return scene ? this.toSceneRecord(scene) : null;
   }
 
   async updateForUser(
@@ -63,15 +67,20 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     data: UpdateSceneData,
   ): Promise<SceneRecord | null> {
-    const scene = await this.findOwnedScene(userId, sceneId);
-    if (!scene) {
+    const result = await this.prisma.scene.updateMany({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { project: { userId } } },
+      },
+      data: this.toSceneUpdateData(data),
+    });
+
+    if (result.count === 0) {
       return null;
     }
 
-    return this.prisma.scene.update({
-      where: { id: sceneId },
-      data: this.toSceneUpdateData(data),
-    });
+    return this.findByIdForUser(userId, sceneId);
   }
 
   async updateContentForUser(
@@ -79,18 +88,23 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     data: UpdateSceneContentData,
   ): Promise<SceneRecord | null> {
-    const scene = await this.findOwnedScene(userId, sceneId);
-    if (!scene) {
-      return null;
-    }
-
-    return this.prisma.scene.update({
-      where: { id: sceneId },
+    const result = await this.prisma.scene.updateMany({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { project: { userId } } },
+      },
       data: {
         content: data.content as Prisma.InputJsonValue,
         ...(data.wordCount !== undefined ? { wordCount: data.wordCount } : {}),
       },
     });
+
+    if (result.count === 0) {
+      return null;
+    }
+
+    return this.findByIdForUser(userId, sceneId);
   }
 
   async softDeleteForUser(
@@ -98,37 +112,52 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     deletedAt: Date,
   ): Promise<SceneRecord | null> {
-    const scene = await this.findOwnedScene(userId, sceneId);
-    if (!scene) {
-      return null;
-    }
-
-    return this.prisma.scene.update({
-      where: { id: sceneId },
-      data: { deletedAt },
-    });
-  }
-
-  private findOwnedScene(
-    userId: string,
-    sceneId: string,
-  ): Promise<{ id: string } | null> {
-    return this.prisma.scene.findFirst({
+    const result = await this.prisma.scene.updateMany({
       where: {
         id: sceneId,
         deletedAt: null,
         chapter: { book: { project: { userId } } },
       },
-      select: { id: true },
+      data: { deletedAt },
     });
+
+    if (result.count === 0) {
+      return null;
+    }
+
+    const scene = await this.prisma.scene.findFirst({
+      where: { id: sceneId, chapter: { book: { project: { userId } } } },
+    });
+
+    return scene ? this.toSceneRecord(scene) : null;
   }
 
-  private toSceneUpdateData(data: UpdateSceneData): Prisma.SceneUpdateInput {
+  private toSceneUpdateData(
+    data: UpdateSceneData,
+  ): Prisma.SceneUpdateManyMutationInput {
     return {
       ...(data.title !== undefined ? { title: data.title } : {}),
       ...(data.sortKey !== undefined ? { sortKey: data.sortKey } : {}),
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.order !== undefined ? { order: data.order } : {}),
+    };
+  }
+
+  private toSceneRecord(scene: Scene): SceneRecord {
+    return {
+      id: scene.id,
+      chapterId: scene.chapterId,
+      title: scene.title,
+      sortKey: scene.sortKey,
+      content: scene.content,
+      contentHash: scene.contentHash,
+      wordCount: scene.wordCount,
+      povCharacterId: scene.povCharacterId,
+      status: toSceneStatus(scene.status),
+      order: scene.order,
+      createdAt: scene.createdAt,
+      updatedAt: scene.updatedAt,
+      deletedAt: scene.deletedAt,
     };
   }
 }

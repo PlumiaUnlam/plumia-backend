@@ -1,4 +1,4 @@
-import type { SceneStatus } from '@prisma/client';
+import type { ChapterStatus } from '../domain/scene-status';
 
 export const CHAPTER_REPOSITORY = Symbol('CHAPTER_REPOSITORY');
 
@@ -7,7 +7,7 @@ export interface ChapterRecord {
   bookId: string;
   title: string;
   sortKey: string;
-  status: SceneStatus;
+  status: ChapterStatus;
   wordCount: number;
   createdAt: Date;
   updatedAt: Date;
@@ -18,13 +18,13 @@ export interface CreateChapterData {
   bookId: string;
   title: string;
   sortKey: string;
-  status?: SceneStatus;
+  status?: ChapterStatus;
 }
 
 export interface UpdateChapterData {
   title?: string;
   sortKey?: string;
-  status?: SceneStatus;
+  status?: ChapterStatus;
 }
 
 export interface ChapterRepository {

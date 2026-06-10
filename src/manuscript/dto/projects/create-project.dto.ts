@@ -1,5 +1,6 @@
 import {
   IsInt,
+  IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
@@ -9,6 +10,7 @@ import {
 
 export class CreateProjectDto {
   @IsString()
+  @IsNotEmpty()
   @MaxLength(200)
   title!: string;
 
