@@ -14,7 +14,7 @@ function stableStringify(value: unknown): string {
   if (value !== null && typeof value === 'object') {
     const objectValue = value as Record<string, unknown>;
     return `{${Object.keys(objectValue)
-      .sort()
+      .sort((left, right) => left.localeCompare(right))
       .map(
         (key) => `${JSON.stringify(key)}:${stableStringify(objectValue[key])}`,
       )
