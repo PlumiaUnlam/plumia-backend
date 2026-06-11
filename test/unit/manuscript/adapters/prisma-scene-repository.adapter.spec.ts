@@ -1,4 +1,6 @@
 import { Test, type TestingModule } from '@nestjs/testing';
+import { ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../src/prisma/prisma.service';
 import { createContentHash } from '../../../../src/manuscript/domain/json-content';
 import { SceneStatus } from '../../../../src/manuscript/domain/scene-status';
@@ -164,5 +166,20 @@ describe('PrismaSceneRepository', () => {
     expect(result).toBeNull();
     expect(tx.scene.findFirst).not.toHaveBeenCalled();
     expect(tx.outbox.create).not.toHaveBeenCalled();
+  });
+
+  it('translates prisma conflicts thrown by the content update transaction', async () => {
+    prisma.$transaction.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+
+    await expect(
+      repository.updateContentForUser('user-1', 'scene-1', {
+        content,
+      }),
+    ).rejects.toThrow(ConflictException);
   });
 });

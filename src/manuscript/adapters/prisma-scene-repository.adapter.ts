@@ -33,9 +33,8 @@ export class PrismaSceneRepository implements SceneRepository {
       return null;
     }
 
-    let scene: Scene;
     try {
-      scene = await this.prisma.scene.create({
+      const scene = await this.prisma.scene.create({
         data: {
           chapterId: data.chapterId,
           sortKey: data.sortKey,
@@ -53,10 +52,10 @@ export class PrismaSceneRepository implements SceneRepository {
           ...(data.order !== undefined ? { order: data.order } : {}),
         },
       });
+      return this.toSceneRecord(scene);
     } catch (error: unknown) {
-      translatePrismaConflict(error);
+      return translatePrismaConflict(error);
     }
-    return this.toSceneRecord(scene);
   }
 
   async findByIdForUser(
@@ -90,7 +89,7 @@ export class PrismaSceneRepository implements SceneRepository {
         data: this.toSceneUpdateData(data),
       });
     } catch (error: unknown) {
-      translatePrismaConflict(error);
+      return translatePrismaConflict(error);
     }
 
     if (result.count === 0) {
@@ -105,57 +104,61 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     data: UpdateSceneContentData,
   ): Promise<SceneRecord | null> {
-    return this.prisma.$transaction(async (tx) => {
-      const contentHash = createContentHash(data.content);
-      const result = await tx.scene.updateMany({
-        where: {
-          id: sceneId,
-          deletedAt: null,
-          chapter: { book: { project: { userId } } },
-        },
-        data: {
-          content: data.content as Prisma.InputJsonValue,
-          contentHash,
-          ...(data.wordCount !== undefined
-            ? { wordCount: data.wordCount }
-            : {}),
-        },
-      });
-
-      if (result.count === 0) {
-        return null;
-      }
-
-      const scene = await tx.scene.findFirst({
-        where: {
-          id: sceneId,
-          deletedAt: null,
-          chapter: { book: { project: { userId } } },
-        },
-      });
-
-      if (!scene) {
-        return null;
-      }
-
-      await tx.outbox.create({
-        data: {
-          aggregateType: 'Scene',
-          aggregateId: scene.id,
-          eventType: 'scene.content.updated',
-          payload: {
-            sceneId: scene.id,
-            chapterId: scene.chapterId,
-            contentHash,
-            wordCount: scene.wordCount,
-            userId,
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const contentHash = createContentHash(data.content);
+        const result = await tx.scene.updateMany({
+          where: {
+            id: sceneId,
+            deletedAt: null,
+            chapter: { book: { project: { userId } } },
           },
-          createdAt: new Date(),
-        },
-      });
+          data: {
+            content: data.content as Prisma.InputJsonValue,
+            contentHash,
+            ...(data.wordCount !== undefined
+              ? { wordCount: data.wordCount }
+              : {}),
+          },
+        });
 
-      return this.toSceneRecord(scene);
-    });
+        if (result.count === 0) {
+          return null;
+        }
+
+        const scene = await tx.scene.findFirst({
+          where: {
+            id: sceneId,
+            deletedAt: null,
+            chapter: { book: { project: { userId } } },
+          },
+        });
+
+        if (!scene) {
+          return null;
+        }
+
+        await tx.outbox.create({
+          data: {
+            aggregateType: 'Scene',
+            aggregateId: scene.id,
+            eventType: 'scene.content.updated',
+            payload: {
+              sceneId: scene.id,
+              chapterId: scene.chapterId,
+              contentHash,
+              wordCount: scene.wordCount,
+              userId,
+            },
+            createdAt: new Date(),
+          },
+        });
+
+        return this.toSceneRecord(scene);
+      });
+    } catch (error: unknown) {
+      return translatePrismaConflict(error);
+    }
   }
 
   async softDeleteForUser(
