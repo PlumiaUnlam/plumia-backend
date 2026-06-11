@@ -29,6 +29,7 @@ lerna-debug.log*
 # Tests
 /coverage
 /.nyc_output
+/test/ts-jest-transformer.js
 
 # IDE - VSCode
 .vscode/*

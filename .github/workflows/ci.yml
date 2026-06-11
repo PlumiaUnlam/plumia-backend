@@ -34,9 +34,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-  # ── 2. Tests y cobertura ──────────────────────────────────────────────────
+  # ── 2. Tests ──────────────────────────────────────────────────────────────
   test:
-    name: Tests & Coverage
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,16 +51,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Unit tests con cobertura
-        run: pnpm exec jest --coverage --passWithNoTests
-
-      - name: Subir reporte de cobertura
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 7
+      - name: Unit tests
+        run: pnpm test -- --passWithNoTests
 
   # ── 3. Build ──────────────────────────────────────────────────────────────
   build:
