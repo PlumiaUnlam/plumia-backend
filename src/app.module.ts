@@ -13,6 +13,7 @@ import { PublishingModule } from './publishing/publishing.module';
 import { ReadingModule } from './reading/reading.module';
 import { SystemModule } from './system/system.module';
 import { UserModule } from './user/user.module';
+import { WikiModule } from './wiki/wiki.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { UserModule } from './user/user.module';
     UserModule,
     AuthModule,
     ManuscriptModule,
+    WikiModule,
     KnowledgeModule,
     AuditModule,
     ChatModule,
