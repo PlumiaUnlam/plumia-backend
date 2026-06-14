@@ -21,11 +21,10 @@ export class FirebaseAdminService implements OnModuleInit {
       this.app = admin.initializeApp({
         credential: admin.credential.cert({
           projectId: this.config.getOrThrow<string>('FIREBASE_PROJECT_ID'),
-          clientEmail:
-            this.config.getOrThrow<string>('FIREBASE_CLIENT_EMAIL'),
+          clientEmail: this.config.getOrThrow<string>('FIREBASE_CLIENT_EMAIL'),
           privateKey: (
             this.config.getOrThrow<string>('FIREBASE_PRIVATE_KEY') ?? ''
-          ).replace(/\\n/g, '\n'),
+          ).replaceAll('\\n', '\n'),
         }),
       });
     }

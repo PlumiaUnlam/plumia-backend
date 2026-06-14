@@ -8,7 +8,10 @@ import { FirebaseAuthGuard } from './guards/firebase-auth.guard';
 import { FirebaseStrategy } from './strategies/firebase.strategy';
 
 @Module({
-  imports: [UserModule, PassportModule.register({ defaultStrategy: 'firebase' })],
+  imports: [
+    UserModule,
+    PassportModule.register({ defaultStrategy: 'firebase' }),
+  ],
   controllers: [AuthController],
   providers: [
     AuthService,

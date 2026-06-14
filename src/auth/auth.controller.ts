@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { Public } from '../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -10,11 +10,13 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
+  @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto): Promise<{
     user: Omit<User, 'deletedAt'>;
   }> {
-    const user = await this.authService.login(dto.idToken);
-    const { deletedAt: _, ...safeUser } = user;
+    const result = await this.authService.login(dto.idToken);
+    const { deletedAt, ...safeUser } = result;
+    void deletedAt;
     return { user: safeUser };
   }
 }
