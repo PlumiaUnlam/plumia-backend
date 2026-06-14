@@ -1,9 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { type User } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type UserEntity = User;
+
+export interface CreateFromFirebaseParams {
+  uid: string;
+  email: string;
+  name: string;
+  lastname?: string;
+  avatarUrl?: string | null;
+}
 
 @Injectable()
 export class UserService {
@@ -21,15 +28,15 @@ export class UserService {
     });
   }
 
-  async create(
-    name: string,
-    lastname: string,
-    email: string,
-    password: string,
-  ): Promise<UserEntity> {
-    const passwordHash = await bcrypt.hash(password, 10);
+  createFromFirebase(params: CreateFromFirebaseParams): Promise<UserEntity> {
     return this.prisma.user.create({
-      data: { name, lastname, email, passwordHash },
+      data: {
+        id: params.uid,
+        email: params.email,
+        name: params.name,
+        lastname: params.lastname ?? '',
+        avatarUrl: params.avatarUrl ?? null,
+      },
     });
   }
 }

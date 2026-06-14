@@ -4,7 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
-import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
+import { FirebaseAuthGuard } from './auth/guards/firebase-auth.guard';
 import { ChatModule } from './chat/chat.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { ManuscriptModule } from './manuscript/manuscript.module';
@@ -32,7 +32,7 @@ import { UserModule } from './user/user.module';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: JwtAuthGuard,
+      useClass: FirebaseAuthGuard,
     },
   ],
 })

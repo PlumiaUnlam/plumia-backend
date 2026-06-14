@@ -122,12 +122,10 @@ enum ExportStatus {
 // ============================================================
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  // --- campos del auth propio existente (no renombrar) ---
+  id           String    @id                               // Firebase uid
   name         String
   lastname     String
   email        String    @unique
-  passwordHash String
   createdAt    DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime  @updatedAt @db.Timestamptz(6)
   // --- campos agregados desde la doc ---
@@ -150,7 +148,7 @@ model User {
 
 model UserApiKey {
   id           String   @id @default(uuid()) @db.Uuid
-  userId       String   @map("user_id") @db.Uuid
+  userId       String   @map("user_id")
   provider     String   @db.VarChar(50)
   encryptedKey String   @map("encrypted_key")
   iv           Bytes
@@ -169,7 +167,7 @@ model UserApiKey {
 
 model TokenLedger {
   id           String   @id @default(uuid()) @db.Uuid
-  userId       String   @map("user_id") @db.Uuid
+  userId       String   @map("user_id")
   projectId    String   @map("project_id") @db.Uuid
   jobType      JobType  @map("job_type")
   provider     String   @db.VarChar(50)
@@ -190,7 +188,7 @@ model TokenLedger {
 
 model Subscription {
   id        String    @id @default(uuid()) @db.Uuid
-  userId    String    @unique @map("user_id") @db.Uuid
+  userId    String    @unique @map("user_id")
   plan      PlanType
   startedAt DateTime  @map("started_at") @db.Timestamptz(6)
   expiresAt DateTime? @map("expires_at") @db.Timestamptz(6)
@@ -210,7 +208,7 @@ model Subscription {
 
 model Project {
   id              String    @id @default(uuid()) @db.Uuid
-  userId          String    @map("user_id") @db.Uuid
+  userId          String    @map("user_id")
   title           String    @db.VarChar(200)
   description     String?
   genre           String?   @db.VarChar(100)
@@ -441,7 +439,7 @@ model EntityProposal {
   status           ProposalStatus @default(PENDING)
   confidenceScore  Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
   resolutionReason String?        @map("resolution_reason")
-  reviewedById     String?        @map("reviewed_by_id") @db.Uuid
+  reviewedById     String?        @map("reviewed_by_id")
   reviewedAt       DateTime?      @map("reviewed_at") @db.Timestamptz(6)
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -478,7 +476,7 @@ model AuditAlert {
   anchorPrefix       String?       @map("anchor_prefix")
   anchorSuffix       String?       @map("anchor_suffix")
   anchorContentHash  String?       @map("anchor_content_hash") @db.VarChar(64)
-  resolvedById       String?       @map("resolved_by_id") @db.Uuid
+  resolvedById       String?       @map("resolved_by_id")
   resolvedAt         DateTime?     @map("resolved_at") @db.Timestamptz(6)
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -625,7 +623,7 @@ model Version {
 model ExportJob {
   id            String       @id @default(uuid()) @db.Uuid
   projectId     String       @map("project_id") @db.Uuid
-  userId        String       @map("user_id") @db.Uuid
+  userId        String       @map("user_id")
   format        ExportFormat
   scopeType     String       @map("scope_type") @db.VarChar(20)
   scopeId       String?      @map("scope_id") @db.Uuid
@@ -736,7 +734,7 @@ model ReaderComment {
 model WritingSession {
   id           String    @id @default(uuid()) @db.Uuid
   projectId    String    @map("project_id") @db.Uuid
-  userId       String    @map("user_id") @db.Uuid
+  userId       String    @map("user_id")
   sceneId      String?   @map("scene_id") @db.Uuid
   startedAt    DateTime  @map("started_at") @db.Timestamptz(6)
   endedAt      DateTime? @map("ended_at") @db.Timestamptz(6)
@@ -760,7 +758,7 @@ model WritingSession {
 model WritingGoal {
   id           String    @id @default(uuid()) @db.Uuid
   projectId    String    @map("project_id") @db.Uuid
-  userId       String    @map("user_id") @db.Uuid
+  userId       String    @map("user_id")
   goalType     String    @map("goal_type") @db.VarChar(20)
   targetWords  Int       @map("target_words")
   currentWords Int       @default(0) @map("current_words")

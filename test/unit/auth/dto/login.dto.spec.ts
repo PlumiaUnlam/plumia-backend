@@ -3,7 +3,7 @@ import { plainToInstance } from 'class-transformer';
 import { LoginDto } from '../../../../src/auth/dto/login.dto';
 
 describe('LoginDto', () => {
-  const valid = { email: 'test@test.com', password: 'password123' };
+  const valid = { idToken: 'firebase-id-token' };
 
   it('should pass with valid data', async () => {
     const dto = plainToInstance(LoginDto, valid);
@@ -11,15 +11,9 @@ describe('LoginDto', () => {
     expect(errors).toHaveLength(0);
   });
 
-  it('should fail when email is invalid', async () => {
-    const dto = plainToInstance(LoginDto, { ...valid, email: 'not-an-email' });
+  it('should fail when idToken is empty', async () => {
+    const dto = plainToInstance(LoginDto, { idToken: '' });
     const errors = await validate(dto);
-    expect(errors.some((e) => e.property === 'email')).toBe(true);
-  });
-
-  it('should fail when password is shorter than 6 characters', async () => {
-    const dto = plainToInstance(LoginDto, { ...valid, password: '123' });
-    const errors = await validate(dto);
-    expect(errors.some((e) => e.property === 'password')).toBe(true);
+    expect(errors.some((e) => e.property === 'idToken')).toBe(true);
   });
 });

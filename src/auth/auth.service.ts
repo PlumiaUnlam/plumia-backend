@@ -1,48 +1,42 @@
-import { Injectable, ConflictException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcryptjs';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { type User } from '@prisma/client';
 import { UserService } from '../user/user.service';
+import { FirebaseAdminService } from './firebase-admin.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly userService: UserService,
-    private readonly jwtService: JwtService,
+    private readonly firebaseAdmin: FirebaseAdminService,
   ) {}
 
-  async validateUser(
-    email: string,
-    password: string,
-  ): Promise<{ id: string; email: string } | null> {
-    const user = await this.userService.findByEmail(email);
-    if (!user) {
-      return null;
+  async login(idToken: string): Promise<User> {
+    let decoded;
+    try {
+      decoded = await this.firebaseAdmin.verifyToken(idToken);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired token');
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return null;
-    }
-
-    return { id: user.id, email: user.email };
+    return this.validateFirebaseUser(decoded);
   }
 
-  login(user: { id: string; email: string }): { access_token: string } {
-    const payload = { sub: user.id, email: user.email };
-    return { access_token: this.jwtService.sign(payload) };
-  }
-
-  async register(
-    name: string,
-    lastname: string,
-    email: string,
-    password: string,
-  ): Promise<{ access_token: string }> {
-    const existing = await this.userService.findByEmail(email);
+  async validateFirebaseUser(firebaseUser: {
+    uid: string;
+    email?: string;
+    name?: string;
+    picture?: string;
+  }): Promise<User> {
+    const existing = await this.userService.findById(firebaseUser.uid);
     if (existing) {
-      throw new ConflictException('Email already in use');
+      return existing;
     }
-    const user = await this.userService.create(name, lastname, email, password);
-    return this.login(user);
+
+    return this.userService.createFromFirebase({
+      uid: firebaseUser.uid,
+      email: firebaseUser.email ?? '',
+      name: firebaseUser.name ?? firebaseUser.email?.split('@')[0] ?? 'User',
+      avatarUrl: firebaseUser.picture ?? null,
+    });
   }
 }
