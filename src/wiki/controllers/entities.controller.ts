@@ -18,6 +18,10 @@ import {
   EntityDetailResponseDto,
   EntityResponseDto,
 } from '../dto/responses/entity-response.dto';
+import type {
+  CreateEntityData,
+  UpdateEntityData,
+} from '../ports/entity-repository.port';
 import { EntityService } from '../services/entity.service';
 
 @Controller()
@@ -44,7 +48,17 @@ export class EntitiesController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() dto: CreateEntityDto,
   ): Promise<EntityResponseDto> {
-    const entity = await this.entityService.create(req.user.id, projectId, dto);
+    const entity = await this.entityService.create(req.user.id, {
+      projectId,
+      canonicalName: dto.canonicalName,
+      type: dto.type,
+      ...(dto.aliases !== undefined ? { aliases: dto.aliases } : {}),
+      ...(dto.description !== undefined
+        ? { description: dto.description }
+        : {}),
+      ...(dto.attributes !== undefined ? { attributes: dto.attributes } : {}),
+      ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
+    } satisfies CreateEntityData);
     return EntityResponseDto.from(entity);
   }
 
@@ -63,7 +77,18 @@ export class EntitiesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEntityDto,
   ): Promise<EntityResponseDto> {
-    const entity = await this.entityService.update(req.user.id, id, dto);
+    const entity = await this.entityService.update(req.user.id, id, {
+      ...(dto.canonicalName !== undefined
+        ? { canonicalName: dto.canonicalName }
+        : {}),
+      ...(dto.type !== undefined ? { type: dto.type } : {}),
+      ...(dto.aliases !== undefined ? { aliases: dto.aliases } : {}),
+      ...(dto.description !== undefined
+        ? { description: dto.description }
+        : {}),
+      ...(dto.attributes !== undefined ? { attributes: dto.attributes } : {}),
+      ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
+    } satisfies UpdateEntityData);
     return EntityResponseDto.from(entity);
   }
 

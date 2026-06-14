@@ -5,7 +5,7 @@ import {
   toPrismaEntityType,
   toWikiEntityType,
 } from '../domain/wiki-entity-type';
-import {
+import type {
   CreateEntityData,
   EntityDetailRecord,
   EntityRecord,
@@ -125,8 +125,12 @@ export class PrismaEntityRepository implements EntityRepository {
       return null;
     }
 
-    await this.prisma.entity.update({
-      where: { id: entityId },
+    const result = await this.prisma.entity.updateMany({
+      where: {
+        id: entityId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
       data: {
         ...this.toEntityUpdateData(data),
         userLockedFields: Array.from(
@@ -134,6 +138,10 @@ export class PrismaEntityRepository implements EntityRepository {
         ),
       },
     });
+
+    if (result.count === 0) {
+      return null;
+    }
 
     return this.findActiveByIdForUser(userId, entityId);
   }

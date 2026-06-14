@@ -1,12 +1,12 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { CreateEntityDto } from '../dto/entities/create-entity.dto';
-import { ListEntitiesQueryDto } from '../dto/entities/list-entities-query.dto';
-import { UpdateEntityDto } from '../dto/entities/update-entity.dto';
 import {
   ENTITY_REPOSITORY,
+  type CreateEntityData,
   type EntityDetailRecord,
   type EntityRecord,
   type EntityRepository,
+  type ListEntitiesFilters,
+  type UpdateEntityData,
 } from '../ports/entity-repository.port';
 
 @Injectable()
@@ -19,7 +19,7 @@ export class EntityService {
   async list(
     userId: string,
     projectId: string,
-    filters: ListEntitiesQueryDto,
+    filters: ListEntitiesFilters,
   ): Promise<EntityRecord[]> {
     const entities = await this.entityRepository.listByProjectForUser(
       userId,
@@ -34,22 +34,8 @@ export class EntityService {
     return entities;
   }
 
-  async create(
-    userId: string,
-    projectId: string,
-    dto: CreateEntityDto,
-  ): Promise<EntityRecord> {
-    const entity = await this.entityRepository.createForUser(userId, {
-      projectId,
-      canonicalName: dto.canonicalName,
-      type: dto.type,
-      ...(dto.aliases !== undefined ? { aliases: dto.aliases } : {}),
-      ...(dto.description !== undefined
-        ? { description: dto.description }
-        : {}),
-      ...(dto.attributes !== undefined ? { attributes: dto.attributes } : {}),
-      ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
-    });
+  async create(userId: string, data: CreateEntityData): Promise<EntityRecord> {
+    const entity = await this.entityRepository.createForUser(userId, data);
 
     if (!entity) {
       throw new NotFoundException('Project not found');
@@ -74,12 +60,12 @@ export class EntityService {
   async update(
     userId: string,
     entityId: string,
-    dto: UpdateEntityDto,
+    data: UpdateEntityData,
   ): Promise<EntityRecord> {
     const entity = await this.entityRepository.updateForUser(
       userId,
       entityId,
-      dto,
+      data,
     );
 
     if (!entity) {

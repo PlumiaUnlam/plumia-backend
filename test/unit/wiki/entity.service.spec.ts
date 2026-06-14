@@ -63,7 +63,8 @@ describe('EntityService', () => {
       }),
     ).resolves.toEqual([entity]);
     await expect(
-      service.create('user-1', 'project-1', {
+      service.create('user-1', {
+        projectId: 'project-1',
         canonicalName: entity.canonicalName,
         type: entity.type,
         aliases: entity.aliases,
@@ -94,7 +95,8 @@ describe('EntityService', () => {
       new NotFoundException('Project not found'),
     );
     await expect(
-      service.create('user-1', 'missing', {
+      service.create('user-1', {
+        projectId: 'missing',
         canonicalName: 'Archivo Municipal',
         type: WikiEntityType.FACTION,
       }),
