@@ -1,158 +1,103 @@
-import { ConflictException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { UnauthorizedException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { PlanType, UserRole } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
 import { AuthService } from '../../../src/auth/auth.service';
+import { FirebaseAdminService } from '../../../src/auth/firebase-admin.service';
 import { UserService } from '../../../src/user/user.service';
-
-jest.mock('bcryptjs');
 
 describe('AuthService', () => {
   let authService: AuthService;
   let userService: jest.Mocked<UserService>;
-  let jwtService: jest.Mocked<JwtService>;
+  let firebaseAdmin: jest.Mocked<FirebaseAdminService>;
 
   const mockUser = {
-    id: 'uuid-1',
+    id: 'firebase-uid-1',
     name: 'John',
     lastname: 'Doe',
     email: 'test@test.com',
-    passwordHash: 'hashed_password',
     createdAt: new Date(),
     updatedAt: new Date(),
     displayName: null,
     avatarUrl: null,
-    role: UserRole.AUTHOR,
-    plan: PlanType.FREE,
+    role: 'AUTHOR' as const,
+    plan: 'FREE' as const,
     deletedAt: null,
   };
 
   beforeEach(async () => {
     jest.clearAllMocks();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         {
           provide: UserService,
           useValue: {
+            findById: jest.fn(),
             findByEmail: jest.fn(),
-            create: jest.fn(),
+            createFromFirebase: jest.fn(),
           },
         },
         {
-          provide: JwtService,
-          useValue: { sign: jest.fn() },
+          provide: FirebaseAdminService,
+          useValue: { verifyToken: jest.fn() },
         },
       ],
     }).compile();
 
     authService = module.get(AuthService);
     userService = module.get(UserService);
-    jwtService = module.get(JwtService);
-  });
-
-  describe('validateUser', () => {
-    it('should return id and email when credentials are valid', async () => {
-      userService.findByEmail.mockResolvedValue(mockUser);
-      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-
-      const result = await authService.validateUser(
-        'test@test.com',
-        'password123',
-      );
-
-      expect(result).toEqual({ id: 'uuid-1', email: 'test@test.com' });
-      expect(bcrypt.compare).toHaveBeenCalledWith(
-        'password123',
-        'hashed_password',
-      );
-    });
-
-    it('should return null when user does not exist', async () => {
-      userService.findByEmail.mockResolvedValue(null);
-
-      const result = await authService.validateUser(
-        'notfound@test.com',
-        'password123',
-      );
-
-      expect(result).toBeNull();
-      expect(bcrypt.compare).not.toHaveBeenCalled();
-    });
-
-    it('should return null when password is incorrect', async () => {
-      userService.findByEmail.mockResolvedValue(mockUser);
-      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
-
-      const result = await authService.validateUser(
-        'test@test.com',
-        'wrong_password',
-      );
-
-      expect(result).toBeNull();
-    });
+    firebaseAdmin = module.get(FirebaseAdminService);
   });
 
   describe('login', () => {
-    it('should return access_token signed with id and email', () => {
-      jwtService.sign.mockReturnValue('jwt_token');
-
-      const result = authService.login({
-        id: 'uuid-1',
+    it('should return existing user when Firebase token is valid', async () => {
+      firebaseAdmin.verifyToken.mockResolvedValue({
+        uid: 'firebase-uid-1',
         email: 'test@test.com',
-      });
+      } as never);
+      userService.findById.mockResolvedValue(mockUser);
 
-      expect(result).toEqual({ access_token: 'jwt_token' });
-      expect(jwtService.sign.mock.calls[0]?.[0]).toEqual({
-        sub: 'uuid-1',
-        email: 'test@test.com',
-      });
+      const result = await authService.login('valid-token');
+
+      expect(firebaseAdmin.verifyToken).toHaveBeenCalledWith('valid-token');
+      expect(userService.findById).toHaveBeenCalledWith('firebase-uid-1');
+      expect(userService.createFromFirebase).not.toHaveBeenCalled();
+      expect(result).toEqual(mockUser);
     });
-  });
 
-  describe('register', () => {
-    it('should create user and return access_token', async () => {
-      userService.findByEmail.mockResolvedValue(null);
-      userService.create.mockResolvedValue({
-        id: 'uuid-1',
-        name: 'John',
-        lastname: 'Doe',
+    it('should create user when Firebase uid does not exist locally', async () => {
+      firebaseAdmin.verifyToken.mockResolvedValue({
+        uid: 'firebase-uid-new',
         email: 'new@test.com',
-        passwordHash: 'hashed',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        displayName: null,
-        avatarUrl: null,
-        role: UserRole.AUTHOR,
-        plan: PlanType.FREE,
-        deletedAt: null,
+        name: 'Jane',
+        picture: 'https://example.com/avatar.png',
+      } as never);
+      userService.findById.mockResolvedValue(null);
+      userService.createFromFirebase.mockResolvedValue({
+        ...mockUser,
+        id: 'firebase-uid-new',
+        email: 'new@test.com',
+        avatarUrl: 'https://example.com/avatar.png',
       });
-      jwtService.sign.mockReturnValue('jwt_token');
 
-      const result = await authService.register(
-        'John',
-        'Doe',
-        'new@test.com',
-        'password123',
-      );
+      const result = await authService.login('valid-token');
 
-      expect(result).toEqual({ access_token: 'jwt_token' });
-      expect(userService.create.mock.calls[0]).toEqual([
-        'John',
-        'Doe',
-        'new@test.com',
-        'password123',
-      ]);
+      expect(userService.createFromFirebase).toHaveBeenCalledWith({
+        uid: 'firebase-uid-new',
+        email: 'new@test.com',
+        name: 'Jane',
+        avatarUrl: 'https://example.com/avatar.png',
+      });
+      expect(result.email).toBe('new@test.com');
     });
 
-    it('should throw ConflictException when email is already registered', async () => {
-      userService.findByEmail.mockResolvedValue(mockUser);
+    it('should throw UnauthorizedException when Firebase token is invalid', async () => {
+      firebaseAdmin.verifyToken.mockRejectedValue(new Error('Invalid token'));
 
-      await expect(
-        authService.register('John', 'Doe', 'test@test.com', 'password123'),
-      ).rejects.toThrow(new ConflictException('Email already in use'));
-      expect(userService.create.mock.calls).toHaveLength(0);
+      await expect(authService.login('bad-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(userService.findById).not.toHaveBeenCalled();
     });
   });
 });

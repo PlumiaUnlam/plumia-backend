@@ -1,11 +1,25 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { AuthController } from '../../../src/auth/auth.controller';
 import { AuthService } from '../../../src/auth/auth.service';
-import { type RegisterDto } from '../../../src/auth/dto/register.dto';
+import { LoginDto } from '../../../src/auth/dto/login.dto';
 
 describe('AuthController', () => {
   let authController: AuthController;
   let authService: jest.Mocked<AuthService>;
+
+  const mockUser = {
+    id: 'firebase-uid-1',
+    name: 'John',
+    lastname: 'Doe',
+    email: 'test@test.com',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    displayName: null,
+    avatarUrl: null,
+    role: 'AUTHOR' as const,
+    plan: 'FREE' as const,
+    deletedAt: null,
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -15,10 +29,7 @@ describe('AuthController', () => {
       providers: [
         {
           provide: AuthService,
-          useValue: {
-            login: jest.fn(),
-            register: jest.fn(),
-          },
+          useValue: { login: jest.fn() },
         },
       ],
     }).compile();
@@ -28,36 +39,27 @@ describe('AuthController', () => {
   });
 
   describe('login', () => {
-    it('should call authService.login with req.user and return the token', () => {
-      const req = { user: { id: 'uuid-1', email: 'test@test.com' } };
-      authService.login.mockReturnValue({ access_token: 'jwt_token' });
+    it('should call authService.login with idToken and return the user', async () => {
+      const dto: LoginDto = { idToken: 'firebase-id-token' };
+      authService.login.mockResolvedValue(mockUser);
 
-      const result = authController.login(req);
+      const result = await authController.login(dto);
 
-      expect(authService.login).toHaveBeenCalledWith(req.user);
-      expect(result).toEqual({ access_token: 'jwt_token' });
-    });
-  });
-
-  describe('register', () => {
-    it('should call authService.register with DTO fields and return the token', async () => {
-      const dto: RegisterDto = {
-        name: 'John',
-        lastname: 'Doe',
-        email: 'test@test.com',
-        password: 'password123',
-      };
-      authService.register.mockResolvedValue({ access_token: 'jwt_token' });
-
-      const result = await authController.register(dto);
-
-      expect(authService.register).toHaveBeenCalledWith(
-        'John',
-        'Doe',
-        'test@test.com',
-        'password123',
-      );
-      expect(result).toEqual({ access_token: 'jwt_token' });
+      expect(authService.login).toHaveBeenCalledWith('firebase-id-token');
+      expect(result).toEqual({
+        user: {
+          id: mockUser.id,
+          name: mockUser.name,
+          lastname: mockUser.lastname,
+          email: mockUser.email,
+          createdAt: mockUser.createdAt,
+          updatedAt: mockUser.updatedAt,
+          displayName: mockUser.displayName,
+          avatarUrl: mockUser.avatarUrl,
+          role: mockUser.role,
+          plan: mockUser.plan,
+        },
+      });
     });
   });
 });

@@ -1,36 +1,24 @@
 import { Test, type TestingModule } from '@nestjs/testing';
-import { PlanType, UserRole } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../../src/prisma/prisma.service';
 import { UserService, type UserEntity } from '../../../src/user/user.service';
 
-jest.mock('bcryptjs');
-
-type BcryptHash = (password: string, salt: number) => Promise<string>;
-
-interface MockPrismaService {
-  user: {
-    findUnique: jest.Mock;
-    create: jest.Mock;
-  };
-}
-
 describe('UserService', () => {
   let userService: UserService;
-  let prisma: MockPrismaService;
+  let prisma: {
+    user: { findUnique: jest.Mock; create: jest.Mock };
+  };
 
   const mockUser: UserEntity = {
-    id: 'uuid-1',
+    id: 'firebase-uid-1',
     name: 'John',
     lastname: 'Doe',
     email: 'test@test.com',
-    passwordHash: 'hashed_password',
     createdAt: new Date(),
     updatedAt: new Date(),
     displayName: null,
     avatarUrl: null,
-    role: UserRole.AUTHOR,
-    plan: PlanType.FREE,
+    role: 'AUTHOR' as const,
+    plan: 'FREE' as const,
     deletedAt: null,
   };
 
@@ -53,7 +41,7 @@ describe('UserService', () => {
     }).compile();
 
     userService = module.get(UserService);
-    prisma = module.get<MockPrismaService>(PrismaService);
+    prisma = module.get(PrismaService);
   });
 
   describe('findByEmail', () => {
@@ -81,44 +69,42 @@ describe('UserService', () => {
     it('should return the user when found', async () => {
       prisma.user.findUnique.mockResolvedValue(mockUser);
 
-      const result = await userService.findById('uuid-1');
+      const result = await userService.findById('firebase-uid-1');
 
       expect(result).toEqual(mockUser);
       expect(prisma.user.findUnique).toHaveBeenCalledWith({
-        where: { id: 'uuid-1' },
+        where: { id: 'firebase-uid-1' },
       });
     });
 
     it('should return null when no user matches the id', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
 
-      const result = await userService.findById('uuid-999');
+      const result = await userService.findById('firebase-uid-999');
 
       expect(result).toBeNull();
     });
   });
 
-  describe('create', () => {
-    it('should hash the password and persist the user', async () => {
-      jest
-        .mocked(bcrypt.hash as BcryptHash)
-        .mockResolvedValue('hashed_password');
+  describe('createFromFirebase', () => {
+    it('should create a user from Firebase data', async () => {
       prisma.user.create.mockResolvedValue(mockUser);
 
-      const result = await userService.create(
-        'John',
-        'Doe',
-        'test@test.com',
-        'plaintext',
-      );
+      const result = await userService.createFromFirebase({
+        uid: 'firebase-uid-1',
+        email: 'test@test.com',
+        name: 'John',
+        lastname: 'Doe',
+        avatarUrl: 'https://example.com/avatar.png',
+      });
 
-      expect(bcrypt.hash).toHaveBeenCalledWith('plaintext', 10);
       expect(prisma.user.create).toHaveBeenCalledWith({
         data: {
+          id: 'firebase-uid-1',
+          email: 'test@test.com',
           name: 'John',
           lastname: 'Doe',
-          email: 'test@test.com',
-          passwordHash: 'hashed_password',
+          avatarUrl: 'https://example.com/avatar.png',
         },
       });
       expect(result).toEqual(mockUser);
