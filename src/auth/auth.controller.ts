@@ -15,8 +15,9 @@ export class AuthController {
     user: Omit<User, 'deletedAt'>;
   }> {
     const result = await this.authService.login(dto.idToken);
-    const { deletedAt, ...safeUser } = result;
-    void deletedAt;
+    const safeUser = Object.fromEntries(
+      Object.entries(result).filter(([key]) => key !== 'deletedAt'),
+    ) as Omit<User, 'deletedAt'>;
     return { user: safeUser };
   }
 }

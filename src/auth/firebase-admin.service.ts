@@ -24,7 +24,7 @@ export class FirebaseAdminService implements OnModuleInit {
           clientEmail: this.config.getOrThrow<string>('FIREBASE_CLIENT_EMAIL'),
           privateKey: (
             this.config.getOrThrow<string>('FIREBASE_PRIVATE_KEY') ?? ''
-          ).replaceAll('\\n', '\n'),
+          ).replaceAll(String.raw`\n`, '\n'),
         }),
       });
     }
