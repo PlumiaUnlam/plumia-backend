@@ -32,6 +32,15 @@ export class AuthService {
       return existing;
     }
 
+    if (firebaseUser.email) {
+      const existingByEmail = await this.userService.findByEmail(
+        firebaseUser.email,
+      );
+      if (existingByEmail) {
+        return existingByEmail;
+      }
+    }
+
     return this.userService.createFromFirebase({
       uid: firebaseUser.uid,
       email: firebaseUser.email ?? '',
