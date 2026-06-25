@@ -88,15 +88,19 @@ describe('ProjectsController', () => {
         {
           id: 'book-1',
           title: 'Book one',
+          sortKey: '001',
           chapters: [
             {
               id: 'chapter-1',
               title: 'Chapter one',
+              sortKey: '001',
               scenes: [
                 {
                   id: 'scene-1',
                   title: 'Opening',
+                  sortKey: '001',
                   wordCount: 1200,
+                  order: 1,
                 },
               ],
             },

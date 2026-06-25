@@ -7,18 +7,22 @@ import type {
 export class ProjectSceneResponseDto {
   id!: string;
   title!: string | null;
+  sortKey!: string;
   wordCount!: number;
+  order!: number;
 }
 
 export class ProjectChapterResponseDto {
   id!: string;
   title!: string;
+  sortKey!: string;
   scenes!: ProjectSceneResponseDto[];
 }
 
 export class ProjectBookResponseDto {
   id!: string;
   title!: string;
+  sortKey!: string;
   chapters!: ProjectChapterResponseDto[];
 }
 
@@ -59,13 +63,17 @@ export class ProjectWithTreeResponseDto extends ProjectResponseDto {
       books: record.books.map((book) => ({
         id: book.id,
         title: book.title,
+        sortKey: book.sortKey,
         chapters: book.chapters.map((chapter) => ({
           id: chapter.id,
           title: chapter.title,
+          sortKey: chapter.sortKey,
           scenes: chapter.scenes.map((scene) => ({
             id: scene.id,
             title: scene.title,
+            sortKey: scene.sortKey,
             wordCount: scene.wordCount,
+            order: scene.order,
           })),
         })),
       })),
