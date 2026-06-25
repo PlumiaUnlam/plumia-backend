@@ -19,18 +19,22 @@ export interface ProjectRecord {
 export interface ProjectSceneRecord {
   id: string;
   title: string | null;
+  sortKey: string;
   wordCount: number;
+  order: number;
 }
 
 export interface ProjectChapterRecord {
   id: string;
   title: string;
+  sortKey: string;
   scenes: ProjectSceneRecord[];
 }
 
 export interface ProjectBookRecord {
   id: string;
   title: string;
+  sortKey: string;
   chapters: ProjectChapterRecord[];
 }
 

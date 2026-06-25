@@ -33,6 +33,13 @@ export class PrismaSceneRepository implements SceneRepository {
       return null;
     }
 
+    const order =
+      data.order ??
+      ((await this.prisma.scene.aggregate({
+        where: { chapterId: data.chapterId, deletedAt: null },
+        _max: { order: true },
+      }))._max.order ?? 0) + 1;
+
     try {
       const scene = await this.prisma.scene.create({
         data: {
@@ -49,7 +56,7 @@ export class PrismaSceneRepository implements SceneRepository {
             ? { wordCount: data.wordCount }
             : {}),
           ...(data.status !== undefined ? { status: data.status } : {}),
-          ...(data.order !== undefined ? { order: data.order } : {}),
+          order,
         },
       });
       return this.toSceneRecord(scene);

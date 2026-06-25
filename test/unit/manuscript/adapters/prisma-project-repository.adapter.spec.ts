@@ -96,15 +96,19 @@ describe('PrismaProjectRepository', () => {
         {
           id: 'book-1',
           title: 'Book one',
+          sortKey: '001',
           chapters: [
             {
               id: 'chapter-1',
               title: 'Chapter one',
+              sortKey: '001',
               scenes: [
                 {
                   id: 'scene-1',
                   title: 'Opening',
+                  sortKey: '001',
                   wordCount: 1200,
+                  order: 1,
                 },
               ],
             },
@@ -137,19 +141,23 @@ describe('PrismaProjectRepository', () => {
           select: {
             id: true,
             title: true,
+            sortKey: true,
             chapters: {
               where: { deletedAt: null },
               orderBy: { sortKey: 'asc' },
               select: {
                 id: true,
                 title: true,
+                sortKey: true,
                 scenes: {
                   where: { deletedAt: null },
                   orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
                   select: {
                     id: true,
                     title: true,
+                    sortKey: true,
                     wordCount: true,
+                    order: true,
                   },
                 },
               },

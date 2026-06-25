@@ -12,6 +12,7 @@ interface MockPrismaService {
     findFirst: jest.Mock;
   };
   scene: {
+    aggregate: jest.Mock;
     create: jest.Mock;
     findFirst: jest.Mock;
     updateMany: jest.Mock;
@@ -53,6 +54,7 @@ describe('PrismaSceneRepository', () => {
           useValue: {
             chapter: { findFirst: jest.fn() },
             scene: {
+              aggregate: jest.fn(),
               create: jest.fn(),
               findFirst: jest.fn(),
               updateMany: jest.fn(),
@@ -69,6 +71,7 @@ describe('PrismaSceneRepository', () => {
 
   it('creates a scene with a content hash when content is provided', async () => {
     prisma.chapter.findFirst.mockResolvedValue({ id: 'chapter-1' });
+    prisma.scene.aggregate.mockResolvedValue({ _max: { order: 2 } });
     prisma.scene.create.mockResolvedValue(scene);
 
     const result = await repository.createForUser('user-1', {
@@ -88,6 +91,7 @@ describe('PrismaSceneRepository', () => {
         content,
         contentHash: createContentHash(content),
         wordCount: 1,
+        order: 3,
       },
     });
   });
