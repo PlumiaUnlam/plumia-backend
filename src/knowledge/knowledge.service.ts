@@ -42,12 +42,12 @@ export class KnowledgeService {
       projectId,
       canonicalName: dto.canonicalName,
       type: dto.type,
-      ...(dto.description !== undefined
-        ? { description: dto.description }
-        : {}),
-      ...(dto.aliases !== undefined ? { aliases: dto.aliases } : {}),
-      ...(dto.attributes !== undefined ? { attributes: dto.attributes } : {}),
-      ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
+      ...(dto.description === undefined
+        ? {}
+        : { description: dto.description }),
+      ...(dto.aliases === undefined ? {} : { aliases: dto.aliases }),
+      ...(dto.attributes === undefined ? {} : { attributes: dto.attributes }),
+      ...(dto.imageUrl === undefined ? {} : { imageUrl: dto.imageUrl }),
     });
   }
 

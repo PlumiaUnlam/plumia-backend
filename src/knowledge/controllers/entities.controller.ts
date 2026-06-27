@@ -31,9 +31,9 @@ export class EntitiesController {
   ): Promise<EntityResponseDto[]> {
     const entities = await this.knowledgeService.listEntities({
       projectId,
-      ...(search !== undefined ? { search } : {}),
-      ...(type !== undefined ? { type: type as EntityType } : {}),
-      ...(limit !== undefined ? { limit: parseInt(limit, 10) } : {}),
+      ...(search === undefined ? {} : { search }),
+      ...(type === undefined ? {} : { type: type as EntityType }),
+      ...(limit === undefined ? {} : { limit: Number.parseInt(limit, 10) }),
     });
     return entities.map((entity) => EntityResponseDto.from(entity));
   }

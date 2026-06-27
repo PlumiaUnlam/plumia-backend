@@ -57,14 +57,14 @@ export class PrismaEntityRepository implements EntityRepository {
         projectId: data.projectId,
         canonicalName: data.canonicalName,
         type: data.type,
-        ...(data.description !== undefined
-          ? { description: data.description }
-          : {}),
-        ...(data.aliases !== undefined ? { aliases: data.aliases } : {}),
-        ...(data.attributes !== undefined
-          ? { attributes: data.attributes as Prisma.InputJsonValue }
-          : {}),
-        ...(data.imageUrl !== undefined ? { imageUrl: data.imageUrl } : {}),
+        ...(data.description === undefined
+          ? {}
+          : { description: data.description }),
+        ...(data.aliases === undefined ? {} : { aliases: data.aliases }),
+        ...(data.attributes === undefined
+          ? {}
+          : { attributes: data.attributes as Prisma.InputJsonValue }),
+        ...(data.imageUrl === undefined ? {} : { imageUrl: data.imageUrl }),
       },
     });
     return this.toEntityRecord(entity);
@@ -82,19 +82,19 @@ export class PrismaEntityRepository implements EntityRepository {
         deletedAt: null,
       },
       data: {
-        ...(data.canonicalName !== undefined
-          ? { canonicalName: data.canonicalName }
-          : {}),
-        ...(data.type !== undefined ? { type: data.type } : {}),
-        ...(data.description !== undefined
-          ? { description: data.description }
-          : {}),
-        ...(data.aliases !== undefined ? { aliases: data.aliases } : {}),
-        ...(data.attributes !== undefined
-          ? { attributes: data.attributes as Prisma.InputJsonValue }
-          : {}),
-        ...(data.imageUrl !== undefined ? { imageUrl: data.imageUrl } : {}),
-        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        ...(data.canonicalName === undefined
+          ? {}
+          : { canonicalName: data.canonicalName }),
+        ...(data.type === undefined ? {} : { type: data.type }),
+        ...(data.description === undefined
+          ? {}
+          : { description: data.description }),
+        ...(data.aliases === undefined ? {} : { aliases: data.aliases }),
+        ...(data.attributes === undefined
+          ? {}
+          : { attributes: data.attributes as Prisma.InputJsonValue }),
+        ...(data.imageUrl === undefined ? {} : { imageUrl: data.imageUrl }),
+        ...(data.isActive === undefined ? {} : { isActive: data.isActive }),
       },
     });
 
