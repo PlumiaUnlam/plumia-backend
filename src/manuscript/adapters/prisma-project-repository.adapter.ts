@@ -28,19 +28,23 @@ const projectTreeSelect = {
     select: {
       id: true,
       title: true,
+      sortKey: true,
       chapters: {
         where: { deletedAt: null },
         orderBy: { sortKey: 'asc' },
         select: {
           id: true,
           title: true,
+          sortKey: true,
           scenes: {
             where: { deletedAt: null },
             orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
             select: {
               id: true,
               title: true,
+              sortKey: true,
               wordCount: true,
+              order: true,
             },
           },
         },
