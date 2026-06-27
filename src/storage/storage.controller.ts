@@ -125,7 +125,7 @@ export class StorageController {
     @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    const cookie = (req.headers['cookie'] as string | undefined) ?? '';
+    const cookie = req.headers['cookie'] ?? '';
     const sessionToken = cookie
       .split(';')
       .find((c: string) => c.trim().startsWith('__session='))

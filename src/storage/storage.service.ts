@@ -1,10 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'] as const;
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+] as const;
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -39,15 +49,21 @@ export class StorageService {
     contentType: string,
     existingKey?: string,
   ): Promise<{ presignedUrl: string; publicUrl: string }> {
-    if (!ALLOWED_MIME_TYPES.includes(contentType as typeof ALLOWED_MIME_TYPES[number])) {
+    if (
+      !ALLOWED_MIME_TYPES.includes(
+        contentType as (typeof ALLOWED_MIME_TYPES)[number],
+      )
+    ) {
       throw new Error(`Content type ${contentType} is not allowed`);
     }
 
-    const key = existingKey ?? (() => {
-      const ext = MIME_EXTENSIONS[contentType] ?? 'bin';
-      const uuid = randomUUID();
-      return `entities/${entityId}/${uuid}.${ext}`;
-    })();
+    const key =
+      existingKey ??
+      (() => {
+        const ext = MIME_EXTENSIONS[contentType] ?? 'bin';
+        const uuid = randomUUID();
+        return `entities/${entityId}/${uuid}.${ext}`;
+      })();
 
     const command = new PutObjectCommand({
       Bucket: this.bucket,

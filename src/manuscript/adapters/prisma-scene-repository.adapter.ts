@@ -35,10 +35,12 @@ export class PrismaSceneRepository implements SceneRepository {
 
     const order =
       data.order ??
-      ((await this.prisma.scene.aggregate({
-        where: { chapterId: data.chapterId, deletedAt: null },
-        _max: { order: true },
-      }))._max.order ?? 0) + 1;
+      ((
+        await this.prisma.scene.aggregate({
+          where: { chapterId: data.chapterId, deletedAt: null },
+          _max: { order: true },
+        })
+      )._max.order ?? 0) + 1;
 
     try {
       const scene = await this.prisma.scene.create({
