@@ -66,3 +66,5 @@ firebase-service-account*.json
 # AI agent files
 .agents/
 
+skills-lock.json
+
