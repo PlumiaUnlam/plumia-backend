@@ -35,6 +35,7 @@ docker build -t plumia-backend .
 ```
 
 To run a single test file:
+
 ```bash
 pnpm run test -- --testPathPattern=<filename>
 ```
@@ -55,17 +56,17 @@ Feature modules live under `src/` following NestJS conventions (`*.module.ts`, `
 
 Domain modules are grouped by **bounded context** (one module per context, not one per entity) to keep coupling low. Each owns the entities below:
 
-| Module (`src/`) | Entities |
-|---|---|
-| `user` + `auth` | User, UserApiKey, Subscription, TokenLedger (auth: JWT + bcrypt, see memory) |
-| `manuscript` | Project, Book, Chapter, Scene |
-| `knowledge` | Entity, EntityState, Fact, Relationship, EntityProposal |
-| `audit` | AuditAlert, AuditFalsePositive |
-| `chat` | ChatThread, ChatMessage, Chunk, Summary |
-| `publishing` | Version, ExportJob, GeneratedImage, StoryboardNote |
-| `reading` | ShareLink, ReaderComment |
-| `analytics` | WritingSession, WritingGoal |
-| `system` | Outbox |
+| Module (`src/`) | Entities                                                          |
+| --------------- | ----------------------------------------------------------------- |
+| `user` + `auth` | User, UserApiKey, Subscription, TokenLedger (auth: Firebase Auth) |
+| `manuscript`    | Project, Book, Chapter, Scene                                     |
+| `knowledge`     | Entity, EntityState, Fact, Relationship, EntityProposal           |
+| `audit`         | AuditAlert, AuditFalsePositive                                    |
+| `chat`          | ChatThread, ChatMessage, Chunk, Summary                           |
+| `publishing`    | Version, ExportJob, GeneratedImage, StoryboardNote                |
+| `reading`       | ShareLink, ReaderComment                                          |
+| `analytics`     | WritingSession, WritingGoal                                       |
+| `system`        | Outbox                                                            |
 
 Most domain modules are currently **scaffolding only** (empty service/controller); business logic (CRUD, endpoints) is pending. The exceptions are `chat` and `knowledge`, which already have the search abstraction wired (see "Search abstraction" below). All endpoints are protected by a global `JwtAuthGuard`; mark public routes with `@Public()` (`src/common/decorators/public.decorator.ts`).
 
