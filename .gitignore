@@ -62,3 +62,7 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # firebase service account keys
 firebase-service-account*.json
+
+# AI agent files
+.agents/
+
