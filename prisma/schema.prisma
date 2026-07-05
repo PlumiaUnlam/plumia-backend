@@ -408,7 +408,7 @@ model Relationship {
   targetEntityId   String        @map("target_entity_id") @db.Uuid
   relationType     RelationType  @map("relation_type")
   description      String?
-  validFromSceneId String        @map("valid_from_scene_id") @db.Uuid
+  validFromSceneId String?       @map("valid_from_scene_id") @db.Uuid
   validToSceneId   String?       @map("valid_to_scene_id") @db.Uuid
   epistemicType    EpistemicType @default(OBJECTIVE) @map("epistemic_type")
   confidenceScore  Decimal       @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
@@ -419,7 +419,7 @@ model Relationship {
   project        Project @relation(fields: [projectId], references: [id])
   sourceEntity   Entity  @relation("RelationshipSource", fields: [sourceEntityId], references: [id])
   targetEntity   Entity  @relation("RelationshipTarget", fields: [targetEntityId], references: [id])
-  validFromScene Scene   @relation("RelationshipValidFrom", fields: [validFromSceneId], references: [id])
+  validFromScene Scene?  @relation("RelationshipValidFrom", fields: [validFromSceneId], references: [id])
   validToScene   Scene?  @relation("RelationshipValidTo", fields: [validToSceneId], references: [id])
 
   @@unique([sourceEntityId, targetEntityId, relationType, validFromSceneId])

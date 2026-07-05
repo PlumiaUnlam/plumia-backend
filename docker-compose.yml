@@ -1,4 +1,25 @@
 services:
+  api:
+    build:
+      context: .
+    container_name: plumia_api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://plumia:plumia_dev@postgres:5432/plumia_development
+      DIRECT_URL: postgresql://plumia:plumia_dev@postgres:5432/plumia_development
+      REDIS_URL: redis://redis:6379
+      GOOGLE_APPLICATION_CREDENTIALS: /app/firebase-service-account.json
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   postgres:
     image: pgvector/pgvector:pg15
     container_name: plumia_postgres
