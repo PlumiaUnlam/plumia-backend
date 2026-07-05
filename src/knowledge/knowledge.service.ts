@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateEntityDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
 import { ENTITY_SEARCH } from './ports/entity-search.port';
@@ -8,10 +13,17 @@ import {
   type EntityRecord,
   type EntityRepository,
 } from './ports/entity-repository.port';
+import {
+  RELATIONSHIP_REPOSITORY,
+  type RelationshipRecord,
+  type RelationshipRepository,
+} from './ports/relationship-repository.port';
 import type {
   EntitySearch,
   EntitySearchResult,
 } from './ports/entity-search.port';
+import { CreateRelationshipDto } from './dto/create-relationship.dto';
+import { UpdateRelationshipDto } from './dto/update-relationship.dto';
 
 @Injectable()
 export class KnowledgeService {
@@ -19,6 +31,8 @@ export class KnowledgeService {
     @Inject(ENTITY_SEARCH) private readonly entitySearch: EntitySearch,
     @Inject(ENTITY_REPOSITORY)
     private readonly entityRepository: EntityRepository,
+    @Inject(RELATIONSHIP_REPOSITORY)
+    private readonly relationshipRepository: RelationshipRepository,
   ) {}
 
   searchEntities(
@@ -31,6 +45,13 @@ export class KnowledgeService {
 
   listEntities(filters: EntityListFilters): Promise<EntityRecord[]> {
     return this.entityRepository.list(filters);
+  }
+
+  listRelationships(
+    userId: string,
+    projectId: string,
+  ): Promise<RelationshipRecord[]> {
+    return this.relationshipRepository.listByProject(userId, projectId);
   }
 
   async createEntity(
@@ -49,6 +70,79 @@ export class KnowledgeService {
       ...(dto.attributes === undefined ? {} : { attributes: dto.attributes }),
       ...(dto.imageUrl === undefined ? {} : { imageUrl: dto.imageUrl }),
     });
+  }
+
+  async createRelationship(
+    userId: string,
+    projectId: string,
+    dto: CreateRelationshipDto,
+  ): Promise<RelationshipRecord | null> {
+    if (dto.sourceEntityId === dto.targetEntityId) {
+      throw new BadRequestException('Relationship entities must be different');
+    }
+
+    return this.relationshipRepository.create(userId, {
+      projectId,
+      sourceEntityId: dto.sourceEntityId,
+      targetEntityId: dto.targetEntityId,
+      relationType: dto.relationType,
+      intensity: dto.intensity,
+      ...(dto.description === undefined
+        ? {}
+        : { description: dto.description }),
+      ...(dto.validFromSceneId === undefined
+        ? {}
+        : { validFromSceneId: dto.validFromSceneId }),
+    });
+  }
+
+  async updateRelationship(
+    userId: string,
+    id: string,
+    dto: UpdateRelationshipDto,
+  ): Promise<RelationshipRecord> {
+    if (
+      dto.sourceEntityId !== undefined &&
+      dto.targetEntityId !== undefined &&
+      dto.sourceEntityId === dto.targetEntityId
+    ) {
+      throw new BadRequestException('Relationship entities must be different');
+    }
+
+    const relationship = await this.relationshipRepository.update(userId, id, {
+      ...(dto.sourceEntityId === undefined
+        ? {}
+        : { sourceEntityId: dto.sourceEntityId }),
+      ...(dto.targetEntityId === undefined
+        ? {}
+        : { targetEntityId: dto.targetEntityId }),
+      ...(dto.relationType === undefined
+        ? {}
+        : { relationType: dto.relationType }),
+      ...(dto.intensity === undefined ? {} : { intensity: dto.intensity }),
+      ...(dto.description === undefined
+        ? {}
+        : { description: dto.description }),
+    });
+
+    if (!relationship) {
+      throw new NotFoundException('Relationship not found');
+    }
+
+    return relationship;
+  }
+
+  async removeRelationship(
+    userId: string,
+    id: string,
+  ): Promise<RelationshipRecord> {
+    const relationship = await this.relationshipRepository.delete(userId, id);
+
+    if (!relationship) {
+      throw new NotFoundException('Relationship not found');
+    }
+
+    return relationship;
   }
 
   async getEntityById(userId: string, id: string): Promise<EntityRecord> {

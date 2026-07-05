@@ -33,34 +33,3 @@ ALTER TABLE "audit_alert" ADD CONSTRAINT "audit_alert_resolved_by_id_fkey" FOREI
 ALTER TABLE "export_job" ADD CONSTRAINT "export_job_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "writing_session" ADD CONSTRAINT "writing_session_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "writing_goal" ADD CONSTRAINT "writing_goal_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- ============================================================
--- SQL especial no modelado por Prisma (editado manualmente)
--- ============================================================
-
--- Indice GIN trigram para busqueda fuzzy de nombres (idx_entity_name)
-CREATE INDEX "idx_entity_name" ON "entity" USING gin ("canonical_name" gin_trgm_ops);
-
--- Indice IVFFlat para busqueda de similitud de embeddings (idx_chunk_embedding).
--- NOTA: lists=100 dimensiona ~100K chunks (regla pgvector: lists ~= filas/1000).
--- Conviene (re)crear este indice con datos ya cargados; evaluar HNSW como alternativa.
-CREATE INDEX "idx_chunk_embedding" ON "chunk" USING ivfflat ("embedding" vector_cosine_ops) WITH (lists = 100);
-
--- CHECK: ventanas temporales (valid_to distinto de valid_from). La validacion
--- estricta de no-superposicion se delega a la capa de aplicacion.
-ALTER TABLE "entity_state" ADD CONSTRAINT "chk_entity_state_window"
-  CHECK ("valid_to_scene_id" IS NULL OR "valid_to_scene_id" <> "valid_from_scene_id");
-ALTER TABLE "relationship" ADD CONSTRAINT "chk_relationship_window"
-  CHECK ("valid_to_scene_id" IS NULL OR "valid_to_scene_id" <> "valid_from_scene_id");
-
--- CHECK: provider permitido en user_api_key
-ALTER TABLE "user_api_key" ADD CONSTRAINT "chk_apikey_provider"
-  CHECK ("provider" IN ('deepseek', 'openai', 'fal'));
-
--- CHECK: role permitido en chat_message
-ALTER TABLE "chat_message" ADD CONSTRAINT "chk_message_role"
-  CHECK ("role" IN ('user', 'assistant', 'system'));
-
--- CHECK: scope_type permitido en summary
-ALTER TABLE "summary" ADD CONSTRAINT "chk_summary_scope_type"
-  CHECK ("scope_type" IN ('scene', 'chapter', 'book', 'arc', 'subplot'));
