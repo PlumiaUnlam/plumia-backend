@@ -23,6 +23,7 @@ import type {
   EntitySearchResult,
 } from './ports/entity-search.port';
 import { CreateRelationshipDto } from './dto/create-relationship.dto';
+import { UpdateRelationshipDto } from './dto/update-relationship.dto';
 
 @Injectable()
 export class KnowledgeService {
@@ -93,6 +94,55 @@ export class KnowledgeService {
         ? {}
         : { validFromSceneId: dto.validFromSceneId }),
     });
+  }
+
+  async updateRelationship(
+    userId: string,
+    id: string,
+    dto: UpdateRelationshipDto,
+  ): Promise<RelationshipRecord> {
+    if (
+      dto.sourceEntityId !== undefined &&
+      dto.targetEntityId !== undefined &&
+      dto.sourceEntityId === dto.targetEntityId
+    ) {
+      throw new BadRequestException('Relationship entities must be different');
+    }
+
+    const relationship = await this.relationshipRepository.update(userId, id, {
+      ...(dto.sourceEntityId === undefined
+        ? {}
+        : { sourceEntityId: dto.sourceEntityId }),
+      ...(dto.targetEntityId === undefined
+        ? {}
+        : { targetEntityId: dto.targetEntityId }),
+      ...(dto.relationType === undefined
+        ? {}
+        : { relationType: dto.relationType }),
+      ...(dto.intensity === undefined ? {} : { intensity: dto.intensity }),
+      ...(dto.description === undefined
+        ? {}
+        : { description: dto.description }),
+    });
+
+    if (!relationship) {
+      throw new NotFoundException('Relationship not found');
+    }
+
+    return relationship;
+  }
+
+  async removeRelationship(
+    userId: string,
+    id: string,
+  ): Promise<RelationshipRecord> {
+    const relationship = await this.relationshipRepository.delete(userId, id);
+
+    if (!relationship) {
+      throw new NotFoundException('Relationship not found');
+    }
+
+    return relationship;
   }
 
   async getEntityById(userId: string, id: string): Promise<EntityRecord> {

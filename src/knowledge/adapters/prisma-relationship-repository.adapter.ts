@@ -6,6 +6,7 @@ import type {
   CreateRelationshipData,
   RelationshipRecord,
   RelationshipRepository,
+  UpdateRelationshipData,
 } from '../ports/relationship-repository.port';
 
 @Injectable()
@@ -72,6 +73,88 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
     });
 
     return this.toRelationshipRecord(relationship);
+  }
+
+  async update(
+    userId: string,
+    id: string,
+    data: UpdateRelationshipData,
+  ): Promise<RelationshipRecord | null> {
+    const existingRelationship = await this.prisma.relationship.findFirst({
+      where: {
+        id,
+        project: { userId, deletedAt: null },
+        sourceEntity: { deletedAt: null },
+        targetEntity: { deletedAt: null },
+      },
+    });
+
+    if (!existingRelationship) {
+      return null;
+    }
+
+    const sourceEntityId =
+      data.sourceEntityId ?? existingRelationship.sourceEntityId;
+    const targetEntityId =
+      data.targetEntityId ?? existingRelationship.targetEntityId;
+
+    if (sourceEntityId === targetEntityId) {
+      return null;
+    }
+
+    const entityCount = await this.prisma.entity.count({
+      where: {
+        id: { in: [sourceEntityId, targetEntityId] },
+        projectId: existingRelationship.projectId,
+        deletedAt: null,
+      },
+    });
+
+    if (entityCount !== 2) {
+      return null;
+    }
+
+    const relationship = await this.prisma.relationship.update({
+      where: { id },
+      data: {
+        ...(data.sourceEntityId === undefined
+          ? {}
+          : { sourceEntityId: data.sourceEntityId }),
+        ...(data.targetEntityId === undefined
+          ? {}
+          : { targetEntityId: data.targetEntityId }),
+        ...(data.relationType === undefined
+          ? {}
+          : { relationType: data.relationType }),
+        ...(data.description === undefined
+          ? {}
+          : { description: data.description }),
+        ...(data.intensity === undefined
+          ? {}
+          : { confidenceScore: new Prisma.Decimal(data.intensity / 5) }),
+      },
+    });
+
+    return this.toRelationshipRecord(relationship);
+  }
+
+  async delete(userId: string, id: string): Promise<RelationshipRecord | null> {
+    const existingRelationship = await this.prisma.relationship.findFirst({
+      where: {
+        id,
+        project: { userId, deletedAt: null },
+        sourceEntity: { deletedAt: null },
+        targetEntity: { deletedAt: null },
+      },
+    });
+
+    if (!existingRelationship) {
+      return null;
+    }
+
+    await this.prisma.relationship.delete({ where: { id } });
+
+    return this.toRelationshipRecord(existingRelationship);
   }
 
   private toRelationshipRecord(relationship: Relationship): RelationshipRecord {
