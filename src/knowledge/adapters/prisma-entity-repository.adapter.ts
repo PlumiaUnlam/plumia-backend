@@ -60,7 +60,7 @@ export class PrismaEntityRepository implements EntityRepository {
         ...(data.description === undefined
           ? {}
           : { description: data.description }),
-        ...(data.aliases === undefined ? {} : { aliases: data.aliases }),
+        ...(data.aliases == null ? {} : { aliases: data.aliases }),
         ...(data.attributes === undefined
           ? {}
           : { attributes: data.attributes as Prisma.InputJsonValue }),
@@ -89,7 +89,7 @@ export class PrismaEntityRepository implements EntityRepository {
         ...(data.description === undefined
           ? {}
           : { description: data.description }),
-        ...(data.aliases === undefined ? {} : { aliases: data.aliases }),
+        ...(data.aliases == null ? {} : { aliases: data.aliases }),
         ...(data.attributes === undefined
           ? {}
           : { attributes: data.attributes as Prisma.InputJsonValue }),
