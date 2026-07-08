@@ -5,6 +5,7 @@ import { createContentHash } from '../domain/json-content';
 import { toSceneStatus } from '../domain/scene-status';
 import {
   CreateSceneData,
+  SceneContentUpdateResult,
   SceneRecord,
   SceneRepository,
   UpdateSceneContentData,
@@ -112,40 +113,40 @@ export class PrismaSceneRepository implements SceneRepository {
     userId: string,
     sceneId: string,
     data: UpdateSceneContentData,
-  ): Promise<SceneRecord | null> {
+  ): Promise<SceneContentUpdateResult | null> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const contentHash = createContentHash(data.content);
-        const result = await tx.scene.updateMany({
+        const existing = await tx.scene.findFirst({
           where: {
             id: sceneId,
             deletedAt: null,
             chapter: { book: { project: { userId } } },
           },
+        });
+
+        if (!existing) {
+          return null;
+        }
+
+        const newHash = createContentHash(data.content);
+
+        if (existing.contentHash === newHash) {
+          return {
+            scene: this.toSceneRecord(existing),
+            contentChanged: false,
+          };
+        }
+
+        const scene = await tx.scene.update({
+          where: { id: existing.id },
           data: {
             content: data.content as Prisma.InputJsonValue,
-            contentHash,
+            contentHash: newHash,
             ...(data.wordCount !== undefined
               ? { wordCount: data.wordCount }
               : {}),
           },
         });
-
-        if (result.count === 0) {
-          return null;
-        }
-
-        const scene = await tx.scene.findFirst({
-          where: {
-            id: sceneId,
-            deletedAt: null,
-            chapter: { book: { project: { userId } } },
-          },
-        });
-
-        if (!scene) {
-          return null;
-        }
 
         await tx.outbox.create({
           data: {
@@ -155,7 +156,7 @@ export class PrismaSceneRepository implements SceneRepository {
             payload: {
               sceneId: scene.id,
               chapterId: scene.chapterId,
-              contentHash,
+              contentHash: newHash,
               wordCount: scene.wordCount,
               userId,
             },
@@ -163,7 +164,10 @@ export class PrismaSceneRepository implements SceneRepository {
           },
         });
 
-        return this.toSceneRecord(scene);
+        return {
+          scene: this.toSceneRecord(scene),
+          contentChanged: true,
+        };
       });
     } catch (error: unknown) {
       return translatePrismaConflict(error);

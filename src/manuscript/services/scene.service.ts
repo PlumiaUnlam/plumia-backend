@@ -5,6 +5,7 @@ import { UpdateSceneMetadataDto } from '../dto/scenes/update-scene-metadata.dto'
 import {
   SCENE_REPOSITORY,
   type CreateSceneData,
+  type SceneContentUpdateResult,
   type SceneRecord,
   type SceneRepository,
 } from '../ports/scene-repository.port';
@@ -72,18 +73,18 @@ export class SceneService {
     userId: string,
     sceneId: string,
     dto: UpdateSceneContentDto,
-  ): Promise<SceneRecord> {
-    const scene = await this.sceneRepository.updateContentForUser(
+  ): Promise<SceneContentUpdateResult> {
+    const result = await this.sceneRepository.updateContentForUser(
       userId,
       sceneId,
       dto,
     );
 
-    if (!scene) {
+    if (!result) {
       throw new NotFoundException('Scene not found');
     }
 
-    return scene;
+    return result;
   }
 
   async remove(userId: string, sceneId: string): Promise<SceneRecord> {
