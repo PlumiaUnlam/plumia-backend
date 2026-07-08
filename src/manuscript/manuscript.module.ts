@@ -9,6 +9,7 @@ import { ChaptersController } from './controllers/chapters.controller';
 import { ProjectsController } from './controllers/projects.controller';
 import { ScenesController } from './controllers/scenes.controller';
 import { StoryboardCardsController } from './controllers/storyboard-cards.controller';
+import { StoryboardMatrixController } from './controllers/storyboard-matrix.controller';
 import { BOOK_REPOSITORY } from './ports/book-repository.port';
 import { CHAPTER_REPOSITORY } from './ports/chapter-repository.port';
 import { PROJECT_REPOSITORY } from './ports/project-repository.port';
@@ -19,6 +20,7 @@ import { ChapterService } from './services/chapter.service';
 import { ProjectService } from './services/project.service';
 import { SceneService } from './services/scene.service';
 import { StoryboardCardService } from './services/storyboard-card.service';
+import { StoryboardMatrixService } from './services/storyboard-matrix.service';
 
 @Module({
   controllers: [
@@ -27,6 +29,7 @@ import { StoryboardCardService } from './services/storyboard-card.service';
     ChaptersController,
     ScenesController,
     StoryboardCardsController,
+    StoryboardMatrixController,
   ],
   providers: [
     ProjectService,
@@ -34,6 +37,7 @@ import { StoryboardCardService } from './services/storyboard-card.service';
     ChapterService,
     SceneService,
     StoryboardCardService,
+    StoryboardMatrixService,
     { provide: PROJECT_REPOSITORY, useClass: PrismaProjectRepository },
     { provide: BOOK_REPOSITORY, useClass: PrismaBookRepository },
     { provide: CHAPTER_REPOSITORY, useClass: PrismaChapterRepository },
@@ -49,6 +53,7 @@ import { StoryboardCardService } from './services/storyboard-card.service';
     ChapterService,
     SceneService,
     StoryboardCardService,
+    StoryboardMatrixService,
     PROJECT_REPOSITORY,
     BOOK_REPOSITORY,
     CHAPTER_REPOSITORY,
