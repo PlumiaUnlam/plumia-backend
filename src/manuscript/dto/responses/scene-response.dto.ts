@@ -11,6 +11,7 @@ export class SceneResponseDto {
   povCharacterId!: string | null;
   status!: SceneStatus;
   order!: number;
+  hash!: string | null;
   createdAt!: Date;
   updatedAt!: Date;
 
@@ -25,6 +26,7 @@ export class SceneResponseDto {
       povCharacterId: record.povCharacterId,
       status: record.status,
       order: record.order,
+      hash: record.contentHash,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };

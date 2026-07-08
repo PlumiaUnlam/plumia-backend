@@ -97,10 +97,11 @@ describe('PrismaSceneRepository', () => {
   });
 
   it('updates content and writes outbox in one transaction', async () => {
+    const existing: SceneRecord = { ...scene, contentHash: 'stale-hash' };
     const tx = {
       scene: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findFirst: jest.fn().mockResolvedValue(scene),
+        update: jest.fn().mockResolvedValue(scene),
+        findFirst: jest.fn().mockResolvedValue(existing),
       },
       outbox: {
         create: jest.fn(),
@@ -108,7 +109,9 @@ describe('PrismaSceneRepository', () => {
     };
     prisma.$transaction.mockImplementation(
       async (
-        callback: (transaction: typeof tx) => Promise<SceneRecord | null>,
+        callback: (
+          transaction: typeof tx,
+        ) => Promise<{ scene: SceneRecord; contentChanged: boolean } | null>,
       ) => callback(tx),
     );
 
@@ -117,13 +120,16 @@ describe('PrismaSceneRepository', () => {
       wordCount: 1,
     });
 
-    expect(result).toEqual(scene);
-    expect(tx.scene.updateMany).toHaveBeenCalledWith({
+    expect(result).toEqual({ scene, contentChanged: true });
+    expect(tx.scene.findFirst).toHaveBeenCalledWith({
       where: {
         id: 'scene-1',
         deletedAt: null,
         chapter: { book: { project: { userId: 'user-1' } } },
       },
+    });
+    expect(tx.scene.update).toHaveBeenCalledWith({
+      where: { id: 'scene-1' },
       data: {
         content,
         contentHash: createContentHash(content),
@@ -150,8 +156,8 @@ describe('PrismaSceneRepository', () => {
   it('does not write outbox when the scene is not owned by the user', async () => {
     const tx = {
       scene: {
-        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-        findFirst: jest.fn(),
+        update: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       outbox: {
         create: jest.fn(),
@@ -159,7 +165,9 @@ describe('PrismaSceneRepository', () => {
     };
     prisma.$transaction.mockImplementation(
       async (
-        callback: (transaction: typeof tx) => Promise<SceneRecord | null>,
+        callback: (
+          transaction: typeof tx,
+        ) => Promise<{ scene: SceneRecord; contentChanged: boolean } | null>,
       ) => callback(tx),
     );
 
@@ -168,7 +176,34 @@ describe('PrismaSceneRepository', () => {
     });
 
     expect(result).toBeNull();
-    expect(tx.scene.findFirst).not.toHaveBeenCalled();
+    expect(tx.scene.update).not.toHaveBeenCalled();
+    expect(tx.outbox.create).not.toHaveBeenCalled();
+  });
+
+  it('does not write outbox when the content is unchanged', async () => {
+    const tx = {
+      scene: {
+        update: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(scene),
+      },
+      outbox: {
+        create: jest.fn(),
+      },
+    };
+    prisma.$transaction.mockImplementation(
+      async (
+        callback: (
+          transaction: typeof tx,
+        ) => Promise<{ scene: SceneRecord; contentChanged: boolean } | null>,
+      ) => callback(tx),
+    );
+
+    const result = await repository.updateContentForUser('user-1', 'scene-1', {
+      content,
+    });
+
+    expect(result).toEqual({ scene, contentChanged: false });
+    expect(tx.scene.update).not.toHaveBeenCalled();
     expect(tx.outbox.create).not.toHaveBeenCalled();
   });
 

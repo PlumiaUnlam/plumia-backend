@@ -40,6 +40,11 @@ export interface UpdateSceneContentData {
   wordCount?: number;
 }
 
+export interface SceneContentUpdateResult {
+  scene: SceneRecord;
+  contentChanged: boolean;
+}
+
 export interface SceneRepository {
   createForUser(
     userId: string,
@@ -55,7 +60,7 @@ export interface SceneRepository {
     userId: string,
     sceneId: string,
     data: UpdateSceneContentData,
-  ): Promise<SceneRecord | null>;
+  ): Promise<SceneContentUpdateResult | null>;
   softDeleteForUser(
     userId: string,
     sceneId: string,

@@ -3,16 +3,16 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
-  Put,
   Request,
 } from '@nestjs/common';
 import { CreateSceneDto } from '../dto/scenes/create-scene.dto';
-import { UpdateSceneContentDto } from '../dto/scenes/update-scene-content.dto';
-import { UpdateSceneMetadataDto } from '../dto/scenes/update-scene-metadata.dto';
+import { PatchSceneDto } from '../dto/scenes/patch-scene.dto';
+import { SaveSceneResultDto } from '../dto/responses/save-scene-result.dto';
 import { SceneResponseDto } from '../dto/responses/scene-response.dto';
 import { SceneService } from '../services/scene.service';
 import type { AuthenticatedRequest } from './authenticated-request';
@@ -44,28 +44,26 @@ export class ScenesController {
   async updateScene(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateSceneMetadataDto,
+    @Body() dto: PatchSceneDto,
   ): Promise<SceneResponseDto> {
+    if (dto.content !== undefined) {
+      const result = await this.sceneService.updateContent(req.user.id, id, {
+        content: dto.content,
+        ...(dto.wordCount !== undefined ? { wordCount: dto.wordCount } : {}),
+      });
+      return SaveSceneResultDto.fromResult(result);
+    }
+
     const scene = await this.sceneService.update(req.user.id, id, dto);
     return SceneResponseDto.from(scene);
   }
 
-  @Put('scenes/:id/content')
-  async updateSceneContent(
-    @Request() req: AuthenticatedRequest,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateSceneContentDto,
-  ): Promise<SceneResponseDto> {
-    const scene = await this.sceneService.updateContent(req.user.id, id, dto);
-    return SceneResponseDto.from(scene);
-  }
-
   @Delete('scenes/:id')
+  @HttpCode(204)
   async removeScene(
     @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<SceneResponseDto> {
-    const scene = await this.sceneService.remove(req.user.id, id);
-    return SceneResponseDto.from(scene);
+  ): Promise<void> {
+    await this.sceneService.remove(req.user.id, id);
   }
 }
