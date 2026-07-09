@@ -81,6 +81,10 @@ export class StorageService {
     return { presignedUrl, publicUrl };
   }
 
+  getPublicUrl(key: string): string {
+    return `${this.publicUrl}/${this.bucket}/${key}`;
+  }
+
   extractKeyFromUrl(imageUrl: string): string {
     const prefix = `${this.bucket}/`;
     const idx = imageUrl.indexOf(prefix);

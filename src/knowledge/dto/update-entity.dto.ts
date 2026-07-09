@@ -32,10 +32,10 @@ export class UpdateEntityDto {
   @IsOptional()
   attributes?: Record<string, unknown>;
 
+  @IsOptional()
   @IsString()
   @MaxLength(500)
-  @IsOptional()
-  imageUrl?: string;
+  imageUrl?: string | null;
 
   @IsBoolean()
   @IsOptional()
