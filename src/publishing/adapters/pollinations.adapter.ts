@@ -6,7 +6,7 @@ import type {
   ImageGenerationInput,
   ImageGenerationResult,
 } from '../ports/image-generation.port';
-import { IMAGE_GENERATION } from '../ports/image-generation.port';
+export { IMAGE_GENERATION } from '../ports/image-generation.port';
 
 const GENERATION_TIMEOUT_MS = 30_000;
 
@@ -67,4 +67,3 @@ export class PollinationsAdapter implements ImageGeneration {
   }
 }
 
-export { IMAGE_GENERATION };
