@@ -171,7 +171,8 @@ export class PublishingService {
       });
     }
 
-    const presignedGetUrl = await this.storage.generatePresignedGetUrl(storageKey);
+    const presignedGetUrl =
+      await this.storage.generatePresignedGetUrl(storageKey);
     return this.toResponse(image, presignedGetUrl);
   }
 
@@ -248,13 +249,12 @@ export class PublishingService {
       const ext = MIME_EXTENSIONS[result.contentType] ?? 'jpg';
       const storageKey = `entities/preview/${randomUUID()}.${ext}`;
 
-      const { presignedUrl } =
-        await this.storage.generatePresignedUploadUrl(
-          'preview',
-          storageKey,
-          result.contentType,
-          storageKey,
-        );
+      const { presignedUrl } = await this.storage.generatePresignedUploadUrl(
+        'preview',
+        storageKey,
+        result.contentType,
+        storageKey,
+      );
 
       const uploadResponse = await fetchWithTimeout(presignedUrl, {
         method: 'PUT',
@@ -307,8 +307,9 @@ export class PublishingService {
       data: { imageUrl: publicUrl },
     });
 
-    const presignedGetUrl =
-      await this.storage.generatePresignedGetUrl(dto.storageKey);
+    const presignedGetUrl = await this.storage.generatePresignedGetUrl(
+      dto.storageKey,
+    );
 
     return this.toResponse(image, presignedGetUrl);
   }
@@ -318,11 +319,11 @@ export class PublishingService {
     description: string | null;
     type: string;
   }): string {
-    const { noun, article } =
-      TYPE_TO_SPANISH[data.type] ?? { noun: 'entidad', article: 'una' };
-    const parts: string[] = [
-      `Ilustración realista de ${article} ${noun}`,
-    ];
+    const { noun, article } = TYPE_TO_SPANISH[data.type] ?? {
+      noun: 'entidad',
+      article: 'una',
+    };
+    const parts: string[] = [`Ilustración realista de ${article} ${noun}`];
     if (data.description) {
       parts.push(data.description);
     }
@@ -337,11 +338,11 @@ export class PublishingService {
     description: string | null;
     type: string;
   }): string {
-    const { noun, article } =
-      TYPE_TO_SPANISH[entity.type] ?? { noun: 'entidad', article: 'una' };
-    const parts: string[] = [
-      `Ilustración realista de ${article} ${noun}`,
-    ];
+    const { noun, article } = TYPE_TO_SPANISH[entity.type] ?? {
+      noun: 'entidad',
+      article: 'una',
+    };
+    const parts: string[] = [`Ilustración realista de ${article} ${noun}`];
     if (entity.description) {
       parts.push(entity.description);
     }
