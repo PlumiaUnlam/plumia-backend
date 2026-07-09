@@ -36,7 +36,7 @@ export interface UpdateEntityData {
   type?: EntityType;
   description?: string;
   attributes?: Record<string, unknown>;
-  imageUrl?: string;
+  imageUrl?: string | null;
   isActive?: boolean;
 }
 
