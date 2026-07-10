@@ -25,7 +25,7 @@ export class PrismaEntityRepository implements EntityRepository {
     return entities.map((entity) => this.toEntityRecord(entity));
   }
 
-  async count(filters: EntityListFilters): Promise<number> {
+  count(filters: EntityListFilters): Promise<number> {
     const where = this.buildWhereClause(filters);
     return this.prisma.entity.count({ where });
   }
@@ -102,7 +102,14 @@ export class PrismaEntityRepository implements EntityRepository {
       return null;
     }
 
-    return this.findById(id);
+    const entity = await this.prisma.entity.findFirst({
+      where: {
+        id,
+        project: { userId, deletedAt: null },
+      },
+    });
+
+    return entity ? this.toEntityRecord(entity) : null;
   }
 
   async softDelete(
@@ -123,7 +130,14 @@ export class PrismaEntityRepository implements EntityRepository {
       return null;
     }
 
-    return this.findById(id);
+    const entity = await this.prisma.entity.findFirst({
+      where: {
+        id,
+        project: { userId, deletedAt: null },
+      },
+    });
+
+    return entity ? this.toEntityRecord(entity) : null;
   }
 
   private buildWhereClause(

@@ -1,7 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type Job, Worker } from 'bullmq';
-import { SUMMARY_SCOPE } from '../domain/summary-scope';
 import {
   SUMMARY_GENERATION_QUEUE,
   SUMMARY_INVALIDATION_QUEUE,
