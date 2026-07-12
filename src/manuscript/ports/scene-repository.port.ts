@@ -45,6 +45,24 @@ export interface SceneContentUpdateResult {
   contentChanged: boolean;
 }
 
+export interface SceneVersionRecord {
+  id: string;
+  sceneId: string;
+  label: string | null;
+  content: unknown;
+  contentHash: string | null;
+  wordCount: number;
+  createdFromId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt: Date | null;
+}
+
+export interface SceneVersionContentUpdateResult {
+  version: SceneVersionRecord;
+  contentChanged: boolean;
+}
+
 export interface SceneRepository {
   createForUser(
     userId: string,
@@ -60,6 +78,45 @@ export interface SceneRepository {
     userId: string,
     sceneId: string,
     data: UpdateSceneContentData,
+  ): Promise<SceneContentUpdateResult | null>;
+  listVersionsForUser(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneVersionRecord[] | null>;
+  createVersionForUser(
+    userId: string,
+    sceneId: string,
+    label?: string,
+    content?: Record<string, unknown>,
+    wordCount?: number,
+  ): Promise<SceneVersionRecord | null>;
+  findVersionForUser(
+    userId: string,
+    sceneId: string,
+    versionId: string,
+  ): Promise<SceneVersionRecord | null>;
+  updateVersionContentForUser(
+    userId: string,
+    sceneId: string,
+    versionId: string,
+    data: UpdateSceneContentData,
+  ): Promise<SceneVersionContentUpdateResult | null>;
+  updateVersionForUser(
+    userId: string,
+    sceneId: string,
+    versionId: string,
+    data: { label?: string | null },
+  ): Promise<SceneVersionRecord | null>;
+  softDeleteVersionForUser(
+    userId: string,
+    sceneId: string,
+    versionId: string,
+    deletedAt: Date,
+  ): Promise<SceneVersionRecord | null>;
+  restoreVersionForUser(
+    userId: string,
+    sceneId: string,
+    versionId: string,
   ): Promise<SceneContentUpdateResult | null>;
   softDeleteForUser(
     userId: string,
