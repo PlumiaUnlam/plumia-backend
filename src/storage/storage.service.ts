@@ -48,7 +48,8 @@ export class StorageService {
     _filename: string,
     contentType: string,
     existingKey?: string,
-  ): Promise<{ presignedUrl: string; publicUrl: string }> {
+    storageFolder = 'entities',
+  ): Promise<{ presignedUrl: string; publicUrl: string; storageKey: string }> {
     if (
       !ALLOWED_MIME_TYPES.includes(
         contentType as (typeof ALLOWED_MIME_TYPES)[number],
@@ -62,7 +63,7 @@ export class StorageService {
       (() => {
         const ext = MIME_EXTENSIONS[contentType] ?? 'bin';
         const uuid = randomUUID();
-        return `entities/${entityId}/${uuid}.${ext}`;
+        return `${storageFolder}/${entityId}/${uuid}.${ext}`;
       })();
 
     const command = new PutObjectCommand({
@@ -78,7 +79,7 @@ export class StorageService {
 
     const publicUrl = `${this.publicUrl}/${this.bucket}/${key}`;
 
-    return { presignedUrl, publicUrl };
+    return { presignedUrl, publicUrl, storageKey: key };
   }
 
   getPublicUrl(key: string): string {

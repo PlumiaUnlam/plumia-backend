@@ -319,6 +319,7 @@ model Scene {
   entityProposals EntityProposal[]
   readerComments  ReaderComment[]
   writingSessions WritingSession[]
+  versions         SceneVersion[]
 
   @@unique([chapterId, sortKey])
   @@index([chapterId], map: "idx_scene_chapter")
@@ -326,6 +327,25 @@ model Scene {
   @@index([sortKey], map: "idx_scene_sort")
   @@index([povCharacterId], map: "idx_scene_pov")
   @@map("scene")
+}
+
+model SceneVersion {
+  id            String    @id @default(uuid()) @db.Uuid
+  sceneId       String    @map("scene_id") @db.Uuid
+  label         String?   @db.VarChar(200)
+  content       Json?     @db.JsonB
+  contentHash   String?   @map("content_hash") @db.VarChar(64)
+  wordCount     Int       @default(0) @map("word_count")
+  createdFromId String?   @map("created_from_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  scene Scene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@index([sceneId], map: "idx_scene_version_scene")
+  @@index([createdAt], map: "idx_scene_version_created")
+  @@map("scene_version")
 }
 
 // ============================================================

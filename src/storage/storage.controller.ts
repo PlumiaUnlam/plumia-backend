@@ -16,7 +16,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, IsIn, IsNotEmpty, IsOptional } from 'class-validator';
+import {
+  IsString,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+} from 'class-validator';
 import type { Response } from 'express';
 import { FirebaseAdminService } from '../auth/firebase-admin.service';
 import { Public } from '../common/decorators/public.decorator';
@@ -42,12 +47,23 @@ class PresignedUploadDto {
   @IsString()
   @IsOptional()
   existingImageUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(['entities', 'scenes'])
+  storageFolder?: 'entities' | 'scenes';
 }
 
 class PresignedDownloadDto {
   @IsString()
   @IsNotEmpty()
   entityId!: string;
+}
+
+class PresignedDownloadByKeyDto {
+  @IsString()
+  @IsNotEmpty()
+  storageKey!: string;
 }
 
 @Controller('storage')
@@ -64,7 +80,7 @@ export class StorageController {
   async presignedUpload(
     @Request() _req: AuthenticatedRequest,
     @Body() dto: PresignedUploadDto,
-  ): Promise<{ presignedUrl: string; publicUrl: string }> {
+  ): Promise<{ presignedUrl: string; publicUrl: string; storageKey: string }> {
     try {
       const existingKey = dto.existingImageUrl
         ? this.storageService.extractKeyFromUrl(dto.existingImageUrl)
@@ -74,6 +90,7 @@ export class StorageController {
         dto.filename,
         dto.contentType,
         existingKey,
+        dto.storageFolder ?? 'entities',
       );
       return res;
     } catch (err) {
@@ -82,6 +99,77 @@ export class StorageController {
         HttpStatus.BAD_REQUEST,
       );
     }
+  }
+
+  @Post('presigned-download-by-key')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  async presignedDownloadByKey(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: PresignedDownloadByKeyDto,
+  ): Promise<{ url: string }> {
+    const match = dto.storageKey.match(
+      /^(entities|scenes)\/([^/]+)\/[^/]+$/,
+    );
+
+    if (!match) {
+      throw new HttpException('Invalid storage key', HttpStatus.BAD_REQUEST);
+    }
+
+    const scope = match[1] as 'entities' | 'scenes';
+    const resourceId = match[2];
+
+    if (!resourceId) {
+      throw new HttpException('Invalid storage key', HttpStatus.BAD_REQUEST);
+    }
+
+    if (scope === 'entities') {
+      const entity = await this.prisma.entity.findFirst({
+        where: { id: resourceId, deletedAt: null },
+        select: {
+          id: true,
+          project: { select: { userId: true } },
+        },
+      });
+
+      if (!entity) {
+        throw new HttpException('Entity not found', HttpStatus.NOT_FOUND);
+      }
+
+      if (entity.project.userId !== req.user.id) {
+        throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+      }
+    } else {
+      const scene = await this.prisma.scene.findFirst({
+        where: { id: resourceId, deletedAt: null },
+        select: {
+          id: true,
+          chapter: {
+            select: {
+              book: {
+                select: {
+                  project: { select: { userId: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!scene) {
+        throw new HttpException('Scene not found', HttpStatus.NOT_FOUND);
+      }
+
+      if (scene.chapter.book.project.userId !== req.user.id) {
+        throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+      }
+    }
+
+    const url = await this.storageService.generatePresignedGetUrl(
+      dto.storageKey,
+    );
+
+    return { url };
   }
 
   @Post('presigned-download')
