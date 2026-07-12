@@ -17,7 +17,7 @@ export class GeminiSummaryGenerationAdapter implements SummaryGenerationProvider
   constructor(config: ConfigService) {
     this.apiKey = config.get<string>('GEMINI_API_KEY') ?? '';
     this.model =
-      config.get<string>('GEMINI_SUMMARY_MODEL') ?? 'gemini-2.5-flash';
+      config.get<string>('GEMINI_SUMMARY_MODEL') ?? 'gemini-flash-latest';
   }
 
   async generate(
