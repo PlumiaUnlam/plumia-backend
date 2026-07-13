@@ -128,6 +128,45 @@ describe('SummaryService', () => {
       expect.stringContaining('Summary failed factual verification'),
     );
   });
+
+  it('reuses clean scene summaries when generating a chapter', async () => {
+    const chapter = {
+      id: 'chapter-id',
+      projectId: 'project-id',
+      title: 'Chapter',
+      scenes: [scene],
+    };
+    repository.findChapterInputById.mockResolvedValue(chapter);
+    repository.findSummaryByScope.mockResolvedValue({
+      id: 'summary-id',
+      projectId: 'project-id',
+      parentSummaryId: null,
+      scopeType: 'scene',
+      scopeId: scene.id,
+      title: 'Scene',
+      content: 'Eliana sees the blue light.',
+      source: 'ai_generated',
+      sourceContentHash: 'content-hash',
+      provider: 'gemini',
+      model: 'gemini-test',
+      isDirty: false,
+      tokenCount: 20,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    generator.generate.mockResolvedValue(generated('Chapter summary.'));
+    generator.verify.mockResolvedValue(approved());
+
+    await service.processGeneration('job-id', 'chapter', chapter.id, true);
+
+    expect(generator.generate).toHaveBeenCalledTimes(1);
+    expect(generator.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Eliana sees the blue light.' }),
+    );
+    expect(repository.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeType: 'chapter', scopeId: chapter.id }),
+    );
+  });
 });
 
 function generated(content: string): SummaryGenerationResult {

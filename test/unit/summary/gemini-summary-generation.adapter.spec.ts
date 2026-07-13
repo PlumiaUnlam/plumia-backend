@@ -51,7 +51,51 @@ describe('GeminiSummaryGenerationAdapter', () => {
       'gemini-second:generateContent',
     );
   });
+
+  it('returns structured verifier violations', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      jsonResponse({
+        approved: false,
+        violations: ['Remove the invented event.', ''],
+      }),
+    );
+    const adapter = new GeminiSummaryGenerationAdapter(config());
+
+    await expect(
+      adapter.verify({
+        scope: 'scene',
+        sourceText: 'Eliana sees a light.',
+        summary: 'Eliana finds a message.',
+      }),
+    ).resolves.toMatchObject({
+      approved: false,
+      violations: ['Remove the invented event.'],
+      model: 'gemini-first',
+    });
+  });
+
+  it('does not try a fallback for a non-recoverable API error', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('Invalid request', { status: 400 }));
+    const adapter = new GeminiSummaryGenerationAdapter(config());
+
+    await expect(
+      adapter.generate({ scope: 'scene', text: 'Text', targetWords: 120 }),
+    ).rejects.toThrow('Gemini API error: 400');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
+
+function jsonResponse(value: unknown): Response {
+  return new Response(
+    JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify(value) }] } }],
+      usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 4 },
+    }),
+    { status: 200 },
+  );
+}
 
 function config(): ConfigService {
   return {
