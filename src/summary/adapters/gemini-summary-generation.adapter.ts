@@ -57,7 +57,7 @@ export class GeminiSummaryGenerationAdapter implements SummaryGenerationProvider
       violations?: unknown;
     }>(buildVerificationRequest(input));
     if (typeof response.value.approved !== 'boolean') {
-      throw new Error('Gemini API returned invalid verification result');
+      throw new TypeError('Gemini API returned invalid verification result');
     }
     const violations = Array.isArray(response.value.violations)
       ? response.value.violations.filter(
@@ -131,9 +131,10 @@ export class GeminiSummaryGenerationAdapter implements SummaryGenerationProvider
       );
       if (!response.ok) {
         const detail = (await response.text()).slice(0, 1_000);
+        const detailSuffix = detail ? ` - ${detail}` : '';
         throw new GeminiApiError(
           response.status,
-          `Gemini API error: ${response.status}${detail ? ` - ${detail}` : ''}`,
+          `Gemini API error: ${response.status}${detailSuffix}`,
         );
       }
 

@@ -1,8 +1,12 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SUMMARY_QUEUE, type SummaryQueue } from '../ports/summary-queue.port';
-import { Inject } from '@nestjs/common';
 
 @Injectable()
 export class SummaryOutboxPoller implements OnModuleInit, OnModuleDestroy {

@@ -25,6 +25,7 @@ import { StorageService } from './storage.service';
 import type { AuthenticatedRequest } from './authenticated-request';
 
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
+const STORAGE_KEY_PATTERN = /^(entities|scenes)\/([^/]+)\/[^/]+$/;
 
 class PresignedUploadDto {
   @IsString()
@@ -103,7 +104,7 @@ export class StorageController {
     @Request() req: AuthenticatedRequest,
     @Body() dto: PresignedDownloadByKeyDto,
   ): Promise<{ url: string }> {
-    const match = dto.storageKey.match(/^(entities|scenes)\/([^/]+)\/[^/]+$/);
+    const match = STORAGE_KEY_PATTERN.exec(dto.storageKey);
 
     if (!match) {
       throw new HttpException('Invalid storage key', HttpStatus.BAD_REQUEST);

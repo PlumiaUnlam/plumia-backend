@@ -64,7 +64,7 @@ function splitOversizedText(text: string, budget: number): string[] {
     return [text];
   }
 
-  const units = text.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) ?? [text];
+  const units = splitIntoSentenceUnits(text);
   const chunks: string[] = [];
   let current = '';
 
@@ -89,6 +89,33 @@ function splitOversizedText(text: string, budget: number): string[] {
     chunks.push(current.trim());
   }
   return chunks;
+}
+
+function splitIntoSentenceUnits(text: string): string[] {
+  const units: string[] = [];
+  let start = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (!isSentenceEnding(text[index]!)) {
+      continue;
+    }
+    let end = index + 1;
+    while (end < text.length && /\s/.test(text[end]!)) {
+      end += 1;
+    }
+    units.push(text.slice(start, end));
+    start = end;
+    index = end - 1;
+  }
+
+  if (start < text.length) {
+    units.push(text.slice(start));
+  }
+  return units.length > 0 ? units : [text];
+}
+
+function isSentenceEnding(character: string): boolean {
+  return character === '.' || character === '!' || character === '?';
 }
 
 function splitByCharacterBudget(text: string, budget: number): string[] {
