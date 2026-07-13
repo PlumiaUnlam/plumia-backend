@@ -15,6 +15,10 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+Build.txt
+Lint.txt
+Typececk.txt
+Teste2e.txt
 
 # dotenv environment variable files
 .env
@@ -67,4 +71,3 @@ firebase-service-account*.json
 .agents/
 
 skills-lock.json
-

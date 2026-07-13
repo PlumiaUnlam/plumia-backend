@@ -69,7 +69,7 @@ export class PrismaBookRepository implements BookRepository {
     return this.findByIdForUser(userId, bookId);
   }
 
-  async softDeleteForUser(
+  softDeleteForUser(
     userId: string,
     bookId: string,
     deletedAt: Date,

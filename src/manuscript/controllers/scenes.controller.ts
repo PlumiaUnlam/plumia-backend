@@ -71,7 +71,9 @@ export class ScenesController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<SceneVersionSummaryResponseDto[]> {
     const versions = await this.sceneService.listVersions(req.user.id, id);
-    return versions.map((version) => SceneVersionSummaryResponseDto.from(version));
+    return versions.map((version) =>
+      SceneVersionSummaryResponseDto.from(version),
+    );
   }
 
   @Post('scenes/:id/versions')

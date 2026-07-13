@@ -117,6 +117,13 @@ enum ExportStatus {
   FAILED
 }
 
+enum SummaryJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 // ============================================================
 // 2.1 Auth y Usuarios
 // ============================================================
@@ -229,6 +236,7 @@ model Project {
   chatThreads         ChatThread[]
   chunks              Chunk[]
   summaries           Summary[]
+  summaryGenerationJobs SummaryGenerationJob[]
   versions            Version[]
   exportJobs          ExportJob[]
   storyboardNotes     StoryboardNote[]
@@ -602,6 +610,9 @@ model Summary {
   title           String?  @db.VarChar(300)
   content         String
   source          String   @default("ai_generated") @db.VarChar(20)
+  sourceContentHash String? @map("source_content_hash") @db.VarChar(64)
+  provider        String?  @db.VarChar(50)
+  model           String?  @db.VarChar(100)
   isDirty         Boolean  @default(false) @map("is_dirty")
   tokenCount      Int?     @map("token_count")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -612,9 +623,32 @@ model Summary {
   children Summary[] @relation("SummaryParent")
 
   @@index([projectId], map: "idx_summary_project")
-  @@index([scopeType, scopeId], map: "idx_summary_scope")
+  @@unique([scopeType, scopeId], map: "uq_summary_scope")
   @@index([isDirty], map: "idx_summary_dirty")
   @@map("summary")
+}
+
+model SummaryGenerationJob {
+  id              String           @id @default(uuid()) @db.Uuid
+  projectId       String           @map("project_id") @db.Uuid
+  scopeType       String           @map("scope_type") @db.VarChar(20)
+  scopeId         String           @map("scope_id") @db.Uuid
+  inputHash       String           @map("input_hash") @db.VarChar(64)
+  status          SummaryJobStatus @default(QUEUED)
+  progress        Int              @default(0)
+  force           Boolean          @default(false)
+  bullJobId       String?          @map("bull_job_id") @db.VarChar(150)
+  errorMessage    String?          @map("error_message")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt       DateTime?        @map("started_at") @db.Timestamptz(6)
+  completedAt     DateTime?        @map("completed_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([scopeType, scopeId, inputHash], map: "idx_summary_job_input")
+  @@index([projectId], map: "idx_summary_job_project")
+  @@index([status], map: "idx_summary_job_status")
+  @@map("summary_generation_job")
 }
 
 // ============================================================
