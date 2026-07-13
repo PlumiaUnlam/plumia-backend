@@ -4,6 +4,7 @@ import {
   missingUuid,
   responseBody,
 } from '../endpoint-test-context';
+import { SummaryService } from '../../../src/summary/summary.service';
 
 interface SummaryResponse {
   id: string;
@@ -75,6 +76,41 @@ describe('Summary endpoints e2e', () => {
         expect(body).toMatchObject({
           id: jobId,
           status: 'QUEUED',
+        });
+      });
+  });
+
+  it('generates and persists a verified scene summary', async () => {
+    const { scene } = await ctx.createProjectTree();
+    const response = await request(ctx.server)
+      .post(`/scenes/${scene.id}/summary/generate`)
+      .set(ctx.auth())
+      .expect(202);
+    const jobId = responseBody<SummaryJobResponse>(response).id;
+
+    await ctx.app
+      .get(SummaryService)
+      .processGeneration(jobId, 'scene', scene.id, true);
+
+    await request(ctx.server)
+      .get(`/scenes/${scene.id}/summary`)
+      .set(ctx.auth())
+      .expect(200)
+      .expect((summaryResponse) => {
+        const body = responseBody<SummaryResponse>(summaryResponse);
+        expect(body).toMatchObject({
+          content: 'Generated summary',
+          source: 'ai_generated',
+        });
+      });
+
+    await request(ctx.server)
+      .get(`/summary-jobs/${jobId}`)
+      .set(ctx.auth())
+      .expect(200)
+      .expect((jobResponse) => {
+        expect(responseBody<SummaryJobResponse>(jobResponse)).toMatchObject({
+          status: 'COMPLETED',
         });
       });
   });

@@ -22,6 +22,7 @@ import {
 
 const LEAF_TOKEN_BUDGET = 12_000;
 const REDUCE_TOKEN_BUDGET = 14_000;
+const MAX_PARALLEL_GENERATIONS = 2;
 
 @Injectable()
 export class SummaryService {
@@ -245,13 +246,10 @@ export class SummaryService {
     model: string;
   }> {
     let parts = splitTextByTokenBudget(text, LEAF_TOKEN_BUDGET);
-    let last: {
-      content: string;
-      inputTokens: number;
-      outputTokens: number;
-      provider: string;
-      model: string;
-    } | null = null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let provider = '';
+    let model = '';
     while (
       parts.length > 1 ||
       estimateTokens(parts[0] ?? '') > REDUCE_TOKEN_BUDGET
@@ -260,30 +258,95 @@ export class SummaryService {
         parts.join('\n\n'),
         REDUCE_TOKEN_BUDGET,
       );
-      const generated = await Promise.all(
-        chunks.map((chunk) =>
-          this.generator.generate({
-            scope,
-            text: chunk,
-            targetWords: Math.max(100, Math.round(outputWords / chunks.length)),
-          }),
-        ),
+      const generated = await this.mapWithConcurrency(chunks, async (chunk) =>
+        this.generateVerified({
+          scope,
+          text: chunk,
+          targetWords: Math.max(100, Math.round(outputWords / chunks.length)),
+        }),
       );
-      last = generated[generated.length - 1] ?? null;
+      for (const item of generated) {
+        inputTokens += item.inputTokens;
+        outputTokens += item.outputTokens;
+        provider = item.provider;
+        model = item.model;
+      }
       parts = generated.map((item) => item.content);
     }
-    const final = await this.generator.generate({
+    const final = await this.generateVerified({
       scope,
       text: parts[0] ?? text,
       targetWords: outputWords,
     });
     return {
       content: final.content,
-      inputTokens: (last?.inputTokens ?? 0) + final.inputTokens,
-      outputTokens: (last?.outputTokens ?? 0) + final.outputTokens,
-      provider: final.provider,
-      model: final.model,
+      inputTokens: inputTokens + final.inputTokens,
+      outputTokens: outputTokens + final.outputTokens,
+      provider: final.provider || provider,
+      model: final.model || model,
     };
+  }
+
+  private async generateVerified(input: {
+    scope: 'scene' | 'chapter';
+    text: string;
+    targetWords: number;
+  }): Promise<{
+    content: string;
+    inputTokens: number;
+    outputTokens: number;
+    provider: string;
+    model: string;
+  }> {
+    let result = await this.generator.generate(input);
+    let verification = await this.generator.verify({
+      scope: input.scope,
+      sourceText: input.text,
+      summary: result.content,
+    });
+    let inputTokens = result.inputTokens + verification.inputTokens;
+    let outputTokens = result.outputTokens + verification.outputTokens;
+
+    if (!verification.approved) {
+      result = await this.generator.generate({
+        ...input,
+        revisionInstructions: verification.violations.join('\n'),
+      });
+      verification = await this.generator.verify({
+        scope: input.scope,
+        sourceText: input.text,
+        summary: result.content,
+      });
+      inputTokens += result.inputTokens + verification.inputTokens;
+      outputTokens += result.outputTokens + verification.outputTokens;
+    }
+    if (!verification.approved) {
+      throw new Error(
+        `Summary failed factual verification: ${verification.violations.join('; ')}`,
+      );
+    }
+    return { ...result, inputTokens, outputTokens };
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    mapper: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < items.length) {
+        const index = nextIndex++;
+        results[index] = await mapper(items[index]!);
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(MAX_PARALLEL_GENERATIONS, items.length) },
+        () => worker(),
+      ),
+    );
+    return results;
   }
 
   private async getInputForUser(

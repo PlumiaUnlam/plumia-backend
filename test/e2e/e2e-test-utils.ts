@@ -6,6 +6,7 @@ import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { IMAGE_GENERATION } from '../../src/publishing/ports/image-generation.port';
 import { SUMMARY_QUEUE } from '../../src/summary/ports/summary-queue.port';
+import { SUMMARY_GENERATION_PROVIDER } from '../../src/summary/ports/summary-generation-provider.port';
 import { SummaryOutboxPoller } from '../../src/summary/workers/summary-outbox-poller.service';
 import { SummaryWorkersService } from '../../src/summary/workers/summary-workers.service';
 import { StorageService } from '../../src/storage/storage.service';
@@ -89,6 +90,28 @@ export async function createE2eApp(): Promise<INestApplication> {
     .useValue({
       enqueueGeneration: jest.fn(() => Promise.resolve(undefined)),
       enqueueInvalidation: jest.fn(() => Promise.resolve(undefined)),
+    })
+    .overrideProvider(SUMMARY_GENERATION_PROVIDER)
+    .useValue({
+      generate: jest.fn(() =>
+        Promise.resolve({
+          content: 'Generated summary',
+          inputTokens: 10,
+          outputTokens: 5,
+          provider: 'test',
+          model: 'test-model',
+        }),
+      ),
+      verify: jest.fn(() =>
+        Promise.resolve({
+          approved: true,
+          violations: [],
+          inputTokens: 8,
+          outputTokens: 2,
+          provider: 'test',
+          model: 'test-model',
+        }),
+      ),
     })
     .overrideProvider(SummaryWorkersService)
     .useValue({

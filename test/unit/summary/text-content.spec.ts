@@ -32,4 +32,26 @@ describe('summary text content', () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => estimateTokens(chunk) <= 250)).toBe(true);
   });
+
+  it('splits an oversized paragraph at sentence boundaries', () => {
+    const text = Array.from(
+      { length: 20 },
+      (_, index) => `Sentence ${index + 1} contains enough words to be useful.`,
+    ).join(' ');
+
+    const chunks = splitTextByTokenBudget(text, 80);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => estimateTokens(chunk) <= 80)).toBe(true);
+    expect(chunks.every((chunk) => /[.!?]$/.test(chunk))).toBe(true);
+  });
+
+  it('splits a single oversized sentence without exceeding its budget', () => {
+    const text = 'word '.repeat(500).trim();
+
+    const chunks = splitTextByTokenBudget(text, 80);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => estimateTokens(chunk) <= 80)).toBe(true);
+  });
 });

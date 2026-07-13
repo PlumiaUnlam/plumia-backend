@@ -99,6 +99,7 @@ interface ProjectTree {
 }
 
 export interface EndpointTestContext {
+  app: INestApplication;
   server: App;
   prisma: PrismaClient;
   auth: () => { Authorization: string };
@@ -235,6 +236,9 @@ export function createEndpointTestContext(): EndpointTestContext {
   }
 
   return {
+    get app() {
+      return app!;
+    },
     get server() {
       return server;
     },
