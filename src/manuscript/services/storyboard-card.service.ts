@@ -102,9 +102,7 @@ function getProvidedCardFields(
   dto: CreateStoryboardCardDto | UpdateStoryboardCardDto,
 ): StoryboardCardFields {
   return {
-    ...(dto.description !== undefined
-      ? { description: dto.description }
-      : {}),
+    ...(dto.description !== undefined ? { description: dto.description } : {}),
     ...(dto.status !== undefined ? { status: dto.status } : {}),
     ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
     ...(dto.characters !== undefined ? { characters: dto.characters } : {}),
