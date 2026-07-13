@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, type Scene } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
-import { toSceneStatus } from '../domain/scene-status';
 import {
   CreateSceneData,
   SceneContentUpdateResult,
@@ -14,23 +13,17 @@ import {
   UpdateSceneData,
 } from '../ports/scene-repository.port';
 import { translatePrismaConflict } from './prisma-error';
+import { toSceneRecord } from './scene-record.mapper';
+import { PrismaSceneVersionRepository } from './prisma-scene-version.repository';
 
-interface SceneVersionRow {
-  id: string;
-  sceneId: string;
-  label: string | null;
-  content: Prisma.JsonValue | null;
-  contentHash: string | null;
-  wordCount: number;
-  createdFromId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
-}
 
 @Injectable()
 export class PrismaSceneRepository implements SceneRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly versions: PrismaSceneVersionRepository;
+
+  constructor(private readonly prisma: PrismaService) {
+    this.versions = new PrismaSceneVersionRepository(prisma);
+  }
 
   async createForUser(
     userId: string,
@@ -77,7 +70,7 @@ export class PrismaSceneRepository implements SceneRepository {
           order,
         },
       });
-      return this.toSceneRecord(scene);
+      return toSceneRecord(scene);
     } catch (error: unknown) {
       return translatePrismaConflict(error);
     }
@@ -95,7 +88,7 @@ export class PrismaSceneRepository implements SceneRepository {
       },
     });
 
-    return scene ? this.toSceneRecord(scene) : null;
+    return scene ? toSceneRecord(scene) : null;
   }
 
   async updateForUser(
@@ -147,7 +140,7 @@ export class PrismaSceneRepository implements SceneRepository {
 
         if (existing.contentHash === newHash) {
           return {
-            scene: this.toSceneRecord(existing),
+            scene: toSceneRecord(existing),
             contentChanged: false,
           };
         }
@@ -180,7 +173,7 @@ export class PrismaSceneRepository implements SceneRepository {
         });
 
         return {
-          scene: this.toSceneRecord(scene),
+          scene: toSceneRecord(scene),
           contentChanged: true,
         };
       });
@@ -193,38 +186,7 @@ export class PrismaSceneRepository implements SceneRepository {
     userId: string,
     sceneId: string,
   ): Promise<SceneVersionRecord[] | null> {
-    const scene = await this.prisma.scene.findFirst({
-      where: {
-        id: sceneId,
-        deletedAt: null,
-        chapter: { book: { project: { userId } } },
-      },
-      select: { id: true },
-    });
-
-    if (!scene) {
-      return null;
-    }
-
-    const versions = await this.prisma.$queryRaw<SceneVersionRow[]>`
-      SELECT
-        id::text AS "id",
-        scene_id::text AS "sceneId",
-        label,
-        content,
-        content_hash AS "contentHash",
-        word_count AS "wordCount",
-        created_from_id::text AS "createdFromId",
-        created_at AS "createdAt",
-        updated_at AS "updatedAt",
-        deleted_at AS "deletedAt"
-      FROM scene_version
-      WHERE scene_id = ${sceneId}::uuid
-        AND deleted_at IS NULL
-      ORDER BY created_at DESC
-    `;
-
-    return versions.map((version) => this.toSceneVersionRecord(version));
+    return this.versions.listVersionsForUser(userId, sceneId);
   }
 
   async createVersionForUser(
@@ -234,56 +196,13 @@ export class PrismaSceneRepository implements SceneRepository {
     content?: Record<string, unknown>,
     wordCount?: number,
   ): Promise<SceneVersionRecord | null> {
-    const scene = await this.prisma.scene.findFirst({
-      where: {
-        id: sceneId,
-        deletedAt: null,
-        chapter: { book: { project: { userId } } },
-      },
-    });
-
-    if (!scene) {
-      return null;
-    }
-
-    const versionContent = content ?? scene.content;
-    const versionHash = content
-      ? createContentHash(content)
-      : scene.contentHash;
-
-    const versionContentSql =
-      versionContent === null
-        ? Prisma.sql`NULL`
-        : Prisma.sql`${JSON.stringify(versionContent)}::jsonb`;
-    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>(Prisma.sql`
-      INSERT INTO scene_version (
-        scene_id,
-        label,
-        content,
-        content_hash,
-        word_count
-      )
-      VALUES (
-        ${sceneId}::uuid,
-        ${label ?? null},
-        ${versionContentSql},
-        ${versionHash},
-        ${wordCount ?? scene.wordCount}
-      )
-      RETURNING
-        id::text AS "id",
-        scene_id::text AS "sceneId",
-        label,
-        content,
-        content_hash AS "contentHash",
-        word_count AS "wordCount",
-        created_from_id::text AS "createdFromId",
-        created_at AS "createdAt",
-        updated_at AS "updatedAt",
-        deleted_at AS "deletedAt"
-    `);
-
-    return version ? this.toSceneVersionRecord(version) : null;
+    return this.versions.createVersionForUser(
+      userId,
+      sceneId,
+      label,
+      content,
+      wordCount,
+    );
   }
 
   async findVersionForUser(
@@ -291,32 +210,7 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     versionId: string,
   ): Promise<SceneVersionRecord | null> {
-    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>`
-      SELECT
-        v.id::text AS "id",
-        v.scene_id::text AS "sceneId",
-        v.label,
-        v.content,
-        v.content_hash AS "contentHash",
-        v.word_count AS "wordCount",
-        v.created_from_id::text AS "createdFromId",
-        v.created_at AS "createdAt",
-        v.updated_at AS "updatedAt",
-        v.deleted_at AS "deletedAt"
-      FROM scene_version v
-      JOIN scene s ON s.id = v.scene_id
-      JOIN chapter c ON c.id = s.chapter_id
-      JOIN book b ON b.id = c.book_id
-      JOIN project p ON p.id = b.project_id
-      WHERE v.id = ${versionId}::uuid
-        AND v.scene_id = ${sceneId}::uuid
-        AND v.deleted_at IS NULL
-        AND s.deleted_at IS NULL
-        AND p.user_id = ${userId}
-      LIMIT 1
-    `;
-
-    return version ? this.toSceneVersionRecord(version) : null;
+    return this.versions.findVersionForUser(userId, sceneId, versionId);
   }
 
   async updateVersionContentForUser(
@@ -325,79 +219,12 @@ export class PrismaSceneRepository implements SceneRepository {
     versionId: string,
     data: UpdateSceneContentData,
   ): Promise<SceneVersionContentUpdateResult | null> {
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const [existing] = await tx.$queryRaw<SceneVersionRow[]>`
-          SELECT
-            v.id::text AS "id",
-            v.scene_id::text AS "sceneId",
-            v.label,
-            v.content,
-            v.content_hash AS "contentHash",
-            v.word_count AS "wordCount",
-            v.created_from_id::text AS "createdFromId",
-            v.created_at AS "createdAt",
-            v.updated_at AS "updatedAt",
-            v.deleted_at AS "deletedAt"
-          FROM scene_version v
-          JOIN scene s ON s.id = v.scene_id
-          JOIN chapter c ON c.id = s.chapter_id
-          JOIN book b ON b.id = c.book_id
-          JOIN project p ON p.id = b.project_id
-          WHERE v.id = ${versionId}::uuid
-            AND v.scene_id = ${sceneId}::uuid
-            AND v.deleted_at IS NULL
-            AND s.deleted_at IS NULL
-            AND p.user_id = ${userId}
-          LIMIT 1
-        `;
-
-        if (!existing) {
-          return null;
-        }
-
-        const newHash = createContentHash(data.content);
-
-        if (existing.contentHash === newHash) {
-          return {
-            version: this.toSceneVersionRecord(existing),
-            contentChanged: false,
-          };
-        }
-
-        const [version] = await tx.$queryRaw<SceneVersionRow[]>(Prisma.sql`
-          UPDATE scene_version
-          SET
-            content = ${JSON.stringify(data.content)}::jsonb,
-            content_hash = ${newHash},
-            word_count = ${data.wordCount ?? existing.wordCount},
-            updated_at = CURRENT_TIMESTAMP
-          WHERE id = ${existing.id}::uuid
-          RETURNING
-            id::text AS "id",
-            scene_id::text AS "sceneId",
-            label,
-            content,
-            content_hash AS "contentHash",
-            word_count AS "wordCount",
-            created_from_id::text AS "createdFromId",
-            created_at AS "createdAt",
-            updated_at AS "updatedAt",
-            deleted_at AS "deletedAt"
-        `);
-
-        if (!version) {
-          return null;
-        }
-
-        return {
-          version: this.toSceneVersionRecord(version),
-          contentChanged: true,
-        };
-      });
-    } catch (error: unknown) {
-      return translatePrismaConflict(error);
-    }
+    return this.versions.updateVersionContentForUser(
+      userId,
+      sceneId,
+      versionId,
+      data,
+    );
   }
 
   async updateVersionForUser(
@@ -406,35 +233,7 @@ export class PrismaSceneRepository implements SceneRepository {
     versionId: string,
     data: { label?: string | null },
   ): Promise<SceneVersionRecord | null> {
-    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>`
-      UPDATE scene_version v
-      SET
-        label = ${data.label ?? null},
-        updated_at = CURRENT_TIMESTAMP
-      FROM scene s
-      JOIN chapter c ON c.id = s.chapter_id
-      JOIN book b ON b.id = c.book_id
-      JOIN project p ON p.id = b.project_id
-      WHERE v.id = ${versionId}::uuid
-        AND v.scene_id = ${sceneId}::uuid
-        AND s.id = v.scene_id
-        AND v.deleted_at IS NULL
-        AND s.deleted_at IS NULL
-        AND p.user_id = ${userId}
-      RETURNING
-        v.id::text AS "id",
-        v.scene_id::text AS "sceneId",
-        v.label,
-        v.content,
-        v.content_hash AS "contentHash",
-        v.word_count AS "wordCount",
-        v.created_from_id::text AS "createdFromId",
-        v.created_at AS "createdAt",
-        v.updated_at AS "updatedAt",
-        v.deleted_at AS "deletedAt"
-    `;
-
-    return version ? this.toSceneVersionRecord(version) : null;
+    return this.versions.updateVersionForUser(userId, sceneId, versionId, data);
   }
 
   async softDeleteVersionForUser(
@@ -443,35 +242,12 @@ export class PrismaSceneRepository implements SceneRepository {
     versionId: string,
     deletedAt: Date,
   ): Promise<SceneVersionRecord | null> {
-    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>`
-      UPDATE scene_version v
-      SET
-        deleted_at = ${deletedAt},
-        updated_at = CURRENT_TIMESTAMP
-      FROM scene s
-      JOIN chapter c ON c.id = s.chapter_id
-      JOIN book b ON b.id = c.book_id
-      JOIN project p ON p.id = b.project_id
-      WHERE v.id = ${versionId}::uuid
-        AND v.scene_id = ${sceneId}::uuid
-        AND s.id = v.scene_id
-        AND v.deleted_at IS NULL
-        AND s.deleted_at IS NULL
-        AND p.user_id = ${userId}
-      RETURNING
-        v.id::text AS "id",
-        v.scene_id::text AS "sceneId",
-        v.label,
-        v.content,
-        v.content_hash AS "contentHash",
-        v.word_count AS "wordCount",
-        v.created_from_id::text AS "createdFromId",
-        v.created_at AS "createdAt",
-        v.updated_at AS "updatedAt",
-        v.deleted_at AS "deletedAt"
-    `;
-
-    return version ? this.toSceneVersionRecord(version) : null;
+    return this.versions.softDeleteVersionForUser(
+      userId,
+      sceneId,
+      versionId,
+      deletedAt,
+    );
   }
 
   async restoreVersionForUser(
@@ -479,74 +255,7 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     versionId: string,
   ): Promise<SceneContentUpdateResult | null> {
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const [version] = await tx.$queryRaw<SceneVersionRow[]>`
-          SELECT
-            v.id::text AS "id",
-            v.scene_id::text AS "sceneId",
-            v.label,
-            v.content,
-            v.content_hash AS "contentHash",
-            v.word_count AS "wordCount",
-            v.created_from_id::text AS "createdFromId",
-            v.created_at AS "createdAt",
-            v.updated_at AS "updatedAt",
-            v.deleted_at AS "deletedAt"
-          FROM scene_version v
-          JOIN scene s ON s.id = v.scene_id
-          JOIN chapter c ON c.id = s.chapter_id
-          JOIN book b ON b.id = c.book_id
-          JOIN project p ON p.id = b.project_id
-          WHERE v.id = ${versionId}::uuid
-            AND v.scene_id = ${sceneId}::uuid
-            AND v.deleted_at IS NULL
-            AND s.deleted_at IS NULL
-            AND p.user_id = ${userId}
-          LIMIT 1
-        `;
-
-        if (!version) {
-          return null;
-        }
-
-        const scene = await tx.scene.update({
-          where: { id: sceneId },
-          data: {
-            content:
-              version.content === null
-                ? Prisma.JsonNull
-                : (version.content as Prisma.InputJsonValue),
-            contentHash: version.contentHash,
-            wordCount: version.wordCount,
-          },
-        });
-
-        await tx.outbox.create({
-          data: {
-            aggregateType: 'Scene',
-            aggregateId: scene.id,
-            eventType: 'scene.content.updated',
-            payload: {
-              sceneId: scene.id,
-              chapterId: scene.chapterId,
-              contentHash: scene.contentHash,
-              wordCount: scene.wordCount,
-              userId,
-              restoredFromVersionId: version.id,
-            },
-            createdAt: new Date(),
-          },
-        });
-
-        return {
-          scene: this.toSceneRecord(scene),
-          contentChanged: true,
-        };
-      });
-    } catch (error: unknown) {
-      return translatePrismaConflict(error);
-    }
+    return this.versions.restoreVersionForUser(userId, sceneId, versionId);
   }
 
   async softDeleteForUser(
@@ -571,7 +280,7 @@ export class PrismaSceneRepository implements SceneRepository {
       where: { id: sceneId, chapter: { book: { project: { userId } } } },
     });
 
-    return scene ? this.toSceneRecord(scene) : null;
+    return scene ? toSceneRecord(scene) : null;
   }
 
   private toSceneUpdateData(
@@ -585,36 +294,5 @@ export class PrismaSceneRepository implements SceneRepository {
     };
   }
 
-  private toSceneRecord(scene: Scene): SceneRecord {
-    return {
-      id: scene.id,
-      chapterId: scene.chapterId,
-      title: scene.title,
-      sortKey: scene.sortKey,
-      content: scene.content,
-      contentHash: scene.contentHash,
-      wordCount: scene.wordCount,
-      povCharacterId: scene.povCharacterId,
-      status: toSceneStatus(scene.status),
-      order: scene.order,
-      createdAt: scene.createdAt,
-      updatedAt: scene.updatedAt,
-      deletedAt: scene.deletedAt,
-    };
-  }
 
-  private toSceneVersionRecord(version: SceneVersionRow): SceneVersionRecord {
-    return {
-      id: version.id,
-      sceneId: version.sceneId,
-      label: version.label,
-      content: version.content,
-      contentHash: version.contentHash,
-      wordCount: version.wordCount,
-      createdFromId: version.createdFromId,
-      createdAt: version.createdAt,
-      updatedAt: version.updatedAt,
-      deletedAt: version.deletedAt,
-    };
-  }
 }
