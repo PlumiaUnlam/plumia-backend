@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../prisma/prisma.service';
+import { type PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
 import type {
   SceneContentUpdateResult,
@@ -376,5 +376,4 @@ export class PrismaSceneVersionRepository {
       return translatePrismaConflict(error);
     }
   }
-
 }

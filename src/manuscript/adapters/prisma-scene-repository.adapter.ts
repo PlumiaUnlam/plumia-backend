@@ -16,7 +16,6 @@ import { translatePrismaConflict } from './prisma-error';
 import { toSceneRecord } from './scene-record.mapper';
 import { PrismaSceneVersionRepository } from './prisma-scene-version.repository';
 
-
 @Injectable()
 export class PrismaSceneRepository implements SceneRepository {
   private readonly versions: PrismaSceneVersionRepository;
@@ -293,6 +292,4 @@ export class PrismaSceneRepository implements SceneRepository {
       ...(data.order !== undefined ? { order: data.order } : {}),
     };
   }
-
-
 }
