@@ -247,7 +247,9 @@ export class PrismaSceneRepository implements SceneRepository {
     }
 
     const versionContent = content ?? scene.content;
-    const versionHash = content ? createContentHash(content) : scene.contentHash;
+    const versionHash = content
+      ? createContentHash(content)
+      : scene.contentHash;
 
     const versionContentSql =
       versionContent === null

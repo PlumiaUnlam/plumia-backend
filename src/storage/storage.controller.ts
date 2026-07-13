@@ -16,12 +16,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import {
-  IsString,
-  IsIn,
-  IsNotEmpty,
-  IsOptional,
-} from 'class-validator';
+import { IsString, IsIn, IsNotEmpty, IsOptional } from 'class-validator';
 import type { Response } from 'express';
 import { FirebaseAdminService } from '../auth/firebase-admin.service';
 import { Public } from '../common/decorators/public.decorator';
@@ -108,9 +103,7 @@ export class StorageController {
     @Request() req: AuthenticatedRequest,
     @Body() dto: PresignedDownloadByKeyDto,
   ): Promise<{ url: string }> {
-    const match = dto.storageKey.match(
-      /^(entities|scenes)\/([^/]+)\/[^/]+$/,
-    );
+    const match = dto.storageKey.match(/^(entities|scenes)\/([^/]+)\/[^/]+$/);
 
     if (!match) {
       throw new HttpException('Invalid storage key', HttpStatus.BAD_REQUEST);
