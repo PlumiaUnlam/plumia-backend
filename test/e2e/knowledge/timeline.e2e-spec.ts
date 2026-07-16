@@ -102,7 +102,9 @@ describe('Knowledge timeline endpoints e2e', () => {
 
   it('moves an event to a relative position without using its date', async () => {
     const { project } = await ctx.createProjectTree();
-    const createEvent = async (title: string): Promise<TimelineEventResponse> => {
+    const createEvent = async (
+      title: string,
+    ): Promise<TimelineEventResponse> => {
       const response = await request(ctx.server)
         .post(`/knowledge/timeline?projectId=${project.id}`)
         .set(ctx.auth())

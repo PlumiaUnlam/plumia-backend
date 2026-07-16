@@ -297,7 +297,7 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
     projectId: string,
     client: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<{ id: string } | null> {
-    return await client.project.findFirst({
+    return client.project.findFirst({
       where: { id: projectId, userId, deletedAt: null },
       select: { id: true },
     });
