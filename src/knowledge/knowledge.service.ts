@@ -24,6 +24,15 @@ import type {
 } from './ports/entity-search.port';
 import { CreateRelationshipDto } from './dto/create-relationship.dto';
 import { UpdateRelationshipDto } from './dto/update-relationship.dto';
+import { CreateTimelineEventDto } from './dto/timeline/create-timeline-event.dto';
+import { MoveTimelineEventDto } from './dto/timeline/move-timeline-event.dto';
+import { UpdateTimelineEventDto } from './dto/timeline/update-timeline-event.dto';
+import {
+  TIMELINE_EVENT_REPOSITORY,
+  type TimelineEventListFilters,
+  type TimelineEventRecord,
+  type TimelineEventRepository,
+} from './ports/timeline-event-repository.port';
 
 @Injectable()
 export class KnowledgeService {
@@ -33,6 +42,8 @@ export class KnowledgeService {
     private readonly entityRepository: EntityRepository,
     @Inject(RELATIONSHIP_REPOSITORY)
     private readonly relationshipRepository: RelationshipRepository,
+    @Inject(TIMELINE_EVENT_REPOSITORY)
+    private readonly timelineEventRepository: TimelineEventRepository,
   ) {}
 
   searchEntities(
@@ -181,5 +192,103 @@ export class KnowledgeService {
     }
 
     return entity;
+  }
+
+  async listTimelineEvents(
+    userId: string,
+    filters: TimelineEventListFilters,
+  ): Promise<TimelineEventRecord[]> {
+    const events = await this.timelineEventRepository.listForProject(
+      userId,
+      filters,
+    );
+    if (!events) {
+      throw new NotFoundException('Project not found');
+    }
+    return events;
+  }
+
+  async createTimelineEvent(
+    userId: string,
+    projectId: string,
+    dto: CreateTimelineEventDto,
+  ): Promise<TimelineEventRecord> {
+    const event = await this.timelineEventRepository.createForUser(userId, {
+      projectId,
+      title: dto.title,
+      ...(dto.description === undefined
+        ? {}
+        : { description: dto.description }),
+      ...(dto.date === undefined ? {} : { date: dto.date }),
+      ...(dto.temporalLabel === undefined
+        ? {}
+        : { temporalLabel: dto.temporalLabel }),
+      ...(dto.impact === undefined ? {} : { impact: dto.impact }),
+      ...(dto.storyboardArcId === undefined
+        ? {}
+        : { storyboardArcId: dto.storyboardArcId }),
+      ...(dto.entityIds === undefined ? {} : { entityIds: dto.entityIds }),
+      ...(dto.beforeEventId === undefined
+        ? {}
+        : { beforeEventId: dto.beforeEventId }),
+      ...(dto.afterEventId === undefined
+        ? {}
+        : { afterEventId: dto.afterEventId }),
+    });
+    if (!event) {
+      throw new NotFoundException('Project, arc, entity or position not found');
+    }
+    return event;
+  }
+
+  async updateTimelineEvent(
+    userId: string,
+    id: string,
+    dto: UpdateTimelineEventDto,
+  ): Promise<TimelineEventRecord> {
+    const event = await this.timelineEventRepository.updateForUser(
+      userId,
+      id,
+      dto,
+    );
+    if (!event) {
+      throw new NotFoundException('Timeline event, arc or entity not found');
+    }
+    return event;
+  }
+
+  async moveTimelineEvent(
+    userId: string,
+    id: string,
+    dto: MoveTimelineEventDto,
+  ): Promise<TimelineEventRecord> {
+    if (dto.beforeEventId === undefined && dto.afterEventId === undefined) {
+      throw new BadRequestException('A timeline position is required');
+    }
+    const event = await this.timelineEventRepository.moveForUser(
+      userId,
+      id,
+      dto.beforeEventId,
+      dto.afterEventId,
+    );
+    if (!event) {
+      throw new NotFoundException('Timeline event or position not found');
+    }
+    return event;
+  }
+
+  async removeTimelineEvent(
+    userId: string,
+    id: string,
+  ): Promise<TimelineEventRecord> {
+    const event = await this.timelineEventRepository.softDeleteForUser(
+      userId,
+      id,
+      new Date(),
+    );
+    if (!event) {
+      throw new NotFoundException('Timeline event not found');
+    }
+    return event;
   }
 }
