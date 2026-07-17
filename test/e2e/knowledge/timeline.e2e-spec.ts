@@ -55,6 +55,18 @@ describe('Knowledge timeline endpoints e2e', () => {
 
     await request(ctx.server)
       .get(
+        `/knowledge/timeline?projectId=${project.id}&storyboardArcId=${arc.id}&impact=HIGH`,
+      )
+      .set(ctx.auth())
+      .expect(200)
+      .expect((response) => {
+        expect(responseBody<TimelineEventResponse[]>(response)).toMatchObject([
+          { id: first.id },
+        ]);
+      });
+
+    await request(ctx.server)
+      .get(
         `/knowledge/timeline?projectId=${project.id}&entityId=${targetEntity.id}&impact=LOW`,
       )
       .set(ctx.auth())
@@ -123,6 +135,18 @@ describe('Knowledge timeline endpoints e2e', () => {
       .expect(200);
 
     await request(ctx.server)
+      .post(`/knowledge/timeline/${first.id}/move`)
+      .set(ctx.auth())
+      .send({ afterEventId: second.id })
+      .expect(200);
+
+    await request(ctx.server)
+      .post(`/knowledge/timeline/${first.id}/move`)
+      .set(ctx.auth())
+      .send({ beforeEventId: third.id })
+      .expect(200);
+
+    await request(ctx.server)
       .get(`/knowledge/timeline?projectId=${project.id}`)
       .set(ctx.auth())
       .expect(200)
@@ -131,6 +155,86 @@ describe('Knowledge timeline endpoints e2e', () => {
           responseBody<TimelineEventResponse[]>(response).map(({ id }) => id),
         ).toEqual([first.id, third.id, second.id]);
       });
+  });
+
+  it('supports insertion at the beginning and end, and rejects foreign positions', async () => {
+    const firstProject = await ctx.createProject('First project');
+    const secondProject = await ctx.createProject('Second project');
+    const createEvent = async (
+      projectId: string,
+      title: string,
+      position?: { beforeEventId?: string; afterEventId?: string },
+    ): Promise<TimelineEventResponse> => {
+      const response = await request(ctx.server)
+        .post(`/knowledge/timeline?projectId=${projectId}`)
+        .set(ctx.auth())
+        .send({ title, ...position })
+        .expect(201);
+      return responseBody<TimelineEventResponse>(response);
+    };
+    const first = await createEvent(firstProject.id, 'First');
+    const last = await createEvent(firstProject.id, 'Last');
+    const beginning = await createEvent(firstProject.id, 'Beginning', {
+      beforeEventId: first.id,
+    });
+    const ending = await createEvent(firstProject.id, 'Ending', {
+      afterEventId: last.id,
+    });
+    const foreign = await createEvent(secondProject.id, 'Foreign');
+
+    await request(ctx.server)
+      .get(`/knowledge/timeline?projectId=${firstProject.id}`)
+      .set(ctx.auth())
+      .expect(200)
+      .expect((response) => {
+        expect(
+          responseBody<TimelineEventResponse[]>(response).map(({ id }) => id),
+        ).toEqual([beginning.id, first.id, last.id, ending.id]);
+      });
+
+    await request(ctx.server)
+      .post(`/knowledge/timeline?projectId=${firstProject.id}`)
+      .set(ctx.auth())
+      .send({ title: 'Invalid foreign position', beforeEventId: foreign.id })
+      .expect(404);
+
+    await request(ctx.server)
+      .post(`/knowledge/timeline/${first.id}/move`)
+      .set(ctx.auth())
+      .send({ afterEventId: foreign.id })
+      .expect(404);
+  });
+
+  it('does not expose or mutate a soft-deleted event', async () => {
+    const { project } = await ctx.createProjectTree();
+    const eventResponse = await request(ctx.server)
+      .post(`/knowledge/timeline?projectId=${project.id}`)
+      .set(ctx.auth())
+      .send({ title: 'Disposable event' })
+      .expect(201);
+    const event = responseBody<TimelineEventResponse>(eventResponse);
+
+    await request(ctx.server)
+      .delete(`/knowledge/timeline/${event.id}`)
+      .set(ctx.auth())
+      .expect(200);
+
+    await request(ctx.server)
+      .patch(`/knowledge/timeline/${event.id}`)
+      .set(ctx.auth())
+      .send({ title: 'Should not update' })
+      .expect(404);
+
+    await request(ctx.server)
+      .post(`/knowledge/timeline/${event.id}/move`)
+      .set(ctx.auth())
+      .send({ beforeEventId: event.id })
+      .expect(404);
+
+    await request(ctx.server)
+      .delete(`/knowledge/timeline/${event.id}`)
+      .set(ctx.auth())
+      .expect(404);
   });
 
   it('enforces ownership and validates timeline input', async () => {
@@ -145,6 +249,20 @@ describe('Knowledge timeline endpoints e2e', () => {
     const foreignProject = await ctx.prisma.project.create({
       data: { userId: foreignUser.id, title: 'Foreign project' },
     });
+    const foreignEntity = await ctx.prisma.entity.create({
+      data: {
+        projectId: foreignProject.id,
+        canonicalName: 'Foreign entity',
+        type: 'CHARACTER',
+      },
+    });
+    const foreignArc = await ctx.prisma.storyboardArc.create({
+      data: {
+        projectId: foreignProject.id,
+        title: 'Foreign arc',
+        sortKey: '000001',
+      },
+    });
 
     await request(ctx.server)
       .get(`/knowledge/timeline?projectId=${foreignProject.id}`)
@@ -152,6 +270,35 @@ describe('Knowledge timeline endpoints e2e', () => {
       .expect(404);
 
     const project = await ctx.createProject();
+    await request(ctx.server)
+      .post(`/knowledge/timeline?projectId=${project.id}`)
+      .set(ctx.auth())
+      .send({
+        title: 'Foreign references',
+        storyboardArcId: foreignArc.id,
+        entityIds: [foreignEntity.id],
+      })
+      .expect(404);
+
+    const ownEventResponse = await request(ctx.server)
+      .post(`/knowledge/timeline?projectId=${project.id}`)
+      .set(ctx.auth())
+      .send({ title: 'Own event' })
+      .expect(201);
+    const ownEvent = responseBody<TimelineEventResponse>(ownEventResponse);
+
+    await request(ctx.server)
+      .patch(`/knowledge/timeline/${ownEvent.id}`)
+      .set(ctx.auth())
+      .send({ storyboardArcId: foreignArc.id })
+      .expect(404);
+
+    await request(ctx.server)
+      .patch(`/knowledge/timeline/${ownEvent.id}`)
+      .set(ctx.auth())
+      .send({ entityIds: [foreignEntity.id] })
+      .expect(404);
+
     await request(ctx.server)
       .post(`/knowledge/timeline?projectId=${project.id}`)
       .set(ctx.auth())
