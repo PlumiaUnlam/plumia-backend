@@ -8,8 +8,9 @@ DROP INDEX "idx_note_deleted";
 DROP INDEX "idx_note_status";
 
 -- AlterTable
-ALTER TABLE "scene_version" ALTER COLUMN "id" DROP DEFAULT,
-ALTER COLUMN "updated_at" DROP DEFAULT;
+ALTER TABLE "scene_version"
+  ALTER COLUMN "id" SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN "updated_at" SET DEFAULT CURRENT_TIMESTAMP;
 
 -- AlterTable
 ALTER TABLE "storyboard_arc" ALTER COLUMN "id" DROP DEFAULT;
