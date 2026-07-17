@@ -88,7 +88,7 @@ export class PrismaChapterRepository implements ChapterRepository {
     return this.findByIdForUser(userId, chapterId);
   }
 
-  async softDeleteForUser(
+  softDeleteForUser(
     userId: string,
     chapterId: string,
     deletedAt: Date,

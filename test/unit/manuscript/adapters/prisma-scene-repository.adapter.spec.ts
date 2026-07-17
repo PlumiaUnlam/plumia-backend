@@ -140,7 +140,7 @@ describe('PrismaSceneRepository', () => {
       data: {
         aggregateType: 'Scene',
         aggregateId: 'scene-1',
-        eventType: 'scene.content.updated',
+        eventType: 'scene_changed',
         payload: {
           sceneId: 'scene-1',
           chapterId: 'chapter-1',

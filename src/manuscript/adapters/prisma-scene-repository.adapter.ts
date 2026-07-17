@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, type Scene } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
+import { planSceneChunks } from '../domain/scene-chunking';
 import { toSceneStatus } from '../domain/scene-status';
 import {
   CreateSceneData,
@@ -28,6 +29,15 @@ interface SceneVersionRow {
   deletedAt: Date | null;
 }
 
+interface ChunkRow {
+  id: string;
+  chunkIndex: number;
+  content: string;
+  contentHash: string | null;
+  tokenCount: number;
+  isDirty: boolean;
+}
+
 @Injectable()
 export class PrismaSceneRepository implements SceneRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -42,7 +52,14 @@ export class PrismaSceneRepository implements SceneRepository {
         deletedAt: null,
         book: { project: { userId } },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        book: {
+          select: {
+            projectId: true,
+          },
+        },
+      },
     });
 
     if (!chapter) {
@@ -59,23 +76,33 @@ export class PrismaSceneRepository implements SceneRepository {
       )._max.order ?? 0) + 1;
 
     try {
-      const scene = await this.prisma.scene.create({
-        data: {
-          chapterId: data.chapterId,
-          sortKey: data.sortKey,
-          ...(data.title !== undefined ? { title: data.title } : {}),
-          ...(data.content !== undefined
-            ? {
-                content: data.content as Prisma.InputJsonValue,
-                contentHash: createContentHash(data.content),
-              }
-            : {}),
-          ...(data.wordCount !== undefined
-            ? { wordCount: data.wordCount }
-            : {}),
-          ...(data.status !== undefined ? { status: data.status } : {}),
-          order,
-        },
+      const scene = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.scene.create({
+          data: {
+            chapterId: data.chapterId,
+            sortKey: data.sortKey,
+            ...(data.title !== undefined ? { title: data.title } : {}),
+            ...(data.content !== undefined
+              ? {
+                  content: data.content as Prisma.InputJsonValue,
+                  contentHash: createContentHash(data.content),
+                }
+              : {}),
+            ...(data.wordCount !== undefined
+              ? { wordCount: data.wordCount }
+              : {}),
+            ...(data.status !== undefined ? { status: data.status } : {}),
+            order,
+          },
+        });
+
+        if (data.content !== undefined) {
+          await this.syncSceneChunks(tx, created.id, chapter.book.projectId, data.content, {
+            markDirty: false,
+          });
+        }
+
+        return created;
       });
       return this.toSceneRecord(scene);
     } catch (error: unknown) {
@@ -152,10 +179,10 @@ export class PrismaSceneRepository implements SceneRepository {
           };
         }
 
-        const scene = await tx.scene.update({
-          where: { id: existing.id },
-          data: {
-            content: data.content as Prisma.InputJsonValue,
+      const scene = await tx.scene.update({
+        where: { id: existing.id },
+        data: {
+          content: data.content as Prisma.InputJsonValue,
             contentHash: newHash,
             ...(data.wordCount !== undefined
               ? { wordCount: data.wordCount }
@@ -163,11 +190,20 @@ export class PrismaSceneRepository implements SceneRepository {
           },
         });
 
+        const projectId = await this.getProjectIdForScene(tx, scene.id);
+        if (!projectId) {
+          return null;
+        }
+
+        await this.syncSceneChunks(tx, scene.id, projectId, data.content, {
+          markDirty: true,
+        });
+
         await tx.outbox.create({
           data: {
             aggregateType: 'Scene',
             aggregateId: scene.id,
-            eventType: 'scene.content.updated',
+            eventType: 'scene_changed',
             payload: {
               sceneId: scene.id,
               chapterId: scene.chapterId,
@@ -520,11 +556,32 @@ export class PrismaSceneRepository implements SceneRepository {
           },
         });
 
+        const projectId = await this.getProjectIdForScene(tx, sceneId);
+        if (!projectId) {
+          return null;
+        }
+
+        if (version.content !== null) {
+          await this.syncSceneChunks(
+            tx,
+            scene.id,
+            projectId,
+            version.content as Record<string, unknown>,
+            {
+              markDirty: true,
+            },
+          );
+        } else {
+          await this.syncSceneChunks(tx, scene.id, projectId, null, {
+            markDirty: true,
+          });
+        }
+
         await tx.outbox.create({
           data: {
             aggregateType: 'Scene',
             aggregateId: scene.id,
-            eventType: 'scene.content.updated',
+            eventType: 'scene_changed',
             payload: {
               sceneId: scene.id,
               chapterId: scene.chapterId,
@@ -615,4 +672,103 @@ export class PrismaSceneRepository implements SceneRepository {
       deletedAt: version.deletedAt,
     };
   }
+
+  private async syncSceneChunks(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+    projectId: string,
+    content: Record<string, unknown> | null,
+    options: { markDirty: boolean },
+  ): Promise<void> {
+    if (content === null) {
+      await tx.chunk.deleteMany({ where: { sceneId } });
+      return;
+    }
+
+    const plans = planSceneChunks(content);
+    const existing = await tx.chunk.findMany({
+      where: { sceneId },
+      orderBy: { chunkIndex: 'asc' },
+      select: {
+        id: true,
+        chunkIndex: true,
+        content: true,
+        contentHash: true,
+        tokenCount: true,
+        isDirty: true,
+      },
+    });
+
+    const existingByIndex = new Map<number, ChunkRow>(
+      existing.map((chunk) => [chunk.chunkIndex, chunk] as const),
+    );
+    const seenIndices = new Set<number>();
+
+    for (const plan of plans) {
+      seenIndices.add(plan.chunkIndex);
+      const current = existingByIndex.get(plan.chunkIndex);
+
+      if (!current) {
+        await tx.chunk.create({
+          data: {
+            projectId,
+            sceneId,
+            content: plan.content,
+            tokenCount: plan.tokenCount,
+            chunkIndex: plan.chunkIndex,
+            contentHash: plan.contentHash,
+            isDirty: options.markDirty,
+          },
+        });
+        continue;
+      }
+
+      const hasChanged =
+        current.contentHash !== plan.contentHash || current.content !== plan.content;
+      if (hasChanged) {
+        await tx.chunk.update({
+          where: { id: current.id },
+          data: {
+            content: plan.content,
+            tokenCount: plan.tokenCount,
+            contentHash: plan.contentHash,
+            isDirty: options.markDirty,
+          },
+        });
+      }
+    }
+
+    const staleChunkIds = existing
+      .filter((chunk) => !seenIndices.has(chunk.chunkIndex))
+      .map((chunk) => chunk.id);
+
+    if (staleChunkIds.length > 0) {
+      await tx.chunk.deleteMany({
+        where: { id: { in: staleChunkIds } },
+      });
+    }
+  }
+
+  private async getProjectIdForScene(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+  ): Promise<string | null> {
+    const scene = await tx.scene.findFirst({
+      where: { id: sceneId },
+      select: {
+        chapter: {
+          select: {
+            book: {
+              select: {
+                projectId: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return scene?.chapter.book.projectId ?? null;
+  }
+
 }

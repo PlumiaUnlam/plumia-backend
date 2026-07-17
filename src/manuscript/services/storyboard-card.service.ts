@@ -9,6 +9,11 @@ import {
   type UpdateStoryboardCardData,
 } from '../ports/storyboard-card-repository.port';
 
+type StoryboardCardFields = Omit<
+  CreateStoryboardCardData,
+  'projectId' | 'title'
+>;
+
 @Injectable()
 export class StoryboardCardService {
   constructor(
@@ -40,15 +45,7 @@ export class StoryboardCardService {
     const data: CreateStoryboardCardData = {
       projectId,
       title: dto.title,
-      ...(dto.description !== undefined
-        ? { description: dto.description }
-        : {}),
-      ...(dto.status !== undefined ? { status: dto.status } : {}),
-      ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
-      ...(dto.characters !== undefined ? { characters: dto.characters } : {}),
-      ...(dto.entityIds !== undefined ? { entityIds: dto.entityIds } : {}),
-      ...(dto.chapterId !== undefined ? { chapterId: dto.chapterId } : {}),
-      ...(dto.sortKey !== undefined ? { sortKey: dto.sortKey } : {}),
+      ...getProvidedCardFields(dto),
     };
 
     const card = await this.storyboardCardRepository.createForUser(
@@ -70,15 +67,7 @@ export class StoryboardCardService {
   ): Promise<StoryboardCardRecord> {
     const data: UpdateStoryboardCardData = {
       ...(dto.title !== undefined ? { title: dto.title } : {}),
-      ...(dto.description !== undefined
-        ? { description: dto.description }
-        : {}),
-      ...(dto.status !== undefined ? { status: dto.status } : {}),
-      ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
-      ...(dto.characters !== undefined ? { characters: dto.characters } : {}),
-      ...(dto.entityIds !== undefined ? { entityIds: dto.entityIds } : {}),
-      ...(dto.chapterId !== undefined ? { chapterId: dto.chapterId } : {}),
-      ...(dto.sortKey !== undefined ? { sortKey: dto.sortKey } : {}),
+      ...getProvidedCardFields(dto),
     };
 
     const card = await this.storyboardCardRepository.updateForUser(
@@ -107,4 +96,18 @@ export class StoryboardCardService {
 
     return card;
   }
+}
+
+function getProvidedCardFields(
+  dto: CreateStoryboardCardDto | UpdateStoryboardCardDto,
+): StoryboardCardFields {
+  return {
+    ...(dto.description !== undefined ? { description: dto.description } : {}),
+    ...(dto.status !== undefined ? { status: dto.status } : {}),
+    ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
+    ...(dto.characters !== undefined ? { characters: dto.characters } : {}),
+    ...(dto.entityIds !== undefined ? { entityIds: dto.entityIds } : {}),
+    ...(dto.chapterId !== undefined ? { chapterId: dto.chapterId } : {}),
+    ...(dto.sortKey !== undefined ? { sortKey: dto.sortKey } : {}),
+  };
 }

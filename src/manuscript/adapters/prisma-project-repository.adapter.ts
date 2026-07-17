@@ -134,7 +134,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     return this.findRecordByIdForUser(userId, projectId);
   }
 
-  async softDeleteForUser(
+  softDeleteForUser(
     userId: string,
     projectId: string,
     deletedAt: Date,

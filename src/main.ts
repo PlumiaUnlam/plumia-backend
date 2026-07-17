@@ -1,8 +1,17 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { SystemService } from './system/system.service';
 
 async function bootstrap(): Promise<void> {
+  const role = (process.env['APP_ROLE'] ?? 'all').toLowerCase();
+
+  if (role === 'worker') {
+    const app = await NestFactory.createApplicationContext(AppModule);
+    await app.init();
+    return;
+  }
+
   const app = await NestFactory.create(AppModule);
 
   // Habilitamos CORS indicando exactamente qué orígenes están permitidos
@@ -20,6 +29,8 @@ async function bootstrap(): Promise<void> {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false }),
   );
+
+  void app.get(SystemService);
 
   await app.listen(process.env['PORT'] ?? 3000);
 }
