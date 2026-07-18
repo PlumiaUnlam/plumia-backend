@@ -85,18 +85,22 @@ export class PrismaSceneVersionRepository {
         : Prisma.sql`${JSON.stringify(versionContent)}::jsonb`;
     const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>(Prisma.sql`
       INSERT INTO scene_version (
+        id,
         scene_id,
         label,
         content,
         content_hash,
-        word_count
+        word_count,
+        updated_at
       )
       VALUES (
+        gen_random_uuid(),
         ${sceneId}::uuid,
         ${label ?? null},
         ${versionContentSql},
         ${versionHash},
-        ${wordCount ?? scene.wordCount}
+        ${wordCount ?? scene.wordCount},
+        CURRENT_TIMESTAMP
       )
       RETURNING
         id::text AS "id",

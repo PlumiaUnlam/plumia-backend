@@ -13,7 +13,6 @@ interface MockPrismaService {
   };
   scene: {
     aggregate: jest.Mock;
-    create: jest.Mock;
     findFirst: jest.Mock;
     updateMany: jest.Mock;
   };
@@ -70,9 +69,27 @@ describe('PrismaSceneRepository', () => {
   });
 
   it('creates a scene with a content hash when content is provided', async () => {
-    prisma.chapter.findFirst.mockResolvedValue({ id: 'chapter-1' });
+    prisma.chapter.findFirst.mockResolvedValue({
+      id: 'chapter-1',
+      book: { projectId: 'project-1' },
+    });
     prisma.scene.aggregate.mockResolvedValue({ _max: { order: 2 } });
-    prisma.scene.create.mockResolvedValue(scene);
+    const tx = {
+      scene: {
+        create: jest.fn().mockResolvedValue(scene),
+      },
+      chunk: {
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+        update: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+    };
+    prisma.$transaction.mockImplementation(
+      async (
+        callback: (transaction: typeof tx) => Promise<SceneRecord | null>,
+      ) => callback(tx),
+    );
 
     const result = await repository.createForUser('user-1', {
       chapterId: 'chapter-1',
@@ -83,7 +100,7 @@ describe('PrismaSceneRepository', () => {
     });
 
     expect(result).toEqual(scene);
-    expect(prisma.scene.create).toHaveBeenCalledWith({
+    expect(tx.scene.create).toHaveBeenCalledWith({
       data: {
         chapterId: 'chapter-1',
         sortKey: '001',
@@ -94,6 +111,18 @@ describe('PrismaSceneRepository', () => {
         order: 3,
       },
     });
+    expect(tx.chunk.findMany).toHaveBeenCalledWith({
+      where: { sceneId: 'scene-1' },
+      orderBy: { chunkIndex: 'asc' },
+      select: {
+        id: true,
+        chunkIndex: true,
+        content: true,
+        contentHash: true,
+        tokenCount: true,
+        isDirty: true,
+      },
+    });
   });
 
   it('updates content and writes outbox in one transaction', async () => {
@@ -101,7 +130,18 @@ describe('PrismaSceneRepository', () => {
     const tx = {
       scene: {
         update: jest.fn().mockResolvedValue(scene),
-        findFirst: jest.fn().mockResolvedValue(existing),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(existing)
+          .mockResolvedValueOnce({
+            chapter: { book: { projectId: 'project-1' } },
+          }),
+      },
+      chunk: {
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+        update: jest.fn(),
+        deleteMany: jest.fn(),
       },
       outbox: {
         create: jest.fn(),
@@ -136,11 +176,12 @@ describe('PrismaSceneRepository', () => {
         wordCount: 1,
       },
     });
+    expect(tx.chunk.findMany).toHaveBeenCalled();
     expect(tx.outbox.create).toHaveBeenCalledWith({
       data: {
         aggregateType: 'Scene',
         aggregateId: 'scene-1',
-        eventType: 'scene.content.updated',
+        eventType: 'scene_changed',
         payload: {
           sceneId: 'scene-1',
           chapterId: 'chapter-1',

@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Scene } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
+import { planSceneChunks } from '../domain/scene-chunking';
+import { toSceneStatus } from '../domain/scene-status';
 import {
   CreateSceneData,
   SceneContentUpdateResult,
@@ -13,16 +15,32 @@ import {
   UpdateSceneData,
 } from '../ports/scene-repository.port';
 import { translatePrismaConflict } from './prisma-error';
-import { toSceneRecord } from './scene-record.mapper';
-import { PrismaSceneVersionRepository } from './prisma-scene-version.repository';
+
+interface SceneVersionRow {
+  id: string;
+  sceneId: string;
+  label: string | null;
+  content: Prisma.JsonValue | null;
+  contentHash: string | null;
+  wordCount: number;
+  createdFromId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt: Date | null;
+}
+
+interface ChunkRow {
+  id: string;
+  chunkIndex: number;
+  content: string;
+  contentHash: string | null;
+  tokenCount: number;
+  isDirty: boolean;
+}
 
 @Injectable()
 export class PrismaSceneRepository implements SceneRepository {
-  private readonly versions: PrismaSceneVersionRepository;
-
-  constructor(private readonly prisma: PrismaService) {
-    this.versions = new PrismaSceneVersionRepository(prisma);
-  }
+  constructor(private readonly prisma: PrismaService) {}
 
   async createForUser(
     userId: string,
@@ -34,7 +52,14 @@ export class PrismaSceneRepository implements SceneRepository {
         deletedAt: null,
         book: { project: { userId } },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        book: {
+          select: {
+            projectId: true,
+          },
+        },
+      },
     });
 
     if (!chapter) {
@@ -51,25 +76,41 @@ export class PrismaSceneRepository implements SceneRepository {
       )._max.order ?? 0) + 1;
 
     try {
-      const scene = await this.prisma.scene.create({
-        data: {
-          chapterId: data.chapterId,
-          sortKey: data.sortKey,
-          ...(data.title !== undefined ? { title: data.title } : {}),
-          ...(data.content !== undefined
-            ? {
-                content: data.content as Prisma.InputJsonValue,
-                contentHash: createContentHash(data.content),
-              }
-            : {}),
-          ...(data.wordCount !== undefined
-            ? { wordCount: data.wordCount }
-            : {}),
-          ...(data.status !== undefined ? { status: data.status } : {}),
-          order,
-        },
+      const scene = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.scene.create({
+          data: {
+            chapterId: data.chapterId,
+            sortKey: data.sortKey,
+            ...(data.title !== undefined ? { title: data.title } : {}),
+            ...(data.content !== undefined
+              ? {
+                  content: data.content as Prisma.InputJsonValue,
+                  contentHash: createContentHash(data.content),
+                }
+              : {}),
+            ...(data.wordCount !== undefined
+              ? { wordCount: data.wordCount }
+              : {}),
+            ...(data.status !== undefined ? { status: data.status } : {}),
+            order,
+          },
+        });
+
+        if (data.content !== undefined) {
+          await this.syncSceneChunks(
+            tx,
+            created.id,
+            chapter.book.projectId,
+            data.content,
+            {
+              markDirty: false,
+            },
+          );
+        }
+
+        return created;
       });
-      return toSceneRecord(scene);
+      return this.toSceneRecord(scene);
     } catch (error: unknown) {
       return translatePrismaConflict(error);
     }
@@ -87,7 +128,7 @@ export class PrismaSceneRepository implements SceneRepository {
       },
     });
 
-    return scene ? toSceneRecord(scene) : null;
+    return scene ? this.toSceneRecord(scene) : null;
   }
 
   async updateForUser(
@@ -139,7 +180,7 @@ export class PrismaSceneRepository implements SceneRepository {
 
         if (existing.contentHash === newHash) {
           return {
-            scene: toSceneRecord(existing),
+            scene: this.toSceneRecord(existing),
             contentChanged: false,
           };
         }
@@ -155,11 +196,20 @@ export class PrismaSceneRepository implements SceneRepository {
           },
         });
 
+        const projectId = await this.getProjectIdForScene(tx, scene.id);
+        if (!projectId) {
+          return null;
+        }
+
+        await this.syncSceneChunks(tx, scene.id, projectId, data.content, {
+          markDirty: true,
+        });
+
         await tx.outbox.create({
           data: {
             aggregateType: 'Scene',
             aggregateId: scene.id,
-            eventType: 'scene.content.updated',
+            eventType: 'scene_changed',
             payload: {
               sceneId: scene.id,
               chapterId: scene.chapterId,
@@ -172,7 +222,7 @@ export class PrismaSceneRepository implements SceneRepository {
         });
 
         return {
-          scene: toSceneRecord(scene),
+          scene: this.toSceneRecord(scene),
           contentChanged: true,
         };
       });
@@ -185,7 +235,38 @@ export class PrismaSceneRepository implements SceneRepository {
     userId: string,
     sceneId: string,
   ): Promise<SceneVersionRecord[] | null> {
-    return this.versions.listVersionsForUser(userId, sceneId);
+    const scene = await this.prisma.scene.findFirst({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { project: { userId } } },
+      },
+      select: { id: true },
+    });
+
+    if (!scene) {
+      return null;
+    }
+
+    const versions = await this.prisma.$queryRaw<SceneVersionRow[]>`
+      SELECT
+        id::text AS "id",
+        scene_id::text AS "sceneId",
+        label,
+        content,
+        content_hash AS "contentHash",
+        word_count AS "wordCount",
+        created_from_id::text AS "createdFromId",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt",
+        deleted_at AS "deletedAt"
+      FROM scene_version
+      WHERE scene_id = ${sceneId}::uuid
+        AND deleted_at IS NULL
+      ORDER BY created_at DESC
+    `;
+
+    return versions.map((version) => this.toSceneVersionRecord(version));
   }
 
   async createVersionForUser(
@@ -195,13 +276,60 @@ export class PrismaSceneRepository implements SceneRepository {
     content?: Record<string, unknown>,
     wordCount?: number,
   ): Promise<SceneVersionRecord | null> {
-    return this.versions.createVersionForUser(
-      userId,
-      sceneId,
-      label,
-      content,
-      wordCount,
-    );
+    const scene = await this.prisma.scene.findFirst({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { project: { userId } } },
+      },
+    });
+
+    if (!scene) {
+      return null;
+    }
+
+    const versionContent = content ?? scene.content;
+    const versionHash = content
+      ? createContentHash(content)
+      : scene.contentHash;
+
+    const versionContentSql =
+      versionContent === null
+        ? Prisma.sql`NULL`
+        : Prisma.sql`${JSON.stringify(versionContent)}::jsonb`;
+    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>(Prisma.sql`
+      INSERT INTO scene_version (
+        id,
+        scene_id,
+        label,
+        content,
+        content_hash,
+        word_count,
+        updated_at
+      )
+      VALUES (
+        gen_random_uuid(),
+        ${sceneId}::uuid,
+        ${label ?? null},
+        ${versionContentSql},
+        ${versionHash},
+        ${wordCount ?? scene.wordCount},
+        CURRENT_TIMESTAMP
+      )
+      RETURNING
+        id::text AS "id",
+        scene_id::text AS "sceneId",
+        label,
+        content,
+        content_hash AS "contentHash",
+        word_count AS "wordCount",
+        created_from_id::text AS "createdFromId",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt",
+        deleted_at AS "deletedAt"
+    `);
+
+    return version ? this.toSceneVersionRecord(version) : null;
   }
 
   async findVersionForUser(
@@ -209,7 +337,32 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     versionId: string,
   ): Promise<SceneVersionRecord | null> {
-    return this.versions.findVersionForUser(userId, sceneId, versionId);
+    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>`
+      SELECT
+        v.id::text AS "id",
+        v.scene_id::text AS "sceneId",
+        v.label,
+        v.content,
+        v.content_hash AS "contentHash",
+        v.word_count AS "wordCount",
+        v.created_from_id::text AS "createdFromId",
+        v.created_at AS "createdAt",
+        v.updated_at AS "updatedAt",
+        v.deleted_at AS "deletedAt"
+      FROM scene_version v
+      JOIN scene s ON s.id = v.scene_id
+      JOIN chapter c ON c.id = s.chapter_id
+      JOIN book b ON b.id = c.book_id
+      JOIN project p ON p.id = b.project_id
+      WHERE v.id = ${versionId}::uuid
+        AND v.scene_id = ${sceneId}::uuid
+        AND v.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+        AND p.user_id = ${userId}
+      LIMIT 1
+    `;
+
+    return version ? this.toSceneVersionRecord(version) : null;
   }
 
   async updateVersionContentForUser(
@@ -218,12 +371,79 @@ export class PrismaSceneRepository implements SceneRepository {
     versionId: string,
     data: UpdateSceneContentData,
   ): Promise<SceneVersionContentUpdateResult | null> {
-    return this.versions.updateVersionContentForUser(
-      userId,
-      sceneId,
-      versionId,
-      data,
-    );
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const [existing] = await tx.$queryRaw<SceneVersionRow[]>`
+          SELECT
+            v.id::text AS "id",
+            v.scene_id::text AS "sceneId",
+            v.label,
+            v.content,
+            v.content_hash AS "contentHash",
+            v.word_count AS "wordCount",
+            v.created_from_id::text AS "createdFromId",
+            v.created_at AS "createdAt",
+            v.updated_at AS "updatedAt",
+            v.deleted_at AS "deletedAt"
+          FROM scene_version v
+          JOIN scene s ON s.id = v.scene_id
+          JOIN chapter c ON c.id = s.chapter_id
+          JOIN book b ON b.id = c.book_id
+          JOIN project p ON p.id = b.project_id
+          WHERE v.id = ${versionId}::uuid
+            AND v.scene_id = ${sceneId}::uuid
+            AND v.deleted_at IS NULL
+            AND s.deleted_at IS NULL
+            AND p.user_id = ${userId}
+          LIMIT 1
+        `;
+
+        if (!existing) {
+          return null;
+        }
+
+        const newHash = createContentHash(data.content);
+
+        if (existing.contentHash === newHash) {
+          return {
+            version: this.toSceneVersionRecord(existing),
+            contentChanged: false,
+          };
+        }
+
+        const [version] = await tx.$queryRaw<SceneVersionRow[]>(Prisma.sql`
+          UPDATE scene_version
+          SET
+            content = ${JSON.stringify(data.content)}::jsonb,
+            content_hash = ${newHash},
+            word_count = ${data.wordCount ?? existing.wordCount},
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${existing.id}::uuid
+          RETURNING
+            id::text AS "id",
+            scene_id::text AS "sceneId",
+            label,
+            content,
+            content_hash AS "contentHash",
+            word_count AS "wordCount",
+            created_from_id::text AS "createdFromId",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt",
+            deleted_at AS "deletedAt"
+        `);
+
+        if (!version) {
+          return null;
+        }
+
+        return {
+          version: this.toSceneVersionRecord(version),
+          contentChanged: true,
+        };
+      });
+    } catch (error: unknown) {
+      return translatePrismaConflict(error);
+    }
   }
 
   async updateVersionForUser(
@@ -232,7 +452,35 @@ export class PrismaSceneRepository implements SceneRepository {
     versionId: string,
     data: { label?: string | null },
   ): Promise<SceneVersionRecord | null> {
-    return this.versions.updateVersionForUser(userId, sceneId, versionId, data);
+    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>`
+      UPDATE scene_version v
+      SET
+        label = ${data.label ?? null},
+        updated_at = CURRENT_TIMESTAMP
+      FROM scene s
+      JOIN chapter c ON c.id = s.chapter_id
+      JOIN book b ON b.id = c.book_id
+      JOIN project p ON p.id = b.project_id
+      WHERE v.id = ${versionId}::uuid
+        AND v.scene_id = ${sceneId}::uuid
+        AND s.id = v.scene_id
+        AND v.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+        AND p.user_id = ${userId}
+      RETURNING
+        v.id::text AS "id",
+        v.scene_id::text AS "sceneId",
+        v.label,
+        v.content,
+        v.content_hash AS "contentHash",
+        v.word_count AS "wordCount",
+        v.created_from_id::text AS "createdFromId",
+        v.created_at AS "createdAt",
+        v.updated_at AS "updatedAt",
+        v.deleted_at AS "deletedAt"
+    `;
+
+    return version ? this.toSceneVersionRecord(version) : null;
   }
 
   async softDeleteVersionForUser(
@@ -241,12 +489,35 @@ export class PrismaSceneRepository implements SceneRepository {
     versionId: string,
     deletedAt: Date,
   ): Promise<SceneVersionRecord | null> {
-    return this.versions.softDeleteVersionForUser(
-      userId,
-      sceneId,
-      versionId,
-      deletedAt,
-    );
+    const [version] = await this.prisma.$queryRaw<SceneVersionRow[]>`
+      UPDATE scene_version v
+      SET
+        deleted_at = ${deletedAt},
+        updated_at = CURRENT_TIMESTAMP
+      FROM scene s
+      JOIN chapter c ON c.id = s.chapter_id
+      JOIN book b ON b.id = c.book_id
+      JOIN project p ON p.id = b.project_id
+      WHERE v.id = ${versionId}::uuid
+        AND v.scene_id = ${sceneId}::uuid
+        AND s.id = v.scene_id
+        AND v.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+        AND p.user_id = ${userId}
+      RETURNING
+        v.id::text AS "id",
+        v.scene_id::text AS "sceneId",
+        v.label,
+        v.content,
+        v.content_hash AS "contentHash",
+        v.word_count AS "wordCount",
+        v.created_from_id::text AS "createdFromId",
+        v.created_at AS "createdAt",
+        v.updated_at AS "updatedAt",
+        v.deleted_at AS "deletedAt"
+    `;
+
+    return version ? this.toSceneVersionRecord(version) : null;
   }
 
   async restoreVersionForUser(
@@ -254,7 +525,95 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     versionId: string,
   ): Promise<SceneContentUpdateResult | null> {
-    return this.versions.restoreVersionForUser(userId, sceneId, versionId);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const [version] = await tx.$queryRaw<SceneVersionRow[]>`
+          SELECT
+            v.id::text AS "id",
+            v.scene_id::text AS "sceneId",
+            v.label,
+            v.content,
+            v.content_hash AS "contentHash",
+            v.word_count AS "wordCount",
+            v.created_from_id::text AS "createdFromId",
+            v.created_at AS "createdAt",
+            v.updated_at AS "updatedAt",
+            v.deleted_at AS "deletedAt"
+          FROM scene_version v
+          JOIN scene s ON s.id = v.scene_id
+          JOIN chapter c ON c.id = s.chapter_id
+          JOIN book b ON b.id = c.book_id
+          JOIN project p ON p.id = b.project_id
+          WHERE v.id = ${versionId}::uuid
+            AND v.scene_id = ${sceneId}::uuid
+            AND v.deleted_at IS NULL
+            AND s.deleted_at IS NULL
+            AND p.user_id = ${userId}
+          LIMIT 1
+        `;
+
+        if (!version) {
+          return null;
+        }
+
+        const scene = await tx.scene.update({
+          where: { id: sceneId },
+          data: {
+            content:
+              version.content === null
+                ? Prisma.JsonNull
+                : (version.content as Prisma.InputJsonValue),
+            contentHash: version.contentHash,
+            wordCount: version.wordCount,
+          },
+        });
+
+        const projectId = await this.getProjectIdForScene(tx, sceneId);
+        if (!projectId) {
+          return null;
+        }
+
+        if (version.content !== null) {
+          await this.syncSceneChunks(
+            tx,
+            scene.id,
+            projectId,
+            version.content as Record<string, unknown>,
+            {
+              markDirty: true,
+            },
+          );
+        } else {
+          await this.syncSceneChunks(tx, scene.id, projectId, null, {
+            markDirty: true,
+          });
+        }
+
+        await tx.outbox.create({
+          data: {
+            aggregateType: 'Scene',
+            aggregateId: scene.id,
+            eventType: 'scene_changed',
+            payload: {
+              sceneId: scene.id,
+              chapterId: scene.chapterId,
+              contentHash: scene.contentHash,
+              wordCount: scene.wordCount,
+              userId,
+              restoredFromVersionId: version.id,
+            },
+            createdAt: new Date(),
+          },
+        });
+
+        return {
+          scene: this.toSceneRecord(scene),
+          contentChanged: true,
+        };
+      });
+    } catch (error: unknown) {
+      return translatePrismaConflict(error);
+    }
   }
 
   async softDeleteForUser(
@@ -279,7 +638,7 @@ export class PrismaSceneRepository implements SceneRepository {
       where: { id: sceneId, chapter: { book: { project: { userId } } } },
     });
 
-    return scene ? toSceneRecord(scene) : null;
+    return scene ? this.toSceneRecord(scene) : null;
   }
 
   private toSceneUpdateData(
@@ -291,5 +650,137 @@ export class PrismaSceneRepository implements SceneRepository {
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.order !== undefined ? { order: data.order } : {}),
     };
+  }
+
+  private toSceneRecord(scene: Scene): SceneRecord {
+    return {
+      id: scene.id,
+      chapterId: scene.chapterId,
+      title: scene.title,
+      sortKey: scene.sortKey,
+      content: scene.content,
+      contentHash: scene.contentHash,
+      wordCount: scene.wordCount,
+      povCharacterId: scene.povCharacterId,
+      status: toSceneStatus(scene.status),
+      order: scene.order,
+      createdAt: scene.createdAt,
+      updatedAt: scene.updatedAt,
+      deletedAt: scene.deletedAt,
+    };
+  }
+
+  private toSceneVersionRecord(version: SceneVersionRow): SceneVersionRecord {
+    return {
+      id: version.id,
+      sceneId: version.sceneId,
+      label: version.label,
+      content: version.content,
+      contentHash: version.contentHash,
+      wordCount: version.wordCount,
+      createdFromId: version.createdFromId,
+      createdAt: version.createdAt,
+      updatedAt: version.updatedAt,
+      deletedAt: version.deletedAt,
+    };
+  }
+
+  private async syncSceneChunks(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+    projectId: string,
+    content: Record<string, unknown> | null,
+    options: { markDirty: boolean },
+  ): Promise<void> {
+    if (content === null) {
+      await tx.chunk.deleteMany({ where: { sceneId } });
+      return;
+    }
+
+    const plans = planSceneChunks(content);
+    const existing = await tx.chunk.findMany({
+      where: { sceneId },
+      orderBy: { chunkIndex: 'asc' },
+      select: {
+        id: true,
+        chunkIndex: true,
+        content: true,
+        contentHash: true,
+        tokenCount: true,
+        isDirty: true,
+      },
+    });
+
+    const existingByIndex = new Map<number, ChunkRow>(
+      existing.map((chunk) => [chunk.chunkIndex, chunk] as const),
+    );
+    const seenIndices = new Set<number>();
+
+    for (const plan of plans) {
+      seenIndices.add(plan.chunkIndex);
+      const current = existingByIndex.get(plan.chunkIndex);
+
+      if (!current) {
+        await tx.chunk.create({
+          data: {
+            projectId,
+            sceneId,
+            content: plan.content,
+            tokenCount: plan.tokenCount,
+            chunkIndex: plan.chunkIndex,
+            contentHash: plan.contentHash,
+            isDirty: options.markDirty,
+          },
+        });
+        continue;
+      }
+
+      const hasChanged =
+        current.contentHash !== plan.contentHash ||
+        current.content !== plan.content;
+      if (hasChanged) {
+        await tx.chunk.update({
+          where: { id: current.id },
+          data: {
+            content: plan.content,
+            tokenCount: plan.tokenCount,
+            contentHash: plan.contentHash,
+            isDirty: options.markDirty,
+          },
+        });
+      }
+    }
+
+    const staleChunkIds = existing
+      .filter((chunk) => !seenIndices.has(chunk.chunkIndex))
+      .map((chunk) => chunk.id);
+
+    if (staleChunkIds.length > 0) {
+      await tx.chunk.deleteMany({
+        where: { id: { in: staleChunkIds } },
+      });
+    }
+  }
+
+  private async getProjectIdForScene(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+  ): Promise<string | null> {
+    const scene = await tx.scene.findFirst({
+      where: { id: sceneId },
+      select: {
+        chapter: {
+          select: {
+            book: {
+              select: {
+                projectId: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return scene?.chapter?.book?.projectId ?? null;
   }
 }
