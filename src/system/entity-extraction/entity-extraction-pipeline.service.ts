@@ -13,19 +13,19 @@ import type {
   SceneChangedOutboxPayload,
 } from './entity-extraction.types';
 
-type JsonNode = {
+interface JsonNode {
   type?: string;
   text?: string;
   content?: JsonNode[];
-};
+}
 
-type ChunkRow = {
+interface ChunkRow {
   id: string;
   chunkIndex: number;
   content: string;
   contentHash: string | null;
   isDirty: boolean;
-};
+}
 
 type ProposalRecord = PendingProposalLike & {
   status: ProposalStatus;
@@ -34,14 +34,31 @@ type ProposalRecord = PendingProposalLike & {
   proposedData: ProposalDataLike;
 };
 
-type ProposalRow = {
+interface ProposalRow {
   id: string;
   proposedData: unknown;
   confidenceScore: Prisma.Decimal | number;
   status: ProposalStatus;
   sourceChunkId?: string | null;
   sourceChunkHash?: string | null;
-};
+}
+
+const confirmedEntitySelect = {
+  id: true,
+  canonicalName: true,
+  aliases: true,
+  type: true,
+  description: true,
+} satisfies Prisma.EntitySelect;
+
+const proposalSelect = {
+  id: true,
+  proposedData: true,
+  confidenceScore: true,
+  status: true,
+  sourceChunkId: true,
+  sourceChunkHash: true,
+} satisfies Prisma.EntityProposalSelect;
 
 @Injectable()
 export class EntityExtractionPipelineService {
@@ -63,7 +80,10 @@ export class EntityExtractionPipelineService {
       return;
     }
 
-    if (outbox.aggregateType !== 'Scene' || outbox.eventType !== 'scene_changed') {
+    if (
+      outbox.aggregateType !== 'Scene' ||
+      outbox.eventType !== 'scene_changed'
+    ) {
       await this.markProcessed(outbox.id);
       return;
     }
@@ -104,18 +124,12 @@ export class EntityExtractionPipelineService {
     const projectId = scene.chapter.book.projectId;
     const confirmedEntities = (
       await this.prisma.entity.findMany({
-      where: {
-        projectId,
-        deletedAt: null,
-      },
-      select: {
-        id: true,
-        canonicalName: true,
-        aliases: true,
-        type: true,
-        description: true,
-      },
-      } as any)
+        where: {
+          projectId,
+          deletedAt: null,
+        },
+        select: confirmedEntitySelect,
+      })
     ).map((entity) => ({
       ...entity,
       type: toEntityType(entity.type),
@@ -145,27 +159,25 @@ export class EntityExtractionPipelineService {
               where: {
                 projectId,
                 status: ProposalStatus.PENDING,
-            },
-            select: {
-              id: true,
-              proposedData: true,
-              confidenceScore: true,
-              status: true,
-              sourceChunkId: true,
-              sourceChunkHash: true,
-            },
-            } as any)) as unknown as ProposalRow[]
-          ).map((proposal) => [
-            proposal.id,
-            {
-              id: proposal.id,
-              proposedData: this.normalizeProposalData(proposal.proposedData),
-              confidenceScore: Number(proposal.confidenceScore),
-              status: proposal.status,
-              sourceChunkId: proposal.sourceChunkId ?? null,
-              sourceChunkHash: proposal.sourceChunkHash ?? null,
-            },
-          ] as const),
+              },
+              select: proposalSelect,
+            })) as ProposalRow[]
+          ).map(
+            (proposal) =>
+              [
+                proposal.id,
+                {
+                  id: proposal.id,
+                  proposedData: this.normalizeProposalData(
+                    proposal.proposedData,
+                  ),
+                  confidenceScore: Number(proposal.confidenceScore),
+                  status: proposal.status,
+                  sourceChunkId: proposal.sourceChunkId ?? null,
+                  sourceChunkHash: proposal.sourceChunkHash ?? null,
+                },
+              ] as const,
+          ),
         ),
         new Set<string>(),
         new Map<string, ChunkRow>(),
@@ -173,7 +185,9 @@ export class EntityExtractionPipelineService {
       return;
     }
 
-    const chunksById = new Map(chunks.map((chunk) => [chunk.id, chunk] as const));
+    const chunksById = new Map(
+      chunks.map((chunk) => [chunk.id, chunk] as const),
+    );
     const activeChunkIds = new Set(chunks.map((chunk) => chunk.id));
     const dirtyChunks = chunks.filter((chunk) => chunk.isDirty);
 
@@ -183,27 +197,25 @@ export class EntityExtractionPipelineService {
         status: ProposalStatus.PENDING,
       },
       select: {
-        id: true,
-        proposedData: true,
-        confidenceScore: true,
-        status: true,
-        sourceChunkId: true,
-        sourceChunkHash: true,
+        ...proposalSelect,
       },
-    } as any)) as ProposalRow[];
+    })) as ProposalRow[];
 
     const proposalsById = new Map<string, ProposalRecord>(
-      pendingProposals.map((proposal) => [
-        proposal.id,
-        {
-          id: proposal.id,
-          proposedData: this.normalizeProposalData(proposal.proposedData),
-          confidenceScore: Number(proposal.confidenceScore),
-          status: proposal.status,
-          sourceChunkId: proposal.sourceChunkId ?? null,
-          sourceChunkHash: proposal.sourceChunkHash ?? null,
-        },
-      ] as const),
+      pendingProposals.map(
+        (proposal) =>
+          [
+            proposal.id,
+            {
+              id: proposal.id,
+              proposedData: this.normalizeProposalData(proposal.proposedData),
+              confidenceScore: Number(proposal.confidenceScore),
+              status: proposal.status,
+              sourceChunkId: proposal.sourceChunkId ?? null,
+              sourceChunkHash: proposal.sourceChunkHash ?? null,
+            },
+          ] as const,
+      ),
     );
 
     await this.pruneProposalsWithoutActiveSupport(
@@ -267,7 +279,10 @@ export class EntityExtractionPipelineService {
     const candidates = this.resolution.dedupeCandidates(extracted);
     const matchedProposalIds = new Set<string>();
 
-    if (!this.extractionClient.hasEmbeddingModel() && !this.embeddingWarningShown) {
+    if (
+      !this.extractionClient.hasEmbeddingModel() &&
+      !this.embeddingWarningShown
+    ) {
       this.logger.warn(
         'ENTITY_EXTRACTION_EMBEDDING_MODEL is not configured; skipping embedding similarity stage',
       );
@@ -277,7 +292,7 @@ export class EntityExtractionPipelineService {
     for (const candidate of candidates) {
       const resolution = await this.resolution.resolveCandidate(
         candidate,
-        input.confirmedEntities as ConfirmedEntityLike[],
+        input.confirmedEntities,
         [...input.proposalsById.values()],
         input.compareEmbedding,
       );
@@ -288,7 +303,9 @@ export class EntityExtractionPipelineService {
 
       if (resolution.proposalId) {
         const currentProposal = input.proposalsById.get(resolution.proposalId);
-        if (!currentProposal) continue;
+        if (!currentProposal) {
+          continue;
+        }
 
         const mergedData = this.resolution.mergeProposalData(
           currentProposal.proposedData,
@@ -311,19 +328,14 @@ export class EntityExtractionPipelineService {
             sourceChunkId: mergedData.sourceChunkId ?? null,
             sourceChunkHash: mergedData.sourceChunkHash ?? null,
           },
-          select: {
-            id: true,
-            proposedData: true,
-            confidenceScore: true,
-            status: true,
-            sourceChunkId: true,
-            sourceChunkHash: true,
-          },
-        } as any)) as ProposalRow;
+          select: proposalSelect,
+        })) as ProposalRow;
 
         input.proposalsById.set(updatedProposal.id, {
           id: updatedProposal.id,
-          proposedData: this.normalizeProposalData(updatedProposal.proposedData),
+          proposedData: this.normalizeProposalData(
+            updatedProposal.proposedData,
+          ),
           confidenceScore: Number(updatedProposal.confidenceScore),
           status: updatedProposal.status,
           sourceChunkId: updatedProposal.sourceChunkId ?? null,
@@ -350,15 +362,8 @@ export class EntityExtractionPipelineService {
               resolution.candidate.confidenceScore ?? 0,
             ),
           },
-          select: {
-            id: true,
-            proposedData: true,
-            confidenceScore: true,
-            status: true,
-            sourceChunkId: true,
-            sourceChunkHash: true,
-          },
-        } as any)) as ProposalRow;
+          select: proposalSelect,
+        })) as ProposalRow;
 
         input.proposalsById.set(proposal.id, {
           id: proposal.id,
@@ -416,15 +421,8 @@ export class EntityExtractionPipelineService {
             sourceChunkId: nextData.sourceChunkId ?? null,
             sourceChunkHash: nextData.sourceChunkHash ?? null,
           },
-          select: {
-            id: true,
-            proposedData: true,
-            confidenceScore: true,
-            status: true,
-            sourceChunkId: true,
-            sourceChunkHash: true,
-          },
-        } as any)) as ProposalRow;
+          select: proposalSelect,
+        })) as ProposalRow;
 
         proposalsById.set(updated.id, {
           id: updated.id,
@@ -476,15 +474,8 @@ export class EntityExtractionPipelineService {
             sourceChunkId: nextData.sourceChunkId ?? null,
             sourceChunkHash: nextData.sourceChunkHash ?? null,
           },
-          select: {
-            id: true,
-            proposedData: true,
-            confidenceScore: true,
-            status: true,
-            sourceChunkId: true,
-            sourceChunkHash: true,
-          },
-        } as any)) as ProposalRow;
+          select: proposalSelect,
+        })) as ProposalRow;
 
         input.proposalsById.set(updated.id, {
           id: updated.id,
@@ -503,12 +494,13 @@ export class EntityExtractionPipelineService {
     chunk: ChunkRow,
   ): ProposalDataLike {
     const normalizedName =
-      candidate.normalizedName ?? this.resolution.normalize(candidate.canonicalName);
+      candidate.normalizedName ??
+      this.resolution.normalize(candidate.canonicalName);
 
     return {
       canonicalName: candidate.canonicalName,
       aliases: [...new Set(candidate.aliases ?? [])],
-      type: candidate.type as any,
+      type: candidate.type,
       description: candidate.description,
       attributes: candidate.attributes,
       imageUrl: candidate.imageUrl,
@@ -556,8 +548,9 @@ export class EntityExtractionPipelineService {
         ? data.sourceChunkId
         : filtered[0]!.chunkId;
 
-    const preferredHash =
-      preferredSource ? chunksById.get(preferredSource)?.contentHash ?? null : null;
+    const preferredHash = preferredSource
+      ? (chunksById.get(preferredSource)?.contentHash ?? null)
+      : null;
 
     return {
       ...data,
@@ -589,10 +582,10 @@ export class EntityExtractionPipelineService {
     await this.prisma.entityProposal.update({
       where: { id: proposalId },
       data: {
-        status: 'OBSOLETE' as unknown as ProposalStatus,
+        status: 'OBSOLETE',
         resolutionReason: 'chunk_obsolete',
       },
-    } as any);
+    });
   }
 
   private areProposalDataEqual(
@@ -609,7 +602,7 @@ export class EntityExtractionPipelineService {
       aliases: data.aliases ?? [],
       type: toEntityType(String(data.type ?? 'CONCEPT')),
       description: data.description ?? null,
-      attributes: (data.attributes ?? {}) as Record<string, unknown>,
+      attributes: data.attributes ?? {},
       imageUrl: data.imageUrl ?? null,
       confidenceScore: data.confidenceScore ?? 0,
       evidence: data.evidence ?? [],
@@ -623,11 +616,13 @@ export class EntityExtractionPipelineService {
 
   private getEmbeddingComparer(): (text: string) => Promise<number[] | null> {
     if (!this.extractionClient.hasEmbeddingModel()) {
-      return async () => null;
+      return () => Promise.resolve(null);
     }
 
     return async (text: string) => {
-      if (!text.trim()) return null;
+      if (!text.trim()) {
+        return null;
+      }
 
       try {
         return await this.extractionClient.createEmbedding(text);
@@ -654,15 +649,23 @@ export class EntityExtractionPipelineService {
     });
   }
 
-  private extractPlainText(node: JsonNode | JsonNode[] | null | undefined): string {
-    if (!node) return '';
-    if (Array.isArray(node)) return node.map((child) => this.extractPlainText(child)).join(' ');
+  private extractPlainText(
+    node: JsonNode | JsonNode[] | null | undefined,
+  ): string {
+    if (!node) {
+      return '';
+    }
+    if (Array.isArray(node)) {
+      return node.map((child) => this.extractPlainText(child)).join(' ');
+    }
 
     if (node.type === 'text') {
       return node.text ?? '';
     }
 
-    if (!Array.isArray(node.content)) return '';
+    if (!Array.isArray(node.content)) {
+      return '';
+    }
     return node.content.map((child) => this.extractPlainText(child)).join(' ');
   }
 }

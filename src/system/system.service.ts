@@ -16,13 +16,17 @@ const ENTITY_EXTRACTION_QUEUE = 'entity-extraction';
 
 type AppRole = 'web' | 'worker' | 'all';
 
+interface EntityExtractionJobData {
+  outboxId: string;
+}
+
 @Injectable()
 export class SystemService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SystemService.name);
   private readonly role: AppRole;
   private readonly connection: { url: string };
-  private readonly queue: Queue;
-  private worker: Worker | null = null;
+  private readonly queue: Queue<EntityExtractionJobData>;
+  private worker: Worker<EntityExtractionJobData> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
 
@@ -32,10 +36,14 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
     private readonly extractionClient: EntityExtractionClient,
     private readonly pipeline: EntityExtractionPipelineService,
   ) {
-    this.role = (this.config.get<string>('APP_ROLE', 'all') as AppRole) ?? 'all';
-    const redisUrl = this.config.get<string>('REDIS_URL', 'redis://localhost:6379');
+    this.role =
+      (this.config.get<string>('APP_ROLE', 'all') as AppRole) ?? 'all';
+    const redisUrl = this.config.get<string>(
+      'REDIS_URL',
+      'redis://localhost:6379',
+    );
     this.connection = { url: redisUrl };
-    this.queue = new Queue(ENTITY_EXTRACTION_QUEUE, {
+    this.queue = new Queue<EntityExtractionJobData>(ENTITY_EXTRACTION_QUEUE, {
       connection: this.connection,
     });
   }
@@ -62,11 +70,13 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.started = true;
-    this.worker = new Worker(
+    this.worker = new Worker<EntityExtractionJobData>(
       ENTITY_EXTRACTION_QUEUE,
       async (job) => {
-        const outboxId = job.data?.outboxId as string | undefined;
-        if (!outboxId) return;
+        const outboxId = job.data?.outboxId;
+        if (!outboxId) {
+          return;
+        }
         await this.pipeline.processOutboxEvent(outboxId);
       },
       {
@@ -82,9 +92,17 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
     });
 
     await this.pollOnce();
-    this.pollTimer = setInterval(() => {
-      void this.pollOnce();
-    }, Number(this.config.get<string>('ENTITY_EXTRACTION_POLL_MS', `${POLL_INTERVAL_MS}`)));
+    this.pollTimer = setInterval(
+      () => {
+        void this.pollOnce();
+      },
+      Number(
+        this.config.get<string>(
+          'ENTITY_EXTRACTION_POLL_MS',
+          `${POLL_INTERVAL_MS}`,
+        ),
+      ),
+    );
   }
 
   async stop(): Promise<void> {

@@ -5,7 +5,7 @@ import { EntityResponseDto } from '../dto/responses/entity-response.dto';
 import { EntityProposalResponseDto } from '../dto/responses/entity-proposal-response.dto';
 import type { EntityRecord } from '../ports/entity-repository.port';
 
-type ProposalPayload = {
+interface ProposalPayload {
   canonicalName: string;
   aliases?: string[];
   type: EntityType;
@@ -17,7 +17,7 @@ type ProposalPayload = {
   sourceSceneTitle?: string | null;
   evidence?: string[];
   normalizedName?: string;
-};
+}
 
 @Injectable()
 export class EntityProposalService {
@@ -103,19 +103,18 @@ export class EntityProposalService {
 
       const proposedData = proposal.proposedData as ProposalPayload;
 
-      const entity =
-        proposal.entityId
-          ? await tx.entity.findFirst({
-              where: {
-                id: proposal.entityId,
-                project: {
-                  userId,
-                  deletedAt: null,
-                },
+      const entity = proposal.entityId
+        ? await tx.entity.findFirst({
+            where: {
+              id: proposal.entityId,
+              project: {
+                userId,
                 deletedAt: null,
               },
-            })
-          : null;
+              deletedAt: null,
+            },
+          })
+        : null;
 
       const consolidatedEntity =
         entity ??
@@ -128,7 +127,8 @@ export class EntityProposalService {
               ? { description: proposedData.description }
               : {}),
             aliases: proposedData.aliases ?? [],
-            attributes: (proposedData.attributes ?? {}) as Prisma.InputJsonValue,
+            attributes: (proposedData.attributes ??
+              {}) as Prisma.InputJsonValue,
             ...(proposedData.imageUrl !== undefined
               ? { imageUrl: proposedData.imageUrl }
               : {}),
@@ -155,12 +155,12 @@ export class EntityProposalService {
       throw new NotFoundException('Proposal not found');
     }
 
-    return EntityResponseDto.from({
+    const entityRecord: EntityRecord = {
       id: result.id,
       projectId: result.projectId,
       canonicalName: result.canonicalName,
       aliases: result.aliases,
-      type: result.type as EntityType,
+      type: result.type,
       description: result.description,
       attributes: result.attributes,
       imageUrl: result.imageUrl,
@@ -171,6 +171,8 @@ export class EntityProposalService {
       createdAt: result.createdAt,
       updatedAt: result.updatedAt,
       deletedAt: result.deletedAt,
-    } as EntityRecord);
+    };
+
+    return EntityResponseDto.from(entityRecord);
   }
 }

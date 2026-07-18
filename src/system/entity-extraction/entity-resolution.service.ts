@@ -9,12 +9,12 @@ import type {
 const TRIGRAM_THRESHOLD = 0.82;
 const EMBEDDING_THRESHOLD = 0.88;
 
-type ResolvedCandidate = {
+interface ResolvedCandidate {
   candidate: ExtractionCandidate;
   confirmedEntityId: string | null;
   proposalId: string | null;
   shouldCreateProposal: boolean;
-};
+}
 
 @Injectable()
 export class EntityResolutionService {
@@ -32,7 +32,9 @@ export class EntityResolutionService {
 
     for (const candidate of candidates) {
       const normalizedName = this.normalize(candidate.canonicalName);
-      if (!normalizedName) continue;
+      if (!normalizedName) {
+        continue;
+      }
 
       const current = merged.get(normalizedName);
       if (!current) {
@@ -47,13 +49,17 @@ export class EntityResolutionService {
 
       merged.set(normalizedName, {
         ...current,
-        aliases: [...new Set([...current.aliases, ...(candidate.aliases ?? [])])],
+        aliases: [
+          ...new Set([...current.aliases, ...(candidate.aliases ?? [])]),
+        ],
         description: current.description ?? candidate.description,
         confidenceScore: Math.max(
           current.confidenceScore ?? 0,
           candidate.confidenceScore ?? 0,
         ),
-        evidence: [...new Set([...current.evidence, ...(candidate.evidence ?? [])])],
+        evidence: [
+          ...new Set([...current.evidence, ...(candidate.evidence ?? [])]),
+        ],
       });
     }
 
@@ -83,12 +89,11 @@ export class EntityResolutionService {
       chunkIndex: number;
     },
   ): ProposalDataLike {
-    const aliases = new Set<string>([
-      ...current.aliases,
-      ...candidate.aliases,
-    ]);
+    const aliases = new Set<string>([...current.aliases, ...candidate.aliases]);
     const chunkEvidence = new Map(
-      (current.chunkEvidence ?? []).map((entry) => [entry.chunkId, entry] as const),
+      (current.chunkEvidence ?? []).map(
+        (entry) => [entry.chunkId, entry] as const,
+      ),
     );
 
     if (chunk) {
@@ -101,7 +106,7 @@ export class EntityResolutionService {
 
     return {
       ...current,
-      canonicalName: current.canonicalName || candidate.canonicalName,
+      canonicalName: current.canonicalName ?? candidate.canonicalName,
       aliases: [...aliases],
       type: current.type ?? candidate.type,
       description: current.description ?? candidate.description,
@@ -112,7 +117,7 @@ export class EntityResolutionService {
         candidate.confidenceScore ?? 0,
       ),
       evidence: [...new Set([...current.evidence, ...candidate.evidence])],
-      normalizedName: current.normalizedName || candidate.normalizedName || '',
+      normalizedName: current.normalizedName ?? candidate.normalizedName ?? '',
       source: 'entity_extraction',
       sourceChunkId: current.sourceChunkId ?? chunk?.chunkId ?? null,
       sourceChunkHash: current.sourceChunkHash ?? chunk?.chunkHash ?? null,
@@ -189,7 +194,8 @@ export class EntityResolutionService {
       };
     }
 
-    const candidateEmbedding = (await compareEmbedding(candidate.canonicalName)) ?? [];
+    const candidateEmbedding =
+      (await compareEmbedding(candidate.canonicalName)) ?? [];
     if (candidateEmbedding.length > 0) {
       const embeddingEntity = await this.findEmbeddingEntityMatch(
         candidateEmbedding,
@@ -239,7 +245,8 @@ export class EntityResolutionService {
           .map((label) => this.normalize(label))
           .filter(Boolean);
         return labels.some(
-          (label) => label === normalizedCandidate || candidateAliases.has(label),
+          (label) =>
+            label === normalizedCandidate || candidateAliases.has(label),
         );
       }) ?? null
     );
@@ -257,7 +264,8 @@ export class EntityResolutionService {
           .map((label) => this.normalize(label))
           .filter(Boolean);
         return labels.some(
-          (label) => label === normalizedCandidate || candidateAliases.has(label),
+          (label) =>
+            label === normalizedCandidate || candidateAliases.has(label),
         );
       }) ?? null
     );
@@ -283,7 +291,10 @@ export class EntityResolutionService {
 
         for (const alias of candidateAliases) {
           const aliasScore = this.trigramSimilarity(alias, label);
-          if (aliasScore >= TRIGRAM_THRESHOLD && (!best || aliasScore > best.score)) {
+          if (
+            aliasScore >= TRIGRAM_THRESHOLD &&
+            (!best || aliasScore > best.score)
+          ) {
             best = { entity, score: aliasScore };
           }
         }
@@ -314,7 +325,10 @@ export class EntityResolutionService {
 
         for (const alias of candidateAliases) {
           const aliasScore = this.trigramSimilarity(alias, label);
-          if (aliasScore >= TRIGRAM_THRESHOLD && (!best || aliasScore > best.score)) {
+          if (
+            aliasScore >= TRIGRAM_THRESHOLD &&
+            (!best || aliasScore > best.score)
+          ) {
             best = { proposal, score: aliasScore };
           }
         }
@@ -333,7 +347,9 @@ export class EntityResolutionService {
 
     for (const entity of entities) {
       const embedding = (await compareEmbedding(entity.canonicalName)) ?? [];
-      if (!embedding.length) continue;
+      if (!embedding.length) {
+        continue;
+      }
 
       const score = this.cosineSimilarity(candidateEmbedding, embedding);
       if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
@@ -353,8 +369,11 @@ export class EntityResolutionService {
 
     for (const proposal of proposals) {
       const data = proposal.proposedData as ProposalDataLike;
-      const embedding = (await compareEmbedding(data.canonicalName ?? '')) ?? [];
-      if (!embedding.length) continue;
+      const embedding =
+        (await compareEmbedding(data.canonicalName ?? '')) ?? [];
+      if (!embedding.length) {
+        continue;
+      }
 
       const score = this.cosineSimilarity(candidateEmbedding, embedding);
       if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
@@ -366,10 +385,14 @@ export class EntityResolutionService {
   }
 
   private trigramSimilarity(a: string, b: string): number {
-    if (!a || !b) return 0;
-    if (a === b) return 1;
+    if (!a || !b) {
+      return 0;
+    }
+    if (a === b) {
+      return 1;
+    }
 
-    const grams = (value: string) => {
+    const grams = (value: string): Set<string> => {
       const normalized = `  ${value} `;
       const result = new Set<string>();
       for (let index = 0; index < normalized.length - 2; index += 1) {
@@ -393,7 +416,9 @@ export class EntityResolutionService {
 
   private cosineSimilarity(a: number[], b: number[]): number {
     const length = Math.min(a.length, b.length);
-    if (length === 0) return 0;
+    if (length === 0) {
+      return 0;
+    }
 
     let dot = 0;
     let normA = 0;
@@ -407,7 +432,9 @@ export class EntityResolutionService {
       normB += right * right;
     }
 
-    if (!normA || !normB) return 0;
+    if (!normA || !normB) {
+      return 0;
+    }
     return dot / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 }

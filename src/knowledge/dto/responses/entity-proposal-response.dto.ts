@@ -1,6 +1,6 @@
 import type { EntityType } from '../../domain/entity-type';
 
-export type EntityProposalPayloadDto = {
+export interface EntityProposalPayloadDto {
   canonicalName: string;
   aliases: string[];
   type: EntityType;
@@ -19,7 +19,7 @@ export type EntityProposalPayloadDto = {
     chunkHash: string;
     chunkIndex: number;
   }>;
-};
+}
 
 export type EntityProposalStatusDto =
   | 'PENDING'

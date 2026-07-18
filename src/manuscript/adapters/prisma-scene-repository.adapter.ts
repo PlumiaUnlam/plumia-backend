@@ -97,9 +97,15 @@ export class PrismaSceneRepository implements SceneRepository {
         });
 
         if (data.content !== undefined) {
-          await this.syncSceneChunks(tx, created.id, chapter.book.projectId, data.content, {
-            markDirty: false,
-          });
+          await this.syncSceneChunks(
+            tx,
+            created.id,
+            chapter.book.projectId,
+            data.content,
+            {
+              markDirty: false,
+            },
+          );
         }
 
         return created;
@@ -283,7 +289,9 @@ export class PrismaSceneRepository implements SceneRepository {
     }
 
     const versionContent = content ?? scene.content;
-    const versionHash = content ? createContentHash(content) : scene.contentHash;
+    const versionHash = content
+      ? createContentHash(content)
+      : scene.contentHash;
 
     const versionContentSql =
       versionContent === null
@@ -728,7 +736,8 @@ export class PrismaSceneRepository implements SceneRepository {
       }
 
       const hasChanged =
-        current.contentHash !== plan.contentHash || current.content !== plan.content;
+        current.contentHash !== plan.contentHash ||
+        current.content !== plan.content;
       if (hasChanged) {
         await tx.chunk.update({
           where: { id: current.id },
@@ -774,5 +783,4 @@ export class PrismaSceneRepository implements SceneRepository {
 
     return scene?.chapter?.book?.projectId ?? null;
   }
-
 }

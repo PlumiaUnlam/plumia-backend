@@ -1,17 +1,17 @@
 import { createHash } from 'node:crypto';
 
-type ProseMirrorNode = {
+interface ProseMirrorNode {
   type?: string;
   text?: string;
   content?: ProseMirrorNode[];
-};
+}
 
-export type SceneChunkPlan = {
+export interface SceneChunkPlan {
   chunkIndex: number;
   content: string;
   contentHash: string;
   tokenCount: number;
-};
+}
 
 const DEFAULT_MAX_CHUNK_CHARS = 2600;
 const DEFAULT_MAX_CHUNK_WORDS = 420;
@@ -41,7 +41,7 @@ export function planSceneChunks(
   let currentChars = 0;
   let currentWords = 0;
 
-  const flushCurrent = () => {
+  const flushCurrent = (): void => {
     const joined = normalizeWhitespace(current.join('\n\n'));
     if (joined) {
       chunks.push(joined);
@@ -53,7 +53,9 @@ export function planSceneChunks(
 
   for (const block of blocks) {
     const blockText = normalizeWhitespace(block);
-    if (!blockText) continue;
+    if (!blockText) {
+      continue;
+    }
 
     const blockChars = blockText.length;
     const blockWords = countWords(blockText);
@@ -107,7 +109,9 @@ export function countWords(value: string): number {
 }
 
 function collectBlockTexts(node: unknown): string[] {
-  if (!node) return [];
+  if (!node) {
+    return [];
+  }
 
   if (Array.isArray(node)) {
     return node.flatMap((child) => collectBlockTexts(child));
@@ -166,20 +170,26 @@ function splitOversizedBlock(
   let currentChars = 0;
   let currentWords = 0;
 
-  const flush = () => {
+  const flush = (): void => {
     const joined = normalizeWhitespace(current.join(' '));
-    if (joined) result.push(joined);
+    if (joined) {
+      result.push(joined);
+    }
     current = [];
     currentChars = 0;
     currentWords = 0;
   };
 
-  const pushWords = (text: string) => {
+  const pushWords = (text: string): void => {
     const words = text.split(/\s+/);
     for (const word of words) {
-      const nextChars = currentChars + word.length + (current.length > 0 ? 1 : 0);
+      const nextChars =
+        currentChars + word.length + (current.length > 0 ? 1 : 0);
       const nextWords = currentWords + 1;
-      if (current.length > 0 && (nextChars > maxChars || nextWords > maxWords)) {
+      if (
+        current.length > 0 &&
+        (nextChars > maxChars || nextWords > maxWords)
+      ) {
         flush();
       }
 
@@ -193,9 +203,13 @@ function splitOversizedBlock(
     const sentenceChars = sentence.length;
     const sentenceWords = countWords(sentence);
     if (sentenceChars <= maxChars && sentenceWords <= maxWords) {
-      const nextChars = currentChars + sentenceChars + (current.length > 0 ? 1 : 0);
+      const nextChars =
+        currentChars + sentenceChars + (current.length > 0 ? 1 : 0);
       const nextWords = currentWords + sentenceWords;
-      if (current.length > 0 && (nextChars > maxChars || nextWords > maxWords)) {
+      if (
+        current.length > 0 &&
+        (nextChars > maxChars || nextWords > maxWords)
+      ) {
         flush();
       }
 

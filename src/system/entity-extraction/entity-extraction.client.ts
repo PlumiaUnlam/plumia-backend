@@ -44,7 +44,17 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           },
           normalizedName: { type: 'string' },
         },
-        required: ['canonicalName', 'aliases', 'type', 'description', 'attributes', 'imageUrl', 'confidenceScore', 'evidence', 'normalizedName'],
+        required: [
+          'canonicalName',
+          'aliases',
+          'type',
+          'description',
+          'attributes',
+          'imageUrl',
+          'confidenceScore',
+          'evidence',
+          'normalizedName',
+        ],
       },
     },
   },
@@ -61,13 +71,18 @@ export class EntityExtractionClient {
   private readonly timeoutMs: number;
 
   constructor(private readonly config: ConfigService) {
-    this.apiKey = this.config.get<string>('ENTITY_EXTRACTION_API_KEY', '').trim();
+    this.apiKey = this.config
+      .get<string>('ENTITY_EXTRACTION_API_KEY', '')
+      .trim();
     this.model = this.config.get<string>('ENTITY_EXTRACTION_MODEL', '').trim();
     this.embeddingModel = this.config
       .get<string>('ENTITY_EXTRACTION_EMBEDDING_MODEL', '')
       .trim();
     this.timeoutMs = Number(
-      this.config.get<string>('ENTITY_EXTRACTION_TIMEOUT_MS', `${DEFAULT_TIMEOUT_MS}`),
+      this.config.get<string>(
+        'ENTITY_EXTRACTION_TIMEOUT_MS',
+        `${DEFAULT_TIMEOUT_MS}`,
+      ),
     );
 
     this.ai = new GoogleGenAI({
@@ -98,7 +113,9 @@ export class EntityExtractionClient {
       );
     }
 
-    this.logger.debug(`Running extraction with model ${this.model || DEFAULT_CHAT_MODEL}`);
+    this.logger.debug(
+      `Running extraction with model ${this.model || DEFAULT_CHAT_MODEL}`,
+    );
 
     const response = await this.ai.models.generateContent({
       model: this.model || DEFAULT_CHAT_MODEL,

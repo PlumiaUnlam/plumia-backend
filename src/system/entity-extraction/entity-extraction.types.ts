@@ -1,15 +1,15 @@
 import type { EntityType } from '../../knowledge/domain/entity-type';
 
-export type SceneChangedOutboxPayload = {
+export interface SceneChangedOutboxPayload {
   sceneId: string;
   chapterId: string;
   contentHash: string;
   wordCount: number;
   userId: string;
   restoredFromVersionId?: string;
-};
+}
 
-export type ExtractionCandidate = {
+export interface ExtractionCandidate {
   canonicalName: string;
   aliases: string[];
   type: EntityType;
@@ -19,33 +19,33 @@ export type ExtractionCandidate = {
   confidenceScore: number;
   evidence: string[];
   normalizedName?: string;
-};
+}
 
-export type ChunkEvidence = {
+export interface ChunkEvidence {
   chunkId: string;
   chunkHash: string;
   chunkIndex: number;
-};
+}
 
-export type ExtractionResponse = {
+export interface ExtractionResponse {
   entities: ExtractionCandidate[];
-};
+}
 
-export type ConfirmedEntityLike = {
+export interface ConfirmedEntityLike {
   id: string;
   canonicalName: string;
   aliases: string[];
   type: EntityType;
   description: string | null;
-};
+}
 
-export type PendingProposalLike = {
+export interface PendingProposalLike {
   id: string;
   proposedData: unknown;
   confidenceScore: number;
-};
+}
 
-export type ProposalDataLike = {
+export interface ProposalDataLike {
   canonicalName: string;
   aliases: string[];
   type: EntityType;
@@ -59,4 +59,4 @@ export type ProposalDataLike = {
   sourceChunkHash?: string | null;
   chunkEvidence?: ChunkEvidence[];
   source?: string;
-};
+}

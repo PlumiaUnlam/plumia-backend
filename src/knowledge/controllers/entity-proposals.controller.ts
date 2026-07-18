@@ -1,4 +1,11 @@
-import { Controller, Get, Param, ParseUUIDPipe, Post, Request } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Request,
+} from '@nestjs/common';
 import { EntityProposalService } from '../services/entity-proposal.service';
 import { EntityProposalResponseDto } from '../dto/responses/entity-proposal-response.dto';
 import { EntityResponseDto } from '../dto/responses/entity-response.dto';
@@ -13,7 +20,10 @@ export class EntityProposalsController {
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
   ): Promise<EntityProposalResponseDto[]> {
-    return this.entityProposalService.listPendingByProject(req.user.id, projectId);
+    return this.entityProposalService.listPendingByProject(
+      req.user.id,
+      projectId,
+    );
   }
 
   @Post('proposals/:id/accept')

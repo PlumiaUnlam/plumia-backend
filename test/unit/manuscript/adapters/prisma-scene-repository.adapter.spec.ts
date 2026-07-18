@@ -87,9 +87,7 @@ describe('PrismaSceneRepository', () => {
     };
     prisma.$transaction.mockImplementation(
       async (
-        callback: (
-          transaction: typeof tx,
-        ) => Promise<SceneRecord | null>,
+        callback: (transaction: typeof tx) => Promise<SceneRecord | null>,
       ) => callback(tx),
     );
 
