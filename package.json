@@ -34,7 +34,8 @@
     "pretest:e2e": "pnpm prisma:generate",
     "test:e2e": "node ./scripts/test-e2e.js",
     "pretest:e2e:jest": "pnpm prisma:generate",
-    "test:e2e:jest": "jest --config ./test/jest-e2e.config.js"
+    "test:e2e:jest": "jest --config ./test/jest-e2e.config.js",
+    "seed:timeline-demo": "node ./scripts/seed-timeline-demo.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",

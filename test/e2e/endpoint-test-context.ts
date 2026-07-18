@@ -63,6 +63,18 @@ export interface RelationshipResponse extends IdResponse {
   relationType: string;
 }
 
+export interface TimelineEventResponse extends IdResponse {
+  projectId: string;
+  title: string;
+  date: string | null;
+  temporalLabel: string | null;
+  impact: string;
+  storyboardArcId: string | null;
+  entityIds: string[];
+  position: string;
+  source: string;
+}
+
 export interface StoryboardCardResponse extends IdResponse {
   projectId: string;
   chapterId: string | null;
