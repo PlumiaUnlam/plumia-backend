@@ -88,7 +88,7 @@ export class EntityExtractionPipelineService {
       return;
     }
 
-    const payload = outbox.payload as SceneChangedOutboxPayload;
+    const payload = this.parseSceneChangedPayload(outbox.payload);
     await this.processSceneChanged(payload);
     await this.markProcessed(outbox.id);
   }
@@ -320,7 +320,7 @@ export class EntityExtractionPipelineService {
         const updatedProposal = (await this.prisma.entityProposal.update({
           where: { id: currentProposal.id },
           data: {
-            proposedData: mergedData as Prisma.InputJsonValue,
+            proposedData: this.toInputJsonValue(mergedData),
             confidenceScore: Math.max(
               Number(currentProposal.confidenceScore),
               resolution.candidate.confidenceScore ?? 0,
@@ -357,7 +357,7 @@ export class EntityExtractionPipelineService {
             sceneId: input.scene.id,
             sourceChunkId: input.chunk.id,
             sourceChunkHash: input.chunk.contentHash,
-            proposedData: proposedData as Prisma.InputJsonValue,
+            proposedData: this.toInputJsonValue(proposedData),
             confidenceScore: new Prisma.Decimal(
               resolution.candidate.confidenceScore ?? 0,
             ),
@@ -417,7 +417,7 @@ export class EntityExtractionPipelineService {
         const updated = (await this.prisma.entityProposal.update({
           where: { id: proposal.id },
           data: {
-            proposedData: nextData as Prisma.InputJsonValue,
+            proposedData: this.toInputJsonValue(nextData),
             sourceChunkId: nextData.sourceChunkId ?? null,
             sourceChunkHash: nextData.sourceChunkHash ?? null,
           },
@@ -470,7 +470,7 @@ export class EntityExtractionPipelineService {
         const updated = (await this.prisma.entityProposal.update({
           where: { id: proposal.id },
           data: {
-            proposedData: nextData as Prisma.InputJsonValue,
+            proposedData: this.toInputJsonValue(nextData),
             sourceChunkId: nextData.sourceChunkId ?? null,
             sourceChunkHash: nextData.sourceChunkHash ?? null,
           },
@@ -612,6 +612,16 @@ export class EntityExtractionPipelineService {
       chunkEvidence: data.chunkEvidence ?? [],
       source: data.source ?? 'entity_extraction',
     };
+  }
+
+  private parseSceneChangedPayload(
+    value: Prisma.JsonValue,
+  ): SceneChangedOutboxPayload {
+    return value as unknown as SceneChangedOutboxPayload;
+  }
+
+  private toInputJsonValue(value: ProposalDataLike): Prisma.InputJsonValue {
+    return value as unknown as Prisma.InputJsonValue;
   }
 
   private getEmbeddingComparer(): (text: string) => Promise<number[] | null> {

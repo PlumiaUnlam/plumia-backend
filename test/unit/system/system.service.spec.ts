@@ -37,6 +37,14 @@ interface WorkerJob {
   };
 }
 
+function getQueueMock(): jest.Mock {
+  return Queue as unknown as jest.Mock;
+}
+
+function getWorkerMock(): jest.Mock {
+  return Worker as unknown as jest.Mock;
+}
+
 describe('SystemService', () => {
   let service: SystemService;
   let prisma: MockPrismaService;
@@ -102,7 +110,7 @@ describe('SystemService', () => {
     config = module.get(ConfigService);
     extractionClient = module.get(EntityExtractionClient);
     pipeline = module.get(EntityExtractionPipelineService);
-    queueInstance = (Queue as jest.Mock).mock.results[0]?.value as {
+    queueInstance = getQueueMock().mock.results[0]?.value as {
       add: jest.Mock;
       close: jest.Mock;
     };
@@ -210,17 +218,18 @@ describe('SystemService', () => {
 
     await service.start();
 
-    workerInstance = (Worker as jest.Mock).mock.results[0]?.value as {
+    workerInstance = getWorkerMock().mock.results[0]?.value as {
       on: jest.Mock;
       close: jest.Mock;
     };
-    const workerCalls = (Worker as jest.Mock).mock.calls as Array<
+    const workerCalls = getWorkerMock().mock.calls as Array<
       [string, (job: WorkerJob) => Promise<void>]
     >;
     const processor = workerCalls[0]?.[1];
+    expect(processor).toBeDefined();
 
-    await processor({ data: { outboxId: 'outbox-3' } });
-    await processor({ data: {} });
+    await processor?.({ data: { outboxId: 'outbox-3' } });
+    await processor?.({ data: {} });
 
     expect(pipeline.processOutboxEvent).toHaveBeenCalledTimes(1);
     expect(pipeline.processOutboxEvent).toHaveBeenCalledWith('outbox-3');
@@ -236,7 +245,7 @@ describe('SystemService', () => {
 
     await service.start();
 
-    workerInstance = (Worker as jest.Mock).mock.results[0]?.value as {
+    workerInstance = getWorkerMock().mock.results[0]?.value as {
       on: jest.Mock;
       close: jest.Mock;
     };

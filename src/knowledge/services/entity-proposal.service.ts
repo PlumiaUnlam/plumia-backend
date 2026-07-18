@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, ProposalStatus, type EntityType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { toEntityType } from '../domain/entity-type';
 import { EntityResponseDto } from '../dto/responses/entity-response.dto';
 import { EntityProposalResponseDto } from '../dto/responses/entity-proposal-response.dto';
 import type { EntityRecord } from '../ports/entity-repository.port';
@@ -101,7 +102,7 @@ export class EntityProposalService {
         return null;
       }
 
-      const proposedData = proposal.proposedData as ProposalPayload;
+      const proposedData = this.parseProposalPayload(proposal.proposedData);
 
       const entity = proposal.entityId
         ? await tx.entity.findFirst({
@@ -160,7 +161,7 @@ export class EntityProposalService {
       projectId: result.projectId,
       canonicalName: result.canonicalName,
       aliases: result.aliases,
-      type: result.type,
+      type: toEntityType(result.type),
       description: result.description,
       attributes: result.attributes,
       imageUrl: result.imageUrl,
@@ -174,5 +175,9 @@ export class EntityProposalService {
     };
 
     return EntityResponseDto.from(entityRecord);
+  }
+
+  private parseProposalPayload(value: Prisma.JsonValue): ProposalPayload {
+    return value as unknown as ProposalPayload;
   }
 }
