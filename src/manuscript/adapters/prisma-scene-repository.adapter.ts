@@ -179,10 +179,10 @@ export class PrismaSceneRepository implements SceneRepository {
           };
         }
 
-      const scene = await tx.scene.update({
-        where: { id: existing.id },
-        data: {
-          content: data.content as Prisma.InputJsonValue,
+        const scene = await tx.scene.update({
+          where: { id: existing.id },
+          data: {
+            content: data.content as Prisma.InputJsonValue,
             contentHash: newHash,
             ...(data.wordCount !== undefined
               ? { wordCount: data.wordCount }
@@ -772,7 +772,7 @@ export class PrismaSceneRepository implements SceneRepository {
       },
     });
 
-    return scene?.chapter.book.projectId ?? null;
+    return scene?.chapter?.book?.projectId ?? null;
   }
 
 }
