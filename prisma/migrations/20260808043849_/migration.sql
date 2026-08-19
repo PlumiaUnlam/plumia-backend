@@ -1,2 +1,7 @@
--- AlterTable
-ALTER TABLE "relationship_proposal" ALTER COLUMN "id" DROP DEFAULT;
+-- No-op migration.
+--
+-- This migration was generated before the relationship_proposal table
+-- creation migration, but it attempted to alter that table before it
+-- existed. The following migration creates relationship_proposal with the
+-- default required by prisma/schema.prisma, so there is no operation to
+-- perform here.
