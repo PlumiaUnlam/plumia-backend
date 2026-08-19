@@ -153,6 +153,7 @@ model User {
   subscription      Subscription?
   projects          Project[]
   reviewedProposals EntityProposal[] @relation("ProposalReviewer")
+  reviewedRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalReviewer")
   resolvedAlerts    AuditAlert[]     @relation("AlertResolver")
   exportJobs        ExportJob[]
   writingSessions   WritingSession[]
@@ -237,6 +238,7 @@ model Project {
   entities            Entity[]
   relationships       Relationship[]
   entityProposals     EntityProposal[]
+  relationshipProposals RelationshipProposal[]
   auditAlerts         AuditAlert[]
   auditFalsePositives AuditFalsePositive[]
   chatThreads         ChatThread[]
@@ -324,6 +326,7 @@ model Scene {
   relsValidTo     Relationship[]   @relation("RelationshipValidTo")
   auditAlerts     AuditAlert[]
   entityProposals EntityProposal[]
+  relationshipProposals RelationshipProposal[]
   readerComments  ReaderComment[]
   writingSessions WritingSession[]
   versions         SceneVersion[]
@@ -385,6 +388,8 @@ model Entity {
   relsAsSource    Relationship[]   @relation("RelationshipSource")
   relsAsTarget    Relationship[]   @relation("RelationshipTarget")
   proposals       EntityProposal[]
+  sourceRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalSourceEntity")
+  targetRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalTargetEntity")
   generatedImages GeneratedImage[]
   timelineEvents  TimelineEventEntity[]
 
@@ -459,6 +464,7 @@ model Relationship {
   targetEntity   Entity  @relation("RelationshipTarget", fields: [targetEntityId], references: [id])
   validFromScene Scene?  @relation("RelationshipValidFrom", fields: [validFromSceneId], references: [id])
   validToScene   Scene?  @relation("RelationshipValidTo", fields: [validToSceneId], references: [id])
+  proposals      RelationshipProposal[]
 
   @@unique([sourceEntityId, targetEntityId, relationType, validFromSceneId])
   @@index([sourceEntityId], map: "idx_rel_source")
@@ -530,12 +536,51 @@ model EntityProposal {
   sourceChunk Chunk?  @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
   entity     Entity? @relation(fields: [entityId], references: [id])
   reviewedBy User?   @relation("ProposalReviewer", fields: [reviewedById], references: [id])
+  sourceRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalSourceEntityProposal")
+  targetRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalTargetEntityProposal")
 
   @@index([projectId], map: "idx_proposal_project")
   @@index([status], map: "idx_proposal_status")
   @@index([entityId], map: "idx_proposal_entity")
   @@index([sourceChunkId], map: "idx_proposal_source_chunk")
   @@map("entity_proposal")
+}
+
+model RelationshipProposal {
+  id                 String         @id @default(uuid()) @db.Uuid
+  projectId          String         @map("project_id") @db.Uuid
+  sceneId            String         @map("scene_id") @db.Uuid
+  sourceChunkId      String?        @map("source_chunk_id") @db.Uuid
+  relationshipId     String?        @map("relationship_id") @db.Uuid
+  sourceEntityId     String?        @map("source_entity_id") @db.Uuid
+  targetEntityId     String?        @map("target_entity_id") @db.Uuid
+  sourceEntityProposalId String?    @map("source_entity_proposal_id") @db.Uuid
+  targetEntityProposalId String?    @map("target_entity_proposal_id") @db.Uuid
+  relationType       RelationType   @map("relation_type")
+  description        String?
+  intensity          Decimal        @default(0.0) @db.Decimal(3, 2)
+  evidence           Json           @default("[]") @db.JsonB
+  status             ProposalStatus @default(PENDING)
+  resolutionReason   String?        @map("resolution_reason")
+  reviewedById       String?        @map("reviewed_by_id")
+  reviewedAt         DateTime?      @map("reviewed_at") @db.Timestamptz(6)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project             Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene               Scene             @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  sourceChunk         Chunk?            @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
+  relationship        Relationship?     @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
+  sourceEntity        Entity?           @relation("RelationshipProposalSourceEntity", fields: [sourceEntityId], references: [id], onDelete: SetNull)
+  targetEntity        Entity?           @relation("RelationshipProposalTargetEntity", fields: [targetEntityId], references: [id], onDelete: SetNull)
+  sourceEntityProposal EntityProposal?  @relation("RelationshipProposalSourceEntityProposal", fields: [sourceEntityProposalId], references: [id], onDelete: SetNull)
+  targetEntityProposal EntityProposal?  @relation("RelationshipProposalTargetEntityProposal", fields: [targetEntityProposalId], references: [id], onDelete: SetNull)
+  reviewedBy          User?             @relation("RelationshipProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status], map: "idx_relationship_proposal_project_status")
+  @@index([relationshipId], map: "idx_relationship_proposal_relationship")
+  @@index([sourceChunkId], map: "idx_relationship_proposal_source_chunk")
+  @@map("relationship_proposal")
 }
 
 // ============================================================
@@ -650,6 +695,7 @@ model Chunk {
   project Project @relation(fields: [projectId], references: [id])
   scene   Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
   proposals EntityProposal[]
+  relationshipProposals RelationshipProposal[]
 
   @@unique([sceneId, chunkIndex])
   @@index([sceneId], map: "idx_chunk_scene")

@@ -5,6 +5,8 @@ import { toEntityType } from '../domain/entity-type';
 import { EntityResponseDto } from '../dto/responses/entity-response.dto';
 import { EntityProposalResponseDto } from '../dto/responses/entity-proposal-response.dto';
 import type { EntityRecord } from '../ports/entity-repository.port';
+import type { EntityProposalKind } from '../../system/entity-extraction/entity-extraction.types';
+import type { EntityProposalOverrideDto } from '../dto/entity-proposal-override.dto';
 
 interface ProposalPayload {
   canonicalName: string;
@@ -13,6 +15,7 @@ interface ProposalPayload {
   description?: string | null;
   attributes?: Record<string, unknown>;
   imageUrl?: string | null;
+  proposalKind?: EntityProposalKind;
   confidenceScore?: number;
   sourceSceneId?: string;
   sourceSceneTitle?: string | null;
@@ -49,6 +52,16 @@ export class EntityProposalService {
         reviewedAt: true,
         createdAt: true,
         proposedData: true,
+        entity: {
+          select: {
+            id: true,
+            canonicalName: true,
+            aliases: true,
+            type: true,
+            description: true,
+            attributes: true,
+          },
+        },
         scene: {
           select: {
             title: true,
@@ -78,6 +91,16 @@ export class EntityProposalService {
         reviewedAt: proposal.reviewedAt,
         createdAt: proposal.createdAt,
         proposedData: proposal.proposedData,
+        targetEntity: proposal.entity
+          ? {
+              id: proposal.entity.id,
+              canonicalName: proposal.entity.canonicalName,
+              aliases: proposal.entity.aliases,
+              type: toEntityType(proposal.entity.type),
+              description: proposal.entity.description,
+              attributes: proposal.entity.attributes as Record<string, unknown>,
+            }
+          : null,
       }),
     );
   }
@@ -85,6 +108,7 @@ export class EntityProposalService {
   async acceptProposal(
     userId: string,
     proposalId: string,
+    override?: EntityProposalOverrideDto,
   ): Promise<EntityResponseDto> {
     const result = await this.prisma.$transaction(async (tx) => {
       const proposal = await tx.entityProposal.findFirst({
@@ -102,7 +126,10 @@ export class EntityProposalService {
         return null;
       }
 
-      const proposedData = this.parseProposalPayload(proposal.proposedData);
+      const proposedData = {
+        ...this.parseProposalPayload(proposal.proposedData),
+        ...(override ?? {}),
+      };
 
       const entity = proposal.entityId
         ? await tx.entity.findFirst({
@@ -117,26 +144,29 @@ export class EntityProposalService {
           })
         : null;
 
-      const consolidatedEntity =
-        entity ??
-        (await tx.entity.create({
-          data: {
-            projectId: proposal.projectId,
-            canonicalName: proposedData.canonicalName,
-            type: proposedData.type,
-            ...(proposedData.description !== undefined
-              ? { description: proposedData.description }
-              : {}),
-            aliases: proposedData.aliases ?? [],
-            attributes: (proposedData.attributes ??
-              {}) as Prisma.InputJsonValue,
-            ...(proposedData.imageUrl !== undefined
-              ? { imageUrl: proposedData.imageUrl }
-              : {}),
-            source: 'ai_proposed',
-            confidenceScore: proposal.confidenceScore,
-          },
-        }));
+      const consolidatedEntity = entity
+        ? await tx.entity.update({
+            where: { id: entity.id },
+            data: this.buildAcceptedUpdateEntityData(entity, proposedData),
+          })
+        : await tx.entity.create({
+            data: {
+              projectId: proposal.projectId,
+              canonicalName: proposedData.canonicalName,
+              type: proposedData.type,
+              ...(proposedData.description !== undefined
+                ? { description: proposedData.description }
+                : {}),
+              aliases: proposedData.aliases ?? [],
+              attributes: (proposedData.attributes ??
+                {}) as Prisma.InputJsonValue,
+              ...(proposedData.imageUrl !== undefined
+                ? { imageUrl: proposedData.imageUrl }
+                : {}),
+              source: 'ai_proposed',
+              confidenceScore: proposal.confidenceScore,
+            },
+          });
 
       await tx.entityProposal.update({
         where: { id: proposal.id },
@@ -177,7 +207,110 @@ export class EntityProposalService {
     return EntityResponseDto.from(entityRecord);
   }
 
+  async rejectProposal(userId: string, proposalId: string): Promise<void> {
+    const result = await this.prisma.entityProposal.updateMany({
+      where: {
+        id: proposalId,
+        status: ProposalStatus.PENDING,
+        project: {
+          userId,
+          deletedAt: null,
+        },
+      },
+      data: {
+        status: ProposalStatus.REJECTED,
+        reviewedById: userId,
+        reviewedAt: new Date(),
+        resolutionReason: 'rejected_by_author',
+      },
+    });
+
+    if (result.count === 0) {
+      throw new NotFoundException('Proposal not found');
+    }
+  }
+
   private parseProposalPayload(value: Prisma.JsonValue): ProposalPayload {
     return value as unknown as ProposalPayload;
+  }
+
+  private buildAcceptedUpdateEntityData(
+    entity: {
+      canonicalName: string;
+      aliases: string[];
+      type: EntityType;
+      description: string | null;
+      attributes: Prisma.JsonValue;
+      imageUrl: string | null;
+    },
+    proposal: ProposalPayload,
+  ): Prisma.EntityUpdateInput {
+    const mergedAliases = [
+      ...new Set([...(entity.aliases ?? []), ...(proposal.aliases ?? [])]),
+    ];
+    const mergedDescription = this.mergeDescriptions(
+      entity.description,
+      proposal.description,
+    );
+    const mergedAttributes = this.mergeAttributes(
+      entity.attributes,
+      proposal.attributes,
+    );
+
+    return {
+      ...(proposal.canonicalName === undefined
+        ? {}
+        : { canonicalName: proposal.canonicalName }),
+      ...(proposal.type === undefined ? {} : { type: proposal.type }),
+      aliases: mergedAliases,
+      ...(mergedDescription === undefined
+        ? {}
+        : { description: mergedDescription }),
+      ...(proposal.imageUrl === undefined
+        ? {}
+        : { imageUrl: proposal.imageUrl }),
+      attributes: mergedAttributes as Prisma.InputJsonValue,
+    };
+  }
+
+  private mergeDescriptions(
+    current: string | null,
+    suggested: string | null | undefined,
+  ): string | null | undefined {
+    const currentValue = current?.trim();
+    const suggestedValue = suggested?.trim();
+
+    if (!suggestedValue) {
+      return undefined;
+    }
+    if (!currentValue) {
+      return suggestedValue;
+    }
+
+    const normalizedCurrent = currentValue.toLowerCase();
+    const normalizedSuggested = suggestedValue.toLowerCase();
+    if (normalizedCurrent.includes(normalizedSuggested)) {
+      return currentValue;
+    }
+    if (normalizedSuggested.includes(normalizedCurrent)) {
+      return suggestedValue;
+    }
+
+    return `${currentValue}\n\n${suggestedValue}`;
+  }
+
+  private mergeAttributes(
+    current: Prisma.JsonValue,
+    suggested: Record<string, unknown> | undefined,
+  ): Record<string, unknown> {
+    const currentRecord =
+      current && typeof current === 'object' && !Array.isArray(current)
+        ? (current as Record<string, unknown>)
+        : {};
+
+    return {
+      ...currentRecord,
+      ...(suggested ?? {}),
+    };
   }
 }

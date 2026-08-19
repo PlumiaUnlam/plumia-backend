@@ -17,12 +17,14 @@ interface MockTx {
   entity: {
     findFirst: jest.Mock;
     create: jest.Mock;
+    update: jest.Mock;
   };
 }
 
 interface MockPrismaService {
   entityProposal: {
     findMany: jest.Mock;
+    updateMany: jest.Mock;
   };
   $transaction: jest.Mock;
 }
@@ -43,6 +45,7 @@ describe('EntityProposalService', () => {
           useValue: {
             entityProposal: {
               findMany: jest.fn(),
+              updateMany: jest.fn(),
             },
             $transaction: jest.fn(),
           },
@@ -75,6 +78,7 @@ describe('EntityProposalService', () => {
           attributes: {},
           imageUrl: null,
         },
+        entity: null,
         scene: {
           title: 'Opening',
           chapter: {
@@ -107,6 +111,16 @@ describe('EntityProposalService', () => {
         reviewedAt: true,
         createdAt: true,
         proposedData: true,
+        entity: {
+          select: {
+            id: true,
+            canonicalName: true,
+            aliases: true,
+            type: true,
+            description: true,
+            attributes: true,
+          },
+        },
         scene: {
           select: {
             title: true,
@@ -134,6 +148,7 @@ describe('EntityProposalService', () => {
         reviewedById: null,
         reviewedAt: null,
         createdAt: now,
+        targetEntity: null,
         proposedData: {
           canonicalName: 'Elena',
           aliases: ['Eli'],
@@ -146,12 +161,24 @@ describe('EntityProposalService', () => {
     ]);
   });
 
-  it('accepts a proposal by reusing an existing linked entity', async () => {
-    const entity = buildEntity({
+  it('accepts an update proposal by enriching an existing linked entity', async () => {
+    const existingEntity = buildEntity({
       id: 'entity-1',
       canonicalName: 'Elena',
       type: EntityType.CHARACTER,
       confidenceScore: confidence,
+      aliases: ['El'],
+      description: 'Known mage',
+      attributes: { age: 20 },
+    });
+    const updatedEntity = buildEntity({
+      id: 'entity-1',
+      canonicalName: 'Elena',
+      type: EntityType.CHARACTER,
+      confidenceScore: confidence,
+      aliases: ['El', 'Eli'],
+      description: 'Known mage\n\nShe now bears a silver mark.',
+      attributes: { age: 20, rank: 'captain' },
     });
     const tx = createTx({
       proposal: {
@@ -160,10 +187,15 @@ describe('EntityProposalService', () => {
         entityId: 'entity-1',
         proposedData: {
           canonicalName: 'Elena',
+          aliases: ['Eli'],
           type: EntityType.CHARACTER,
+          description: 'She now bears a silver mark.',
+          attributes: { rank: 'captain' },
+          proposalKind: 'ENTITY_UPDATE',
         },
       },
-      entity,
+      entity: existingEntity,
+      updatedEntity,
     });
     prisma.$transaction.mockImplementation(
       async (callback: (transaction: MockTx) => Promise<Entity | null>) =>
@@ -183,6 +215,16 @@ describe('EntityProposalService', () => {
       },
     });
     expect(tx.entity.create).not.toHaveBeenCalled();
+    expect(tx.entity.update).toHaveBeenCalledWith({
+      where: { id: 'entity-1' },
+      data: {
+        canonicalName: 'Elena',
+        type: EntityType.CHARACTER,
+        aliases: ['El', 'Eli'],
+        description: 'Known mage\n\nShe now bears a silver mark.',
+        attributes: { age: 20, rank: 'captain' },
+      },
+    });
     expect(tx.entityProposal.update).toHaveBeenCalledWith({
       where: { id: 'proposal-1' },
       data: {
@@ -199,6 +241,59 @@ describe('EntityProposalService', () => {
       canonicalName: 'Elena',
       type: EntityType.CHARACTER,
       isActive: true,
+    });
+  });
+
+  it('keeps the complete edited description when it includes current and new text', async () => {
+    const existingEntity = buildEntity({
+      id: 'entity-1',
+      canonicalName: 'Elena',
+      type: EntityType.CHARACTER,
+      confidenceScore: confidence,
+      description: 'Known mage',
+    });
+    const updatedEntity = buildEntity({
+      id: 'entity-1',
+      canonicalName: 'Elena',
+      type: EntityType.CHARACTER,
+      confidenceScore: confidence,
+      description: 'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
+    });
+    const tx = createTx({
+      proposal: {
+        id: 'proposal-edited',
+        projectId: 'project-1',
+        entityId: 'entity-1',
+        proposedData: {
+          canonicalName: 'Elena',
+          aliases: [],
+          type: EntityType.CHARACTER,
+          description: 'She now bears a silver mark.',
+          attributes: {},
+        },
+      },
+      entity: existingEntity,
+      updatedEntity,
+    });
+    prisma.$transaction.mockImplementation(
+      async (callback: (transaction: MockTx) => Promise<Entity | null>) =>
+        callback(tx),
+    );
+
+    await service.acceptProposal('user-1', 'proposal-edited', {
+      description: 'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
+    });
+
+    expect(tx.entity.update).toHaveBeenCalledWith({
+      where: { id: 'entity-1' },
+      data: {
+        canonicalName: 'Elena',
+        type: EntityType.CHARACTER,
+        aliases: [],
+        description:
+          'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
+        attributes: {},
+      },
     });
   });
 
@@ -267,6 +362,29 @@ describe('EntityProposalService', () => {
       NotFoundException,
     );
   });
+
+  it('rejects a pending proposal', async () => {
+    prisma.entityProposal.updateMany.mockResolvedValue({ count: 1 });
+
+    await service.rejectProposal('user-1', 'proposal-3');
+
+    expect(prisma.entityProposal.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'proposal-3',
+        status: ProposalStatus.PENDING,
+        project: {
+          userId: 'user-1',
+          deletedAt: null,
+        },
+      },
+      data: {
+        status: ProposalStatus.REJECTED,
+        reviewedById: 'user-1',
+        reviewedAt: expect.any(Date) as unknown,
+        resolutionReason: 'rejected_by_author',
+      },
+    });
+  });
 });
 
 function createTx(input: {
@@ -278,6 +396,7 @@ function createTx(input: {
   } | null;
   entity: Entity | null;
   createdEntity?: Entity;
+  updatedEntity?: Entity;
 }): MockTx {
   return {
     entityProposal: {
@@ -295,6 +414,11 @@ function createTx(input: {
     entity: {
       findFirst: jest.fn().mockResolvedValue(input.entity),
       create: jest.fn().mockResolvedValue(input.createdEntity ?? null),
+      update: jest
+        .fn()
+        .mockResolvedValue(
+          input.updatedEntity ?? input.entity ?? input.createdEntity ?? null,
+        ),
     },
   };
 }
@@ -304,15 +428,18 @@ function buildEntity(input: {
   canonicalName: string;
   type: EntityType;
   confidenceScore: Prisma.Decimal;
+  aliases?: string[];
+  description?: string | null;
+  attributes?: Record<string, unknown>;
 }): Entity {
   return {
     id: input.id,
     projectId: 'project-1',
     canonicalName: input.canonicalName,
-    aliases: [],
+    aliases: input.aliases ?? [],
     type: input.type,
-    description: null,
-    attributes: {},
+    description: input.description ?? null,
+    attributes: (input.attributes ?? {}) as Prisma.JsonObject,
     imageUrl: null,
     source: 'ai_proposed',
     confidenceScore: input.confidenceScore,
