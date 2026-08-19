@@ -257,7 +257,8 @@ describe('EntityProposalService', () => {
       canonicalName: 'Elena',
       type: EntityType.CHARACTER,
       confidenceScore: confidence,
-      description: 'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
+      description:
+        'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
     });
     const tx = createTx({
       proposal: {
@@ -281,7 +282,8 @@ describe('EntityProposalService', () => {
     );
 
     await service.acceptProposal('user-1', 'proposal-edited', {
-      description: 'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
+      description:
+        'Known mage\n\nShe now bears a silver mark.\n\nShe commands the guard.',
     });
 
     expect(tx.entity.update).toHaveBeenCalledWith({

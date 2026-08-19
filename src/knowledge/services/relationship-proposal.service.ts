@@ -295,8 +295,12 @@ export class RelationshipProposalService {
     const currentValue = current?.trim();
     const suggestedValue = suggested?.trim();
 
-    if (!suggestedValue) return currentValue ?? null;
-    if (!currentValue) return suggestedValue;
+    if (!suggestedValue) {
+      return currentValue ?? null;
+    }
+    if (!currentValue) {
+      return suggestedValue;
+    }
 
     const normalizedCurrent = currentValue.toLowerCase();
     const normalizedSuggested = suggestedValue.toLowerCase();
