@@ -1,4 +1,20 @@
 import type { EntityType } from '../../domain/entity-type';
+import type { EntityProposalKind } from '../../../system/entity-extraction/entity-extraction.types';
+
+interface EntityProposalChunkEvidenceDto {
+  chunkId: string;
+  chunkHash: string;
+  chunkIndex: number;
+}
+
+interface EntityProposalTargetEntityDto {
+  id: string;
+  canonicalName: string;
+  aliases: string[];
+  type: EntityType;
+  description: string | null;
+  attributes: Record<string, unknown>;
+}
 
 export interface EntityProposalPayloadDto {
   canonicalName: string;
@@ -7,6 +23,7 @@ export interface EntityProposalPayloadDto {
   description: string | null;
   attributes: Record<string, unknown>;
   imageUrl: string | null;
+  proposalKind?: EntityProposalKind;
   confidenceScore?: number;
   sourceSceneId?: string;
   sourceSceneTitle?: string | null;
@@ -14,11 +31,7 @@ export interface EntityProposalPayloadDto {
   normalizedName?: string;
   sourceChunkId?: string | null;
   sourceChunkHash?: string | null;
-  chunkEvidence?: Array<{
-    chunkId: string;
-    chunkHash: string;
-    chunkIndex: number;
-  }>;
+  chunkEvidence?: EntityProposalChunkEvidenceDto[];
 }
 
 export type EntityProposalStatusDto =
@@ -41,6 +54,7 @@ export class EntityProposalResponseDto {
   reviewedAt!: Date | null;
   createdAt!: Date;
   proposedData!: EntityProposalPayloadDto;
+  targetEntity!: EntityProposalTargetEntityDto | null;
 
   static from(record: {
     id: string;
@@ -56,6 +70,7 @@ export class EntityProposalResponseDto {
     reviewedAt: Date | null;
     createdAt: Date;
     proposedData: unknown;
+    targetEntity?: EntityProposalTargetEntityDto | null;
   }): EntityProposalResponseDto {
     return {
       id: record.id,
@@ -71,6 +86,7 @@ export class EntityProposalResponseDto {
       reviewedAt: record.reviewedAt,
       createdAt: record.createdAt,
       proposedData: record.proposedData as EntityProposalPayloadDto,
+      targetEntity: record.targetEntity ?? null,
     };
   }
 }

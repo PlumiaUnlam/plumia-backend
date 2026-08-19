@@ -1,4 +1,7 @@
 import type { EntityType } from '../../knowledge/domain/entity-type';
+import type { RelationType } from '../../knowledge/domain/relation-type';
+
+export type EntityProposalKind = 'NEW_ENTITY' | 'ENTITY_UPDATE';
 
 export interface SceneChangedOutboxPayload {
   sceneId: string;
@@ -29,6 +32,16 @@ export interface ChunkEvidence {
 
 export interface ExtractionResponse {
   entities: ExtractionCandidate[];
+  relationships: ExtractedRelationship[];
+}
+
+export interface ExtractedRelationship {
+  sourceEntity: string;
+  targetEntity: string;
+  relationType: RelationType;
+  description: string | null;
+  intensity: number;
+  evidence: string[];
 }
 
 export interface ConfirmedEntityLike {
@@ -37,6 +50,7 @@ export interface ConfirmedEntityLike {
   aliases: string[];
   type: EntityType;
   description: string | null;
+  attributes?: Record<string, unknown>;
 }
 
 export interface PendingProposalLike {
@@ -52,6 +66,7 @@ export interface ProposalDataLike {
   description: string | null;
   attributes: Record<string, unknown>;
   imageUrl: string | null;
+  proposalKind?: EntityProposalKind;
   confidenceScore: number;
   evidence: string[];
   normalizedName: string;

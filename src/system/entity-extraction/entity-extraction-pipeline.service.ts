@@ -8,10 +8,12 @@ import type {
   ChunkEvidence,
   ConfirmedEntityLike,
   ExtractionCandidate,
+  ExtractedRelationship,
   PendingProposalLike,
   ProposalDataLike,
   SceneChangedOutboxPayload,
 } from './entity-extraction.types';
+import { toRelationType } from '../../knowledge/domain/relation-type';
 
 interface JsonNode {
   type?: string;
@@ -28,14 +30,32 @@ interface ChunkRow {
 }
 
 type ProposalRecord = PendingProposalLike & {
+  entityId: string | null;
+  sceneId: string;
   status: ProposalStatus;
   sourceChunkId: string | null;
   sourceChunkHash: string | null;
   proposedData: ProposalDataLike;
 };
 
+interface RelationshipProposalRecord {
+  id: string;
+  relationshipId: string | null;
+  sourceEntityId: string | null;
+  targetEntityId: string | null;
+  sourceEntityProposalId: string | null;
+  targetEntityProposalId: string | null;
+  relationType: string;
+  description: string | null;
+  intensity: number;
+  evidence: string[];
+  status: ProposalStatus;
+}
+
 interface ProposalRow {
   id: string;
+  sceneId: string;
+  entityId: string | null;
   proposedData: unknown;
   confidenceScore: Prisma.Decimal | number;
   status: ProposalStatus;
@@ -49,16 +69,33 @@ const confirmedEntitySelect = {
   aliases: true,
   type: true,
   description: true,
+  attributes: true,
 } satisfies Prisma.EntitySelect;
 
 const proposalSelect = {
   id: true,
+  sceneId: true,
+  entityId: true,
   proposedData: true,
   confidenceScore: true,
   status: true,
   sourceChunkId: true,
   sourceChunkHash: true,
 } satisfies Prisma.EntityProposalSelect;
+
+const relationshipProposalSelect = {
+  id: true,
+  relationshipId: true,
+  sourceEntityId: true,
+  targetEntityId: true,
+  sourceEntityProposalId: true,
+  targetEntityProposalId: true,
+  relationType: true,
+  description: true,
+  intensity: true,
+  evidence: true,
+  status: true,
+} satisfies Prisma.RelationshipProposalSelect;
 
 @Injectable()
 export class EntityExtractionPipelineService {
@@ -133,6 +170,7 @@ export class EntityExtractionPipelineService {
     ).map((entity) => ({
       ...entity,
       type: toEntityType(entity.type),
+      attributes: this.normalizeAttributesRecord(entity.attributes),
     }));
 
     const chunks = await this.prisma.chunk.findMany({
@@ -168,6 +206,8 @@ export class EntityExtractionPipelineService {
                 proposal.id,
                 {
                   id: proposal.id,
+                  sceneId: proposal.sceneId,
+                  entityId: proposal.entityId,
                   proposedData: this.normalizeProposalData(
                     proposal.proposedData,
                   ),
@@ -181,6 +221,7 @@ export class EntityExtractionPipelineService {
         ),
         new Set<string>(),
         new Map<string, ChunkRow>(),
+        scene.id,
       );
       return;
     }
@@ -201,6 +242,23 @@ export class EntityExtractionPipelineService {
       },
     })) as ProposalRow[];
 
+    const pendingRelationshipProposals =
+      (await this.prisma.relationshipProposal.findMany({
+        where: {
+          projectId,
+          status: ProposalStatus.PENDING,
+        },
+        select: relationshipProposalSelect,
+      })) as unknown as RelationshipProposalRecord[];
+    const rejectedRelationshipProposals =
+      (await this.prisma.relationshipProposal.findMany({
+        where: {
+          projectId,
+          status: ProposalStatus.REJECTED,
+        },
+        select: relationshipProposalSelect,
+      })) as unknown as RelationshipProposalRecord[];
+
     const proposalsById = new Map<string, ProposalRecord>(
       pendingProposals.map(
         (proposal) =>
@@ -208,6 +266,8 @@ export class EntityExtractionPipelineService {
             proposal.id,
             {
               id: proposal.id,
+              sceneId: proposal.sceneId,
+              entityId: proposal.entityId,
               proposedData: this.normalizeProposalData(proposal.proposedData),
               confidenceScore: Number(proposal.confidenceScore),
               status: proposal.status,
@@ -222,6 +282,7 @@ export class EntityExtractionPipelineService {
       proposalsById,
       activeChunkIds,
       chunksById,
+      scene.id,
     );
 
     const compareEmbedding = this.getEmbeddingComparer();
@@ -235,9 +296,9 @@ export class EntityExtractionPipelineService {
           projectId,
           confirmedEntities,
           chunk,
-          chunksById,
-          activeChunkIds,
           proposalsById,
+          relationshipProposals: pendingRelationshipProposals,
+          rejectedRelationshipProposals,
           compareEmbedding,
         });
       }
@@ -256,9 +317,9 @@ export class EntityExtractionPipelineService {
     projectId: string;
     confirmedEntities: ConfirmedEntityLike[];
     chunk: ChunkRow;
-    chunksById: Map<string, ChunkRow>;
-    activeChunkIds: Set<string>;
     proposalsById: Map<string, ProposalRecord>;
+    relationshipProposals: RelationshipProposalRecord[];
+    rejectedRelationshipProposals: RelationshipProposalRecord[];
     compareEmbedding: (text: string) => Promise<number[] | null>;
   }): Promise<void> {
     const chunkText = input.chunk.content.trim();
@@ -273,12 +334,16 @@ export class EntityExtractionPipelineService {
         canonicalName: entity.canonicalName,
         aliases: entity.aliases,
         type: entity.type,
+        description: entity.description,
+        attributes: entity.attributes ?? {},
       })),
     });
 
-    const candidates = this.resolution.dedupeCandidates(extracted);
-    const matchedProposalIds = new Set<string>();
-
+    const candidates = this.resolution.dedupeCandidates(extracted.entities);
+    const resolvedEntityReferences = new Map<
+      string,
+      { entityId: string | null; proposalId: string | null }
+    >();
     if (
       !this.extractionClient.hasEmbeddingModel() &&
       !this.embeddingWarningShown
@@ -298,6 +363,44 @@ export class EntityExtractionPipelineService {
       );
 
       if (resolution.confirmedEntityId) {
+        const confirmedEntity = input.confirmedEntities.find(
+          (entity) => entity.id === resolution.confirmedEntityId,
+        );
+        if (!confirmedEntity) {
+          continue;
+        }
+
+        const proposedUpdate = this.createEntityUpdateProposalData(
+          confirmedEntity,
+          resolution.candidate,
+          input.chunk,
+        );
+        if (!proposedUpdate) {
+          continue;
+        }
+
+        const existingProposal = [...input.proposalsById.values()].find(
+          (proposal) => proposal.entityId === confirmedEntity.id,
+        );
+        const updateProposal = existingProposal
+          ? await this.updateExistingEntityProposal(
+              existingProposal,
+              proposedUpdate,
+            )
+          : await this.createEntityUpdateProposal({
+              projectId: input.projectId,
+              sceneId: input.scene.id,
+              entityId: confirmedEntity.id,
+              confidenceScore: resolution.candidate.confidenceScore ?? 0,
+              proposedData: proposedUpdate,
+            });
+
+        input.proposalsById.set(updateProposal.id, updateProposal);
+        this.addResolvedEntityReference(
+          resolvedEntityReferences,
+          resolution.candidate,
+          { entityId: confirmedEntity.id, proposalId: null },
+        );
         continue;
       }
 
@@ -333,6 +436,8 @@ export class EntityExtractionPipelineService {
 
         input.proposalsById.set(updatedProposal.id, {
           id: updatedProposal.id,
+          sceneId: updatedProposal.sceneId,
+          entityId: updatedProposal.entityId,
           proposedData: this.normalizeProposalData(
             updatedProposal.proposedData,
           ),
@@ -341,7 +446,11 @@ export class EntityExtractionPipelineService {
           sourceChunkId: updatedProposal.sourceChunkId ?? null,
           sourceChunkHash: updatedProposal.sourceChunkHash ?? null,
         });
-        matchedProposalIds.add(updatedProposal.id);
+        this.addResolvedEntityReference(
+          resolvedEntityReferences,
+          resolution.candidate,
+          { entityId: null, proposalId: currentProposal.id },
+        );
         continue;
       }
 
@@ -367,22 +476,32 @@ export class EntityExtractionPipelineService {
 
         input.proposalsById.set(proposal.id, {
           id: proposal.id,
+          sceneId: proposal.sceneId,
+          entityId: proposal.entityId,
           proposedData: this.normalizeProposalData(proposal.proposedData),
           confidenceScore: Number(proposal.confidenceScore),
           status: proposal.status,
           sourceChunkId: proposal.sourceChunkId ?? null,
           sourceChunkHash: proposal.sourceChunkHash ?? null,
         });
-        matchedProposalIds.add(proposal.id);
+        this.addResolvedEntityReference(
+          resolvedEntityReferences,
+          resolution.candidate,
+          { entityId: null, proposalId: proposal.id },
+        );
       }
     }
 
-    await this.pruneChunkBackedProposalsForChunk({
+    await this.processRelationshipCandidates({
+      projectId: input.projectId,
+      sceneId: input.scene.id,
       chunk: input.chunk,
-      activeChunkIds: input.activeChunkIds,
-      chunksById: input.chunksById,
-      proposalsById: input.proposalsById,
-      matchedProposalIds,
+      relationships: extracted.relationships,
+      confirmedEntities: input.confirmedEntities,
+      proposals: input.proposalsById,
+      resolvedEntityReferences,
+      relationshipProposals: input.relationshipProposals,
+      rejectedRelationshipProposals: input.rejectedRelationshipProposals,
     });
 
     await this.clearChunkDirtyFlag(input.chunk.id);
@@ -392,8 +511,12 @@ export class EntityExtractionPipelineService {
     proposalsById: Map<string, ProposalRecord>,
     activeChunkIds: Set<string>,
     chunksById: Map<string, ChunkRow>,
+    sceneId: string,
   ): Promise<void> {
     for (const proposal of proposalsById.values()) {
+      if (proposal.sceneId !== sceneId) {
+        continue;
+      }
       const currentData = proposal.proposedData;
       const evidence = this.getChunkEvidence(currentData);
 
@@ -426,6 +549,8 @@ export class EntityExtractionPipelineService {
 
         proposalsById.set(updated.id, {
           id: updated.id,
+          sceneId: updated.sceneId,
+          entityId: updated.entityId,
           proposedData: this.normalizeProposalData(updated.proposedData),
           confidenceScore: Number(updated.confidenceScore),
           status: updated.status,
@@ -436,57 +561,300 @@ export class EntityExtractionPipelineService {
     }
   }
 
-  private async pruneChunkBackedProposalsForChunk(input: {
-    chunk: ChunkRow;
-    activeChunkIds: Set<string>;
-    chunksById: Map<string, ChunkRow>;
-    proposalsById: Map<string, ProposalRecord>;
-    matchedProposalIds: Set<string>;
-  }): Promise<void> {
-    for (const proposal of input.proposalsById.values()) {
-      const evidence = this.getChunkEvidence(proposal.proposedData);
-      if (!evidence.some((entry) => entry.chunkId === input.chunk.id)) {
-        continue;
-      }
-
-      if (input.matchedProposalIds.has(proposal.id)) {
-        continue;
-      }
-
-      const nextData = this.pruneProposalDataEvidence(
-        proposal.proposedData,
-        input.activeChunkIds,
-        input.chunksById,
-        input.chunk.id,
-      );
-
-      if (!nextData) {
-        await this.markProposalObsolete(proposal.id);
-        input.proposalsById.delete(proposal.id);
-        continue;
-      }
-
-      if (!this.areProposalDataEqual(proposal.proposedData, nextData)) {
-        const updated = (await this.prisma.entityProposal.update({
-          where: { id: proposal.id },
-          data: {
-            proposedData: this.toInputJsonValue(nextData),
-            sourceChunkId: nextData.sourceChunkId ?? null,
-            sourceChunkHash: nextData.sourceChunkHash ?? null,
-          },
-          select: proposalSelect,
-        })) as ProposalRow;
-
-        input.proposalsById.set(updated.id, {
-          id: updated.id,
-          proposedData: this.normalizeProposalData(updated.proposedData),
-          confidenceScore: Number(updated.confidenceScore),
-          status: updated.status,
-          sourceChunkId: updated.sourceChunkId ?? null,
-          sourceChunkHash: updated.sourceChunkHash ?? null,
-        });
+  private addResolvedEntityReference(
+    references: Map<
+      string,
+      { entityId: string | null; proposalId: string | null }
+    >,
+    candidate: ExtractionCandidate,
+    reference: { entityId: string | null; proposalId: string | null },
+  ): void {
+    for (const label of [
+      candidate.canonicalName,
+      ...(candidate.aliases ?? []),
+    ]) {
+      const normalized = this.resolution.normalize(label);
+      if (normalized) {
+        references.set(normalized, reference);
       }
     }
+  }
+
+  private async processRelationshipCandidates(input: {
+    projectId: string;
+    sceneId: string;
+    chunk: ChunkRow;
+    relationships: ExtractedRelationship[];
+    confirmedEntities: ConfirmedEntityLike[];
+    proposals: Map<string, ProposalRecord>;
+    resolvedEntityReferences: Map<
+      string,
+      { entityId: string | null; proposalId: string | null }
+    >;
+    relationshipProposals: RelationshipProposalRecord[];
+    rejectedRelationshipProposals: RelationshipProposalRecord[];
+  }): Promise<void> {
+    for (const relationship of input.relationships ?? []) {
+      const relationType = toRelationType(relationship.relationType);
+      const source = this.resolveRelationshipEntity(
+        relationship.sourceEntity,
+        input,
+      );
+      const target = this.resolveRelationshipEntity(
+        relationship.targetEntity,
+        input,
+      );
+
+      if (!source || !target || this.sameEntityReference(source, target)) {
+        continue;
+      }
+
+      const existingRelationship =
+        source.entityId && target.entityId
+          ? await this.prisma.relationship.findFirst({
+              where: {
+                projectId: input.projectId,
+                sourceEntityId: source.entityId,
+                targetEntityId: target.entityId,
+                relationType,
+              },
+              select: { id: true, description: true, confidenceScore: true },
+            })
+          : null;
+      const intensity = this.normalizeRelationshipIntensity(
+        relationship.intensity,
+      );
+
+      if (
+        existingRelationship &&
+        !this.relationshipHasNewInformation(
+          existingRelationship,
+          relationship.description,
+          intensity,
+        )
+      ) {
+        continue;
+      }
+
+      const current = input.relationshipProposals.find((proposal) =>
+        this.matchesRelationshipProposal(
+          proposal,
+          existingRelationship?.id ?? null,
+          source,
+          target,
+          relationType,
+        ),
+      );
+      const evidence = [...new Set(relationship.evidence ?? [])];
+
+      const wasRejectedWithSameEvidence =
+        input.rejectedRelationshipProposals.some(
+          (proposal) =>
+            this.matchesRelationshipProposal(
+              proposal,
+              existingRelationship?.id ?? null,
+              source,
+              target,
+              relationType,
+            ) && this.hasSharedEvidence(proposal.evidence, evidence),
+        );
+      if (wasRejectedWithSameEvidence) {
+        continue;
+      }
+
+      if (current) {
+        const updated = await this.prisma.relationshipProposal.update({
+          where: { id: current.id },
+          data: {
+            description: this.mergeRelationshipDescriptions(
+              current.description,
+              relationship.description,
+            ),
+            intensity: Math.max(current.intensity, intensity),
+            evidence: [...new Set([...current.evidence, ...evidence])],
+            sourceChunkId: input.chunk.id,
+          },
+          select: relationshipProposalSelect,
+        });
+        Object.assign(current, this.toRelationshipProposalRecord(updated));
+        continue;
+      }
+
+      const created = await this.prisma.relationshipProposal.create({
+        data: {
+          projectId: input.projectId,
+          sceneId: input.sceneId,
+          sourceChunkId: input.chunk.id,
+          relationshipId: existingRelationship?.id ?? null,
+          sourceEntityId: source.entityId,
+          targetEntityId: target.entityId,
+          sourceEntityProposalId: source.proposalId,
+          targetEntityProposalId: target.proposalId,
+          relationType,
+          description: relationship.description ?? null,
+          intensity,
+          evidence,
+        },
+        select: relationshipProposalSelect,
+      });
+      input.relationshipProposals.push(
+        this.toRelationshipProposalRecord(created),
+      );
+    }
+  }
+
+  private resolveRelationshipEntity(
+    label: string,
+    input: {
+      confirmedEntities: ConfirmedEntityLike[];
+      proposals: Map<string, ProposalRecord>;
+      resolvedEntityReferences: Map<
+        string,
+        { entityId: string | null; proposalId: string | null }
+      >;
+    },
+  ): { entityId: string | null; proposalId: string | null } | null {
+    const normalized = this.resolution.normalize(label);
+    if (!normalized) {
+      return null;
+    }
+
+    const resolved = input.resolvedEntityReferences.get(normalized);
+    if (resolved) {
+      return resolved;
+    }
+
+    const confirmed = input.confirmedEntities.find((entity) =>
+      [entity.canonicalName, ...entity.aliases].some(
+        (value) => this.resolution.normalize(value) === normalized,
+      ),
+    );
+    if (confirmed) {
+      return { entityId: confirmed.id, proposalId: null };
+    }
+
+    for (const proposal of input.proposals.values()) {
+      if (
+        [
+          proposal.proposedData.canonicalName,
+          ...proposal.proposedData.aliases,
+        ].some((value) => this.resolution.normalize(value) === normalized)
+      ) {
+        return { entityId: null, proposalId: proposal.id };
+      }
+    }
+    return null;
+  }
+
+  private sameEntityReference(
+    source: { entityId: string | null; proposalId: string | null },
+    target: { entityId: string | null; proposalId: string | null },
+  ): boolean {
+    return Boolean(
+      (source.entityId && source.entityId === target.entityId) ??
+      (source.proposalId && source.proposalId === target.proposalId),
+    );
+  }
+
+  private matchesRelationshipProposal(
+    proposal: RelationshipProposalRecord,
+    relationshipId: string | null,
+    source: { entityId: string | null; proposalId: string | null },
+    target: { entityId: string | null; proposalId: string | null },
+    relationType: string,
+  ): boolean {
+    if (proposal.relationType !== relationType) {
+      return false;
+    }
+    if (relationshipId) {
+      return proposal.relationshipId === relationshipId;
+    }
+    return (
+      proposal.sourceEntityId === source.entityId &&
+      proposal.targetEntityId === target.entityId &&
+      proposal.sourceEntityProposalId === source.proposalId &&
+      proposal.targetEntityProposalId === target.proposalId
+    );
+  }
+
+  private relationshipHasNewInformation(
+    relationship: {
+      description: string | null;
+      confidenceScore: Prisma.Decimal;
+    },
+    description: string | null,
+    intensity: number,
+  ): boolean {
+    const currentDescription = relationship.description?.trim().toLowerCase();
+    const incomingDescription = description?.trim().toLowerCase();
+    const hasNewDescription = Boolean(
+      incomingDescription &&
+      (currentDescription === undefined ||
+        (!currentDescription.includes(incomingDescription) &&
+          !incomingDescription.includes(currentDescription))),
+    );
+    if (hasNewDescription) {
+      return true;
+    }
+    return Math.abs(Number(relationship.confidenceScore) - intensity) > 0.05;
+  }
+
+  private mergeRelationshipDescriptions(
+    current: string | null,
+    incoming: string | null,
+  ): string | null {
+    if (!incoming?.trim()) {
+      return current;
+    }
+    if (!current?.trim()) {
+      return incoming.trim();
+    }
+    const normalizedCurrent = current.trim().toLowerCase();
+    const normalizedIncoming = incoming.trim().toLowerCase();
+    if (
+      normalizedCurrent.includes(normalizedIncoming) ||
+      normalizedIncoming.includes(normalizedCurrent)
+    ) {
+      return current.trim();
+    }
+    return `${current.trim()}\n\n${incoming.trim()}`;
+  }
+
+  private hasSharedEvidence(current: string[], incoming: string[]): boolean {
+    const currentEvidence = new Set(
+      current.map((value) => value.trim().toLowerCase()),
+    );
+    return incoming.some((value) =>
+      currentEvidence.has(value.trim().toLowerCase()),
+    );
+  }
+
+  private normalizeRelationshipIntensity(value: number): number {
+    return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  }
+
+  private toRelationshipProposalRecord(proposal: {
+    id: string;
+    relationshipId: string | null;
+    sourceEntityId: string | null;
+    targetEntityId: string | null;
+    sourceEntityProposalId: string | null;
+    targetEntityProposalId: string | null;
+    relationType: string;
+    description: string | null;
+    intensity: Prisma.Decimal | number;
+    evidence: Prisma.JsonValue;
+    status: ProposalStatus;
+  }): RelationshipProposalRecord {
+    return {
+      ...proposal,
+      intensity: Number(proposal.intensity),
+      evidence: Array.isArray(proposal.evidence)
+        ? proposal.evidence.filter(
+            (value): value is string => typeof value === 'string',
+          )
+        : [],
+    };
   }
 
   private createProposalData(
@@ -504,6 +872,7 @@ export class EntityExtractionPipelineService {
       description: candidate.description,
       attributes: candidate.attributes,
       imageUrl: candidate.imageUrl,
+      proposalKind: 'NEW_ENTITY',
       confidenceScore: candidate.confidenceScore,
       evidence: [...new Set(candidate.evidence ?? [])],
       normalizedName,
@@ -604,6 +973,7 @@ export class EntityExtractionPipelineService {
       description: data.description ?? null,
       attributes: data.attributes ?? {},
       imageUrl: data.imageUrl ?? null,
+      proposalKind: data.proposalKind ?? 'NEW_ENTITY',
       confidenceScore: data.confidenceScore ?? 0,
       evidence: data.evidence ?? [],
       normalizedName: data.normalizedName ?? '',
@@ -622,6 +992,237 @@ export class EntityExtractionPipelineService {
 
   private toInputJsonValue(value: ProposalDataLike): Prisma.InputJsonValue {
     return value as unknown as Prisma.InputJsonValue;
+  }
+
+  private createEntityUpdateProposalData(
+    entity: ConfirmedEntityLike,
+    candidate: ExtractionCandidate,
+    chunk: ChunkRow,
+  ): ProposalDataLike | null {
+    const entityLabels = [entity.canonicalName, ...entity.aliases].map(
+      (label) => this.resolution.normalize(label),
+    );
+    const aliases = (candidate.aliases ?? []).filter((alias) => {
+      const normalizedAlias = this.resolution.normalize(alias);
+      return normalizedAlias && !entityLabels.includes(normalizedAlias);
+    });
+    const description = this.getSuggestedDescription(
+      entity.description,
+      candidate.description,
+    );
+    const attributes = this.getSuggestedAttributes(
+      entity.attributes ?? {},
+      candidate.attributes,
+    );
+
+    if (
+      aliases.length === 0 &&
+      !description &&
+      Object.keys(attributes).length === 0
+    ) {
+      return null;
+    }
+
+    return {
+      canonicalName: entity.canonicalName,
+      aliases,
+      type: entity.type,
+      description,
+      attributes,
+      imageUrl: null,
+      proposalKind: 'ENTITY_UPDATE',
+      confidenceScore: candidate.confidenceScore,
+      evidence: [...new Set(candidate.evidence ?? [])],
+      normalizedName: this.resolution.normalize(entity.canonicalName),
+      source: 'entity_extraction',
+      sourceChunkId: chunk.id,
+      sourceChunkHash: chunk.contentHash,
+      chunkEvidence: [
+        {
+          chunkId: chunk.id,
+          chunkHash: chunk.contentHash ?? '',
+          chunkIndex: chunk.chunkIndex,
+        },
+      ],
+    };
+  }
+
+  private async createEntityUpdateProposal(input: {
+    projectId: string;
+    sceneId: string;
+    entityId: string;
+    confidenceScore: number;
+    proposedData: ProposalDataLike;
+  }): Promise<ProposalRecord> {
+    const proposal = (await this.prisma.entityProposal.create({
+      data: {
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        entityId: input.entityId,
+        sourceChunkId: input.proposedData.sourceChunkId ?? null,
+        sourceChunkHash: input.proposedData.sourceChunkHash ?? null,
+        proposedData: this.toInputJsonValue(input.proposedData),
+        confidenceScore: new Prisma.Decimal(input.confidenceScore),
+      },
+      select: proposalSelect,
+    })) as ProposalRow;
+
+    return {
+      id: proposal.id,
+      sceneId: proposal.sceneId,
+      entityId: proposal.entityId,
+      proposedData: this.normalizeProposalData(proposal.proposedData),
+      confidenceScore: Number(proposal.confidenceScore),
+      status: proposal.status,
+      sourceChunkId: proposal.sourceChunkId ?? null,
+      sourceChunkHash: proposal.sourceChunkHash ?? null,
+    };
+  }
+
+  private async updateExistingEntityProposal(
+    proposal: ProposalRecord,
+    incoming: ProposalDataLike,
+  ): Promise<ProposalRecord> {
+    const merged = this.mergeUpdateProposalData(
+      proposal.proposedData,
+      incoming,
+    );
+    const updated = (await this.prisma.entityProposal.update({
+      where: { id: proposal.id },
+      data: {
+        proposedData: this.toInputJsonValue(merged),
+        confidenceScore: Math.max(
+          Number(proposal.confidenceScore),
+          incoming.confidenceScore ?? 0,
+        ),
+        sourceChunkId: merged.sourceChunkId ?? null,
+        sourceChunkHash: merged.sourceChunkHash ?? null,
+      },
+      select: proposalSelect,
+    })) as ProposalRow;
+
+    return {
+      id: updated.id,
+      sceneId: updated.sceneId,
+      entityId: updated.entityId,
+      proposedData: this.normalizeProposalData(updated.proposedData),
+      confidenceScore: Number(updated.confidenceScore),
+      status: updated.status,
+      sourceChunkId: updated.sourceChunkId ?? null,
+      sourceChunkHash: updated.sourceChunkHash ?? null,
+    };
+  }
+
+  private mergeUpdateProposalData(
+    current: ProposalDataLike,
+    incoming: ProposalDataLike,
+  ): ProposalDataLike {
+    const chunkEvidence = new Map<string, ChunkEvidence>();
+    for (const entry of [
+      ...(current.chunkEvidence ?? []),
+      ...(incoming.chunkEvidence ?? []),
+    ]) {
+      chunkEvidence.set(entry.chunkId, entry);
+    }
+
+    return {
+      ...current,
+      aliases: [
+        ...new Set([...(current.aliases ?? []), ...(incoming.aliases ?? [])]),
+      ],
+      description: this.combineDescriptions(
+        current.description,
+        incoming.description,
+      ),
+      attributes: {
+        ...(current.attributes ?? {}),
+        ...(incoming.attributes ?? {}),
+      },
+      confidenceScore: Math.max(
+        current.confidenceScore ?? 0,
+        incoming.confidenceScore ?? 0,
+      ),
+      evidence: [
+        ...new Set([...(current.evidence ?? []), ...(incoming.evidence ?? [])]),
+      ],
+      chunkEvidence: [...chunkEvidence.values()],
+      sourceChunkId: current.sourceChunkId ?? incoming.sourceChunkId ?? null,
+      sourceChunkHash:
+        current.sourceChunkHash ?? incoming.sourceChunkHash ?? null,
+    };
+  }
+
+  private getSuggestedDescription(
+    current: string | null,
+    incoming: string | null,
+  ): string | null {
+    if (!incoming?.trim()) {
+      return null;
+    }
+    if (!current?.trim()) {
+      return incoming.trim();
+    }
+
+    const currentValue = current.trim().toLowerCase();
+    const incomingValue = incoming.trim().toLowerCase();
+    if (
+      currentValue.includes(incomingValue) ||
+      incomingValue.includes(currentValue)
+    ) {
+      return null;
+    }
+
+    return incoming.trim();
+  }
+
+  private combineDescriptions(
+    current: string | null,
+    incoming: string | null,
+  ): string | null {
+    if (!incoming?.trim()) {
+      return current;
+    }
+    if (!current?.trim()) {
+      return incoming.trim();
+    }
+
+    const currentValue = current.trim();
+    const incomingValue = incoming.trim();
+    const normalizedCurrent = currentValue.toLowerCase();
+    const normalizedIncoming = incomingValue.toLowerCase();
+    if (
+      normalizedCurrent.includes(normalizedIncoming) ||
+      normalizedIncoming.includes(normalizedCurrent)
+    ) {
+      return currentValue;
+    }
+
+    return `${currentValue}\n\n${incomingValue}`;
+  }
+
+  private getSuggestedAttributes(
+    current: Record<string, unknown>,
+    incoming: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(incoming ?? {})) {
+      if (
+        !(key in current) ||
+        JSON.stringify(current[key]) !== JSON.stringify(value)
+      ) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  private normalizeAttributesRecord(
+    value: Prisma.JsonValue | Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+    return {};
   }
 
   private getEmbeddingComparer(): (text: string) => Promise<number[] | null> {

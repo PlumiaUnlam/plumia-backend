@@ -2,10 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
 import { ENTITY_EXTRACTION_PROMPT } from './prompts/entity-extraction.prompt';
-import type {
-  ExtractionCandidate,
-  ExtractionResponse,
-} from './entity-extraction.types';
+import type { ExtractionResponse } from './entity-extraction.types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CHAT_MODEL = 'gemini-2.5-flash';
@@ -57,8 +54,44 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         ],
       },
     },
+    relationships: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          sourceEntity: { type: 'string' },
+          targetEntity: { type: 'string' },
+          relationType: {
+            type: 'string',
+            enum: [
+              'ALLY',
+              'ENEMY',
+              'FAMILY',
+              'ROMANTIC',
+              'MENTOR',
+              'RIVAL',
+              'MEMBER_OF',
+              'LOCATED_IN',
+              'OWNS',
+              'KNOWS',
+            ],
+          },
+          description: { type: ['string', 'null'] },
+          intensity: { type: 'number' },
+          evidence: { type: 'array', items: { type: 'string' } },
+        },
+        required: [
+          'sourceEntity',
+          'targetEntity',
+          'relationType',
+          'description',
+          'intensity',
+          'evidence',
+        ],
+      },
+    },
   },
-  required: ['entities'],
+  required: ['entities', 'relationships'],
 } as const;
 
 @Injectable()
@@ -105,8 +138,10 @@ export class EntityExtractionClient {
       canonicalName: string;
       aliases: string[];
       type: string;
+      description?: string | null;
+      attributes?: Record<string, unknown>;
     }>;
-  }): Promise<ExtractionCandidate[]> {
+  }): Promise<ExtractionResponse> {
     if (!this.hasExtractionModel()) {
       throw new Error(
         'ENTITY_EXTRACTION_API_KEY or ENTITY_EXTRACTION_MODEL is not configured',
@@ -141,7 +176,12 @@ export class EntityExtractionClient {
     this.logger.debug(`Entity extraction response: ${content}`);
 
     const parsed = this.safeParseJson<ExtractionResponse>(content);
-    return Array.isArray(parsed.entities) ? parsed.entities : [];
+    return {
+      entities: Array.isArray(parsed.entities) ? parsed.entities : [],
+      relationships: Array.isArray(parsed.relationships)
+        ? parsed.relationships
+        : [],
+    };
   }
 
   async createEmbedding(text: string): Promise<number[] | null> {
