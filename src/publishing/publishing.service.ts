@@ -1,12 +1,11 @@
-import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { IMAGE_GENERATION } from './ports/image-generation.port';
 import type {
   ImageGeneration,
-  ImageGenerationInput,
   ImageGenerationResult,
 } from './ports/image-generation.port';
 import type { GenerateImageDto } from './dto/generate-image.dto';
@@ -14,72 +13,23 @@ import type { ImageResponseDto } from './dto/image-response.dto';
 import type { GeneratePreviewImageDto } from './dto/generate-preview-image.dto';
 import type { PreviewImageResponseDto } from './dto/preview-image-response.dto';
 import type { AttachImageDto } from './dto/attach-image.dto';
+import type { ImageGenerationJobRecord } from './dto/image-generation-job-response.dto';
+import {
+  MIME_EXTENSIONS,
+  UPLOAD_TIMEOUT_MS,
+  buildSpanishPrompt,
+  fetchWithTimeout,
+  toUserFriendlyError,
+} from './image-publishing.utils';
+import { ImageGenerationEventsService } from './workers/image-generation-events.service';
+import { ImageAssetsService } from './image-assets.service';
 
-const MIME_EXTENSIONS: Record<string, string> = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-};
-
-const TYPE_TO_SPANISH: Record<string, { noun: string; article: string }> = {
-  CHARACTER: { noun: 'personaje', article: 'un' },
-  LOCATION: { noun: 'lugar', article: 'un' },
-  OBJECT: { noun: 'objeto', article: 'un' },
-  ORGANIZATION: { noun: 'organización', article: 'una' },
-  EVENT: { noun: 'evento', article: 'un' },
-  CONCEPT: { noun: 'concepto', article: 'un' },
-};
-
-const UPLOAD_TIMEOUT_MS = 10_000;
-
-function toUserFriendlyError(err: unknown): never {
-  if (err instanceof Error) {
-    if (err.message.includes('timeout')) {
-      throw new HttpException(
-        'La generación de la imagen tardó demasiado. Intentá de nuevo.',
-        HttpStatus.GATEWAY_TIMEOUT,
-      );
-    }
-    if (err.message.includes('Pollinations API error')) {
-      throw new HttpException(
-        'El servicio de generación de imágenes no está disponible en este momento.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
-    if (err.message.includes('Failed to upload image to storage')) {
-      throw new HttpException(
-        'Error al guardar la imagen generada. Intentá de nuevo.',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
+function stableSeed(value: string): number {
+  let hash = 0;
+  for (const character of value) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   }
-  throw new HttpException(
-    'Error al generar la imagen. Intentá de nuevo más tarde.',
-    HttpStatus.INTERNAL_SERVER_ERROR,
-  );
-}
-
-async function fetchWithTimeout(
-  url: string,
-  options: RequestInit & { timeoutMs: number },
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    return response;
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(`Request timed out after ${options.timeoutMs / 1000}s`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
+  return hash % 2_147_483_647;
 }
 
 @Injectable()
@@ -90,49 +40,344 @@ export class PublishingService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly config: ConfigService,
+    private readonly imageEvents: ImageGenerationEventsService,
+    private readonly imageAssets: ImageAssetsService,
   ) {}
 
-  async generateImage(dto: GenerateImageDto): Promise<ImageResponseDto> {
-    const entity = await this.prisma.entity.findUniqueOrThrow({
-      where: { id: dto.entityId },
+  async requestImageGeneration(
+    userId: string,
+    dto: GenerateImageDto,
+  ): Promise<ImageGenerationJobRecord> {
+    const entity = await this.findEntityForUser(userId, dto.entityId);
+    const reference = await this.resolveReferenceImage(
+      entity,
+      dto.referenceImageId,
+    );
+    const instructions = this.toInstructions(dto);
+    const prompt = buildSpanishPrompt(entity, instructions, dto.prompt);
+    const jobId = randomUUID();
+    const width =
+      dto.width ?? Number(this.config.get<string>('IMAGE_WIDTH', '512'));
+    const height =
+      dto.height ?? Number(this.config.get<string>('IMAGE_HEIGHT', '512'));
+    const seed = stableSeed(entity.id);
+
+    const job = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.imageGenerationJob.create({
+        data: {
+          id: jobId,
+          entityId: entity.id,
+          userId,
+          prompt,
+          instructions,
+          referenceImageId: reference.id,
+          referenceImageUrl: reference.url,
+          width,
+          height,
+          seed,
+          bullJobId: jobId,
+        },
+      });
+
+      await tx.outbox.create({
+        data: {
+          aggregateType: 'ImageGenerationJob',
+          aggregateId: created.id,
+          eventType: 'image.generation.requested',
+          payload: { imageGenerationJobId: created.id, userId },
+          createdAt: new Date(),
+        },
+      });
+
+      return created;
+    });
+
+    this.imageEvents.publish({
+      jobId: job.id,
+      entityId: job.entityId,
+      userId: job.userId,
+      status: 'QUEUED',
+      progress: job.progress,
+    });
+
+    return this.toJobRecord(job, null);
+  }
+
+  async getImageGenerationJob(
+    userId: string,
+    jobId: string,
+  ): Promise<ImageGenerationJobRecord> {
+    const job = await this.prisma.imageGenerationJob.findFirst({
+      where: {
+        id: jobId,
+        userId,
+        entity: { deletedAt: null, project: { userId, deletedAt: null } },
+      },
+      include: { generatedImage: true },
+    });
+
+    if (!job) {
+      throw new NotFoundException('Image generation job not found');
+    }
+
+    const generatedImage = job.generatedImage
+      ? this.toResponse(
+          job.generatedImage,
+          await this.storage.generatePresignedGetUrl(
+            job.generatedImage.storageKey,
+          ),
+        )
+      : null;
+
+    return this.toJobRecord(job, generatedImage);
+  }
+
+  async processImageGeneration(jobId: string): Promise<void> {
+    const job = await this.prisma.imageGenerationJob.findUnique({
+      where: { id: jobId },
+      include: {
+        entity: {
+          select: {
+            id: true,
+            imageUrl: true,
+          },
+        },
+      },
+    });
+
+    if (!job || job.generatedImageId || job.status === 'COMPLETED') {
+      return;
+    }
+
+    const claimed = await this.prisma.imageGenerationJob.updateMany({
+      where: {
+        id: jobId,
+        status: { in: ['QUEUED', 'PROCESSING', 'FAILED'] },
+        generatedImageId: null,
+      },
+      data: {
+        status: 'PROCESSING',
+        progress: 10,
+        startedAt: job.startedAt ?? new Date(),
+        errorMessage: null,
+      },
+    });
+
+    if (claimed.count === 0) {
+      return;
+    }
+
+    this.imageEvents.publish({
+      jobId: job.id,
+      entityId: job.entityId,
+      userId: job.userId,
+      status: 'PROCESSING',
+      progress: 10,
+    });
+
+    try {
+      const result = await this.imageGen.generate({
+        prompt: job.prompt,
+        width: job.width,
+        height: job.height,
+        seed: job.seed,
+        ...(job.referenceImageUrl
+          ? { referenceImageUrl: job.referenceImageUrl }
+          : {}),
+      });
+      await this.prisma.imageGenerationJob.update({
+        where: { id: jobId },
+        data: { progress: 45 },
+      });
+      this.imageEvents.publish({
+        jobId: job.id,
+        entityId: job.entityId,
+        userId: job.userId,
+        status: 'PROCESSING',
+        progress: 45,
+      });
+
+      const ext = MIME_EXTENSIONS[result.contentType] ?? 'jpg';
+      const storageKey = `entities/${job.entityId}/generated/${job.id}.${ext}`;
+      const publicUrl = await this.uploadImage(
+        job.entityId,
+        storageKey,
+        result,
+      );
+      await this.prisma.imageGenerationJob.update({
+        where: { id: jobId },
+        data: { progress: 80 },
+      });
+      this.imageEvents.publish({
+        jobId: job.id,
+        entityId: job.entityId,
+        userId: job.userId,
+        status: 'PROCESSING',
+        progress: 80,
+      });
+
+      await this.prisma.$transaction(async (tx) => {
+        const currentEntity = await tx.entity.findUnique({
+          where: { id: job.entityId },
+          select: { imageUrl: true },
+        });
+        const currentPrimary = await tx.generatedImage.findFirst({
+          where: { entityId: job.entityId, isPrimary: true },
+          select: { id: true },
+        });
+        const isPrimary = !currentEntity?.imageUrl && !currentPrimary;
+        const image = await tx.generatedImage.create({
+          data: {
+            entityId: job.entityId,
+            prompt: job.prompt,
+            storageKey,
+            imageType: result.contentType,
+            isPrimary,
+          },
+        });
+
+        await tx.imageGenerationJob.update({
+          where: { id: jobId },
+          data: {
+            generatedImageId: image.id,
+            status: 'COMPLETED',
+            progress: 100,
+            completedAt: new Date(),
+          },
+        });
+
+        if (isPrimary) {
+          await tx.entity.update({
+            where: { id: job.entityId },
+            data: { imageUrl: publicUrl },
+          });
+        }
+      });
+      this.imageEvents.publish({
+        jobId: job.id,
+        entityId: job.entityId,
+        userId: job.userId,
+        status: 'COMPLETED',
+        progress: 100,
+      });
+    } catch (error: unknown) {
+      await this.prisma.imageGenerationJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'FAILED',
+          progress: 100,
+          errorMessage:
+            error instanceof Error ? error.message : 'Image generation failed',
+        },
+      });
+      this.imageEvents.publish({
+        jobId: job.id,
+        entityId: job.entityId,
+        userId: job.userId,
+        status: 'FAILED',
+        progress: 100,
+        errorMessage:
+          error instanceof Error ? error.message : 'Image generation failed',
+      });
+      throw error;
+    }
+  }
+
+  private async findEntityForUser(
+    userId: string,
+    entityId: string,
+  ): Promise<{
+    id: string;
+    canonicalName: string;
+    description: string | null;
+    type: string;
+    imageUrl: string | null;
+    attributes: unknown;
+  }> {
+    const entity = await this.prisma.entity.findFirst({
+      where: {
+        id: entityId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
       select: {
         id: true,
         canonicalName: true,
         description: true,
         type: true,
         imageUrl: true,
+        attributes: true,
       },
     });
 
-    const prompt = this.buildSpanishPrompt(entity);
+    if (!entity) {
+      throw new NotFoundException('Entity not found');
+    }
+    return entity;
+  }
 
-    const width =
-      dto.width ?? Number(this.config.get<string>('IMAGE_WIDTH', '512'));
-    const height =
-      dto.height ?? Number(this.config.get<string>('IMAGE_HEIGHT', '512'));
-
-    let imgResult: ImageGenerationResult;
-    try {
-      const input: ImageGenerationInput = {
-        prompt,
-        width,
-        height,
+  private async resolveReferenceImage(
+    entity: { id: string; imageUrl: string | null },
+    referenceImageId?: string,
+  ): Promise<{ id: string | null; url: string | null }> {
+    if (referenceImageId) {
+      const image = await this.prisma.generatedImage.findFirst({
+        where: { id: referenceImageId, entityId: entity.id },
+        select: { id: true, storageKey: true },
+      });
+      if (!image) {
+        throw new NotFoundException('Reference image not found');
+      }
+      return {
+        id: image.id,
+        url: this.storage.getPublicUrl(image.storageKey),
       };
-      imgResult = await this.imageGen.generate(input);
-    } catch (err) {
-      toUserFriendlyError(err);
     }
 
-    const ext = MIME_EXTENSIONS[imgResult.contentType] ?? 'jpg';
-    const storageKey = `entities/${entity.id}/generated/${randomUUID()}.${ext}`;
+    const primary = await this.prisma.generatedImage.findFirst({
+      where: { entityId: entity.id, isPrimary: true },
+      select: { id: true, storageKey: true },
+    });
+    if (primary) {
+      return {
+        id: primary.id,
+        url: this.storage.getPublicUrl(primary.storageKey),
+      };
+    }
 
+    return { id: null, url: entity.imageUrl };
+  }
+
+  private toInstructions(dto: GenerateImageDto): Record<string, string> {
+    const values = {
+      expression: dto.expression,
+      pose: dto.pose,
+      background: dto.background,
+      framing: dto.framing,
+      lighting: dto.lighting,
+      style: dto.style,
+      additionalInstructions: dto.additionalInstructions,
+    };
+    return Object.fromEntries(
+      Object.entries(values).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === 'string' && entry[1].trim().length > 0,
+      ),
+    );
+  }
+
+  private async uploadImage(
+    entityId: string,
+    storageKey: string,
+    result: ImageGenerationResult,
+  ): Promise<string> {
     let presignedUrl: string;
     let publicUrl: string;
     try {
       const urls = await this.storage.generatePresignedUploadUrl(
-        entity.id,
+        entityId,
         storageKey,
-        imgResult.contentType,
+        result.contentType,
         storageKey,
       );
       presignedUrl = urls.presignedUrl;
@@ -143,8 +388,8 @@ export class PublishingService {
 
     const uploadResponse = await fetchWithTimeout(presignedUrl, {
       method: 'PUT',
-      body: new Uint8Array(imgResult.buffer),
-      headers: { 'Content-Type': imgResult.contentType },
+      body: new Uint8Array(result.buffer),
+      headers: { 'Content-Type': result.contentType },
       timeoutMs: UPLOAD_TIMEOUT_MS,
     });
 
@@ -153,203 +398,69 @@ export class PublishingService {
         `Failed to upload image to storage: ${uploadResponse.status}`,
       );
     }
-
-    const image = await this.prisma.generatedImage.create({
-      data: {
-        entityId: entity.id,
-        prompt,
-        storageKey,
-        imageType: imgResult.contentType,
-        isPrimary: !entity.imageUrl,
-      },
-    });
-
-    if (!entity.imageUrl) {
-      await this.prisma.entity.update({
-        where: { id: entity.id },
-        data: { imageUrl: publicUrl },
-      });
-    }
-
-    const presignedGetUrl =
-      await this.storage.generatePresignedGetUrl(storageKey);
-    return this.toResponse(image, presignedGetUrl);
+    return publicUrl;
   }
 
-  async listImages(entityId: string): Promise<ImageResponseDto[]> {
-    const entity = await this.prisma.entity.findUniqueOrThrow({
-      where: { id: entityId },
-      select: { id: true },
-    });
-
-    const images = await this.prisma.generatedImage.findMany({
-      where: { entityId: entity.id },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return Promise.all(
-      images.map(async (img) => {
-        const presignedUrl = await this.storage.generatePresignedGetUrl(
-          img.storageKey,
-        );
-        return this.toResponse(img, presignedUrl);
-      }),
-    );
+  async listImages(
+    userId: string,
+    entityId: string,
+  ): Promise<ImageResponseDto[]> {
+    return this.imageAssets.listImages(userId, entityId);
   }
 
   async setPrimaryImage(
+    userId: string,
     entityId: string,
     imageId: string,
   ): Promise<ImageResponseDto> {
-    const image = await this.prisma.generatedImage.findFirstOrThrow({
-      where: { id: imageId, entityId },
-    });
+    return this.imageAssets.setPrimaryImage(userId, entityId, imageId);
+  }
 
-    const presignedUrl = await this.storage.generatePresignedGetUrl(
-      image.storageKey,
-    );
-
-    await this.prisma.$transaction([
-      this.prisma.generatedImage.updateMany({
-        where: { entityId, isPrimary: true },
-        data: { isPrimary: false },
-      }),
-      this.prisma.generatedImage.update({
-        where: { id: imageId },
-        data: { isPrimary: true },
-      }),
-    ]);
-
-    await this.prisma.entity.update({
-      where: { id: entityId },
-      data: { imageUrl: presignedUrl },
-    });
-
-    return this.toResponse(image, presignedUrl);
+  async deleteImage(
+    userId: string,
+    entityId: string,
+    imageId: string,
+  ): Promise<void> {
+    return this.imageAssets.deleteImage(userId, entityId, imageId);
   }
 
   async generatePreviewImage(
     dto: GeneratePreviewImageDto,
   ): Promise<PreviewImageResponseDto> {
-    try {
-      const prompt = this.buildSpanishPromptFromData({
-        name: dto.name,
-        description: dto.description ?? null,
-        type: dto.type,
-      });
-
-      const width =
-        dto.width ?? Number(this.config.get<string>('IMAGE_WIDTH', '512'));
-      const height =
-        dto.height ?? Number(this.config.get<string>('IMAGE_HEIGHT', '512'));
-
-      const input: ImageGenerationInput = { prompt, width, height };
-      const result = await this.imageGen.generate(input);
-
-      const ext = MIME_EXTENSIONS[result.contentType] ?? 'jpg';
-      const storageKey = `entities/preview/${randomUUID()}.${ext}`;
-
-      const { presignedUrl } = await this.storage.generatePresignedUploadUrl(
-        'preview',
-        storageKey,
-        result.contentType,
-        storageKey,
-      );
-
-      const uploadResponse = await fetchWithTimeout(presignedUrl, {
-        method: 'PUT',
-        body: new Uint8Array(result.buffer),
-        headers: { 'Content-Type': result.contentType },
-        timeoutMs: UPLOAD_TIMEOUT_MS,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(
-          `Failed to upload image to storage: ${uploadResponse.status}`,
-        );
-      }
-
-      const imageUrl = await this.storage.generatePresignedGetUrl(storageKey);
-
-      return { imageUrl, storageKey, prompt, imageType: result.contentType };
-    } catch (err) {
-      toUserFriendlyError(err);
-    }
+    return this.imageAssets.generatePreviewImage(dto);
   }
 
-  async attachImage(dto: AttachImageDto): Promise<ImageResponseDto> {
-    const entity = await this.prisma.entity.findUniqueOrThrow({
-      where: { id: dto.entityId },
-      select: { id: true, imageUrl: true },
-    });
-
-    const image = await this.prisma.generatedImage.create({
-      data: {
-        entityId: entity.id,
-        prompt: dto.prompt,
-        storageKey: dto.storageKey,
-        imageType: dto.imageType,
-        isPrimary: true,
-      },
-    });
-
-    await this.prisma.$transaction([
-      this.prisma.generatedImage.updateMany({
-        where: { entityId: entity.id, isPrimary: true, id: { not: image.id } },
-        data: { isPrimary: false },
-      }),
-    ]);
-
-    const publicUrl = this.storage.getPublicUrl(dto.storageKey);
-
-    await this.prisma.entity.update({
-      where: { id: entity.id },
-      data: { imageUrl: publicUrl },
-    });
-
-    const presignedGetUrl = await this.storage.generatePresignedGetUrl(
-      dto.storageKey,
-    );
-
-    return this.toResponse(image, presignedGetUrl);
+  async attachImage(
+    userId: string,
+    dto: AttachImageDto,
+  ): Promise<ImageResponseDto> {
+    return this.imageAssets.attachImage(userId, dto);
   }
 
-  private buildSpanishPromptFromData(data: {
-    name: string;
-    description: string | null;
-    type: string;
-  }): string {
-    const { noun, article } = TYPE_TO_SPANISH[data.type] ?? {
-      noun: 'entidad',
-      article: 'una',
+  private toJobRecord(
+    job: {
+      id: string;
+      entityId: string;
+      status: ImageGenerationJobRecord['status'];
+      progress: number;
+      errorMessage: string | null;
+      createdAt: Date;
+      startedAt: Date | null;
+      completedAt: Date | null;
+    },
+    generatedImage: ImageResponseDto | null,
+  ): ImageGenerationJobRecord {
+    return {
+      id: job.id,
+      entityId: job.entityId,
+      status: job.status,
+      progress: job.progress,
+      errorMessage: job.errorMessage,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      generatedImage,
     };
-    const parts: string[] = [`Ilustración realista de ${article} ${noun}`];
-    if (data.description) {
-      parts.push(data.description);
-    }
-    parts.push(
-      'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
-    );
-    return parts.join('. ');
-  }
-
-  private buildSpanishPrompt(entity: {
-    canonicalName: string;
-    description: string | null;
-    type: string;
-  }): string {
-    const { noun, article } = TYPE_TO_SPANISH[entity.type] ?? {
-      noun: 'entidad',
-      article: 'una',
-    };
-    const parts: string[] = [`Ilustración realista de ${article} ${noun}`];
-    if (entity.description) {
-      parts.push(entity.description);
-    }
-    parts.push(
-      'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
-    );
-    return parts.join('. ');
   }
 
   private toResponse(

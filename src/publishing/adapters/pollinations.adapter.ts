@@ -31,11 +31,15 @@ export class PollinationsAdapter implements ImageGeneration {
     const width = input.width ?? this.defaultWidth;
     const height = input.height ?? this.defaultHeight;
     const model = input.model ?? this.defaultModel;
+    const seed = input.seed === undefined ? '' : `&seed=${input.seed}`;
+    const referenceImage = input.referenceImageUrl
+      ? `&image=${encodeURIComponent(input.referenceImageUrl)}`
+      : '';
 
     const cleanPrompt = input.prompt.replace(/[\n*]/g, ' ').trim();
     const encodedPrompt = encodeURIComponent(cleanPrompt);
 
-    const url = `${this.baseUrl}/${encodedPrompt}?width=${width}&height=${height}&enhance=false&model=${model}&nofeed=true&nocache=true`;
+    const url = `${this.baseUrl}/${encodedPrompt}?width=${width}&height=${height}&enhance=false&model=${model}&nofeed=true&nocache=true${seed}${referenceImage}`;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);

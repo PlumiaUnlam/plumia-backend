@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
+  DeleteObjectCommand,
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -113,5 +114,14 @@ export class StorageService {
     } catch {
       return false;
     }
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    await this.s3.send(
+      new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      }),
+    );
   }
 }
