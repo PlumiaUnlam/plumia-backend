@@ -17,6 +17,44 @@ const TYPE_TO_SPANISH: Record<string, { noun: string; article: string }> = {
   CONCEPT: { noun: 'concepto', article: 'un' },
 };
 
+const GENERIC_INSTRUCTION_LABELS: Record<string, string> = {
+  expression: 'expresión',
+  pose: 'pose',
+  background: 'fondo',
+  framing: 'plano / encuadre',
+  lighting: 'iluminación',
+  style: 'estilo visual',
+};
+
+const TYPE_INSTRUCTION_LABELS: Record<string, Record<string, string>> = {
+  LOCATION: {
+    background: 'entorno',
+    framing: 'perspectiva',
+    lighting: 'momento y atmósfera',
+  },
+  OBJECT: {
+    background: 'contexto',
+    framing: 'vista',
+    style: 'material y acabado',
+  },
+  ORGANIZATION: {
+    background: 'contexto',
+    framing: 'composición',
+    style: 'identidad visual',
+  },
+  EVENT: {
+    background: 'escenario',
+    framing: 'composición',
+    lighting: 'atmósfera',
+  },
+  CONCEPT: {
+    background: 'contexto',
+    framing: 'forma de representación',
+    lighting: 'atmósfera',
+    style: 'lenguaje visual',
+  },
+};
+
 export function toUserFriendlyError(err: unknown): never {
   if (err instanceof Error) {
     if (err.message.includes('timeout')) {
@@ -111,7 +149,7 @@ export function buildSpanishPrompt(
     parts.push(`Atributos de identidad: ${attributes}`);
   }
   const requestedChanges = Object.entries(instructions).map(
-    ([key, value]) => `${key}: ${value}`,
+    ([key, value]) => `${getInstructionLabel(entity.type, key)}: ${value}`,
   );
   if (customPrompt?.trim()) {
     requestedChanges.push(`instrucción adicional: ${customPrompt.trim()}`);
@@ -125,6 +163,14 @@ export function buildSpanishPrompt(
     'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
   );
   return parts.join('. ');
+}
+
+function getInstructionLabel(entityType: string, key: string): string {
+  return (
+    TYPE_INSTRUCTION_LABELS[entityType]?.[key] ??
+    GENERIC_INSTRUCTION_LABELS[key] ??
+    key
+  );
 }
 
 function serializeAttributes(attributes: unknown): string {
