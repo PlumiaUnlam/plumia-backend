@@ -78,6 +78,16 @@ describe('Publishing image endpoints e2e', () => {
         expect(body).toHaveLength(1);
         expect(body[0]).toMatchObject({ entityId: entity.id, isPrimary: true });
       });
+
+    await request(ctx.server)
+      .get(`/publishing/images/primary?entityIds=${entity.id}`)
+      .set(ctx.auth())
+      .expect(200)
+      .expect((response) => {
+        const body = responseBody<ImageResponse[]>(response);
+        expect(body).toHaveLength(1);
+        expect(body[0]).toMatchObject({ entityId: entity.id, isPrimary: true });
+      });
   });
 
   it('attaches, lists and selects primary entity images', async () => {

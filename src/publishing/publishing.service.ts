@@ -408,6 +408,13 @@ export class PublishingService {
     return this.imageAssets.listImages(userId, entityId);
   }
 
+  async listPrimaryImages(
+    userId: string,
+    entityIds: readonly string[],
+  ): Promise<ImageResponseDto[]> {
+    return this.imageAssets.listPrimaryImages(userId, entityIds);
+  }
+
   async setPrimaryImage(
     userId: string,
     entityId: string,

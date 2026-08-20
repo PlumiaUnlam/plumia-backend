@@ -8,6 +8,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Request,
   Sse,
 } from '@nestjs/common';
@@ -50,6 +51,18 @@ export class PublishingController {
     return ImageGenerationJobResponseDto.from(
       await this.publishingService.getImageGenerationJob(req.user.id, jobId),
     );
+  }
+
+  @Get('primary')
+  async listPrimary(
+    @Request() req: AuthenticatedRequest,
+    @Query('entityIds') entityIds?: string,
+  ): Promise<ImageResponseDto[]> {
+    const ids = (entityIds ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.publishingService.listPrimaryImages(req.user.id, ids);
   }
 
   @Sse('events')

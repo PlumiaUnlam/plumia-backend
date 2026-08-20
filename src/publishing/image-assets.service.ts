@@ -47,6 +47,37 @@ export class ImageAssetsService {
     );
   }
 
+  async listPrimaryImages(
+    userId: string,
+    entityIds: readonly string[],
+  ): Promise<ImageResponseDto[]> {
+    const ids = [...new Set(entityIds)];
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const images = await this.prisma.generatedImage.findMany({
+      where: {
+        entityId: { in: ids },
+        isPrimary: true,
+        entity: {
+          deletedAt: null,
+          project: { userId, deletedAt: null },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return Promise.all(
+      images.map(async (image) =>
+        this.toResponse(
+          image,
+          await this.storage.generatePresignedGetUrl(image.storageKey),
+        ),
+      ),
+    );
+  }
+
   async setPrimaryImage(
     userId: string,
     entityId: string,
