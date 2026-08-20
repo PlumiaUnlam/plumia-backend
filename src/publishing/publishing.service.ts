@@ -135,14 +135,6 @@ export class PublishingService {
   async processImageGeneration(jobId: string): Promise<void> {
     const job = await this.prisma.imageGenerationJob.findUnique({
       where: { id: jobId },
-      include: {
-        entity: {
-          select: {
-            id: true,
-            imageUrl: true,
-          },
-        },
-      },
     });
 
     if (!job || job.generatedImageId || job.status === 'COMPLETED') {
@@ -199,11 +191,7 @@ export class PublishingService {
 
       const ext = MIME_EXTENSIONS[result.contentType] ?? 'jpg';
       const storageKey = `entities/${job.entityId}/generated/${job.id}.${ext}`;
-      const publicUrl = await this.uploadImage(
-        job.entityId,
-        storageKey,
-        result,
-      );
+      await this.uploadImage(job.entityId, storageKey, result);
       await this.prisma.imageGenerationJob.update({
         where: { id: jobId },
         data: { progress: 80 },
@@ -217,22 +205,13 @@ export class PublishingService {
       });
 
       await this.prisma.$transaction(async (tx) => {
-        const currentEntity = await tx.entity.findUnique({
-          where: { id: job.entityId },
-          select: { imageUrl: true },
-        });
-        const currentPrimary = await tx.generatedImage.findFirst({
-          where: { entityId: job.entityId, isPrimary: true },
-          select: { id: true },
-        });
-        const isPrimary = !currentEntity?.imageUrl && !currentPrimary;
         const image = await tx.generatedImage.create({
           data: {
             entityId: job.entityId,
             prompt: job.prompt,
             storageKey,
             imageType: result.contentType,
-            isPrimary,
+            isPrimary: false,
           },
         });
 
@@ -245,13 +224,6 @@ export class PublishingService {
             completedAt: new Date(),
           },
         });
-
-        if (isPrimary) {
-          await tx.entity.update({
-            where: { id: job.entityId },
-            data: { imageUrl: publicUrl },
-          });
-        }
       });
       this.imageEvents.publish({
         jobId: job.id,
@@ -370,9 +342,8 @@ export class PublishingService {
     entityId: string,
     storageKey: string,
     result: ImageGenerationResult,
-  ): Promise<string> {
+  ): Promise<void> {
     let presignedUrl: string;
-    let publicUrl: string;
     try {
       const urls = await this.storage.generatePresignedUploadUrl(
         entityId,
@@ -381,7 +352,6 @@ export class PublishingService {
         storageKey,
       );
       presignedUrl = urls.presignedUrl;
-      publicUrl = urls.publicUrl;
     } catch (err) {
       toUserFriendlyError(err);
     }
@@ -398,7 +368,6 @@ export class PublishingService {
         `Failed to upload image to storage: ${uploadResponse.status}`,
       );
     }
-    return publicUrl;
   }
 
   async listImages(

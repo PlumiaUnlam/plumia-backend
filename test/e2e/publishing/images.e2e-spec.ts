@@ -65,7 +65,7 @@ describe('Publishing image endpoints e2e', () => {
           entityId: entity.id,
           status: 'COMPLETED',
           progress: 100,
-          generatedImage: { entityId: entity.id, isPrimary: true },
+          generatedImage: { entityId: entity.id, isPrimary: false },
         });
       });
 
@@ -76,7 +76,10 @@ describe('Publishing image endpoints e2e', () => {
       .expect((response) => {
         const body = responseBody<ImageResponse[]>(response);
         expect(body).toHaveLength(1);
-        expect(body[0]).toMatchObject({ entityId: entity.id, isPrimary: true });
+        expect(body[0]).toMatchObject({
+          entityId: entity.id,
+          isPrimary: false,
+        });
       });
 
     await request(ctx.server)
@@ -85,8 +88,7 @@ describe('Publishing image endpoints e2e', () => {
       .expect(200)
       .expect((response) => {
         const body = responseBody<ImageResponse[]>(response);
-        expect(body).toHaveLength(1);
-        expect(body[0]).toMatchObject({ entityId: entity.id, isPrimary: true });
+        expect(body).toHaveLength(0);
       });
   });
 
@@ -133,5 +135,18 @@ describe('Publishing image endpoints e2e', () => {
         const body = responseBody<ImageResponse>(response);
         expect(body).toMatchObject({ id: imageId, isPrimary: true });
       });
+
+    await request(ctx.server)
+      .delete(`/publishing/images/${entity.id}/${imageId}`)
+      .set(ctx.auth())
+      .expect(204)
+      .expect((response) => {
+        expect(response.text).toBe('');
+      });
+
+    await request(ctx.server)
+      .delete(`/publishing/images/${entity.id}/${imageId}`)
+      .set(ctx.auth())
+      .expect(204);
   });
 });

@@ -107,6 +107,7 @@ export class PublishingController {
   }
 
   @Delete(':entityId/:imageId')
+  @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Request() req: AuthenticatedRequest,
     @Param('entityId', ParseUUIDPipe) entityId: string,

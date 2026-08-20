@@ -116,40 +116,57 @@ export class ImageAssetsService {
     imageId: string,
   ): Promise<void> {
     const entity = await this.findEntityForUser(userId, entityId);
-    const image = await this.prisma.generatedImage.findFirstOrThrow({
-      where: { id: imageId, entityId: entity.id },
-      select: { id: true, storageKey: true, isPrimary: true },
-    });
-    const nextPrimary = image.isPrimary
-      ? await this.prisma.generatedImage.findFirst({
-          where: { entityId: entity.id, id: { not: image.id } },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true, storageKey: true },
-        })
-      : null;
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.generatedImage.delete({ where: { id: image.id } });
-      if (nextPrimary) {
-        await tx.generatedImage.update({
-          where: { id: nextPrimary.id },
-          data: { isPrimary: true },
+    try {
+      const deletedImage = await this.prisma.$transaction(async (tx) => {
+        const image = await tx.generatedImage.findFirst({
+          where: { id: imageId, entityId: entity.id },
+          select: { id: true, storageKey: true, isPrimary: true },
         });
-      }
-      if (image.isPrimary) {
-        const nextImageUrl = nextPrimary
-          ? this.storage.getPublicUrl(nextPrimary.storageKey)
-          : entity.imageUrl === this.storage.getPublicUrl(image.storageKey)
-            ? null
-            : entity.imageUrl;
-        await tx.entity.update({
-          where: { id: entity.id },
-          data: { imageUrl: nextImageUrl },
-        });
-      }
-    });
+        if (!image) {
+          return null;
+        }
 
-    await this.storage.deleteObject(image.storageKey);
+        const nextPrimary = image.isPrimary
+          ? await tx.generatedImage.findFirst({
+              where: { entityId: entity.id, id: { not: image.id } },
+              orderBy: { createdAt: 'desc' },
+              select: { id: true, storageKey: true },
+            })
+          : null;
+
+        await tx.generatedImage.delete({ where: { id: image.id } });
+        if (nextPrimary) {
+          await tx.generatedImage.update({
+            where: { id: nextPrimary.id },
+            data: { isPrimary: true },
+          });
+        }
+        if (image.isPrimary) {
+          const nextImageUrl = nextPrimary
+            ? this.storage.getPublicUrl(nextPrimary.storageKey)
+            : entity.imageUrl === this.storage.getPublicUrl(image.storageKey)
+              ? null
+              : entity.imageUrl;
+          await tx.entity.update({
+            where: { id: entity.id },
+            data: { imageUrl: nextImageUrl },
+          });
+        }
+
+        return image;
+      });
+
+      if (!deletedImage) {
+        return;
+      }
+
+      await this.storage.deleteObject(deletedImage.storageKey);
+    } catch (error) {
+      if (isPrismaNotFoundError(error)) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async generatePreviewImage(
@@ -259,4 +276,13 @@ export class ImageAssetsService {
       createdAt: image.createdAt,
     };
   }
+}
+
+function isPrismaNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'P2025'
+  );
 }
