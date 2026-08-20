@@ -4,6 +4,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import type { PrismaClient, User } from '@prisma/client';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
+import { FirebaseAdminService } from '../../src/auth/firebase-admin.service';
 import { IMAGE_GENERATION } from '../../src/publishing/ports/image-generation.port';
 import { IMAGE_GENERATION_QUEUE } from '../../src/publishing/ports/image-generation-queue.port';
 import { ImageGenerationOutboxPoller } from '../../src/publishing/workers/image-generation-outbox-poller.service';
@@ -49,6 +50,10 @@ export async function createE2eApp(): Promise<INestApplication> {
   })
     .overrideProvider(AuthService)
     .useValue(authMock)
+    .overrideProvider(FirebaseAdminService)
+    .useValue({
+      verifyToken: jest.fn(() => Promise.resolve({ uid: E2E_USER_ID })),
+    })
     .overrideProvider(StorageService)
     .useValue({
       generatePresignedUploadUrl: jest.fn(

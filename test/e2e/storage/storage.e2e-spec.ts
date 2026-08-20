@@ -50,6 +50,15 @@ describe('Storage endpoints e2e', () => {
         const body = responseBody<PresignedDownloadResponse>(response);
         expect(body.url).toContain('https://storage.test/get');
       });
+
+    await request(ctx.server)
+      .get(`/storage/image/${entity.id}`)
+      .set(ctx.auth())
+      .expect(302)
+      .expect(
+        'Location',
+        `https://storage.test/get/entities/${entity.id}/portrait.png`,
+      );
   });
 
   it('validates storage payloads', async () => {

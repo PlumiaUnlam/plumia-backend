@@ -207,11 +207,7 @@ export class StorageController {
     @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    const cookie = req.headers['cookie'] ?? '';
-    const sessionToken = cookie
-      .split(';')
-      .find((c: string) => c.trim().startsWith('__session='))
-      ?.split('=', 2)[1];
+    const sessionToken = extractStorageToken(req);
 
     if (!sessionToken) {
       throw new UnauthorizedException();
@@ -254,4 +250,22 @@ export class StorageController {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.redirect(302, url);
   }
+}
+
+function extractStorageToken(req: AuthenticatedRequest): string | null {
+  const authorization = req.headers.authorization;
+  if (authorization?.startsWith('Bearer ')) {
+    const token = authorization.slice('Bearer '.length).trim();
+    if (token) {
+      return token;
+    }
+  }
+
+  const cookie = req.headers.cookie ?? '';
+  return (
+    cookie
+      .split(';')
+      .find((value: string) => value.trim().startsWith('__session='))
+      ?.split('=', 2)[1] ?? null
+  );
 }
