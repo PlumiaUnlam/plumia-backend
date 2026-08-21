@@ -1,4 +1,5 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
+import { randomInt } from 'node:crypto';
 
 export const MIME_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -7,6 +8,11 @@ export const MIME_EXTENSIONS: Record<string, string> = {
 };
 
 export const UPLOAD_TIMEOUT_MS = 10_000;
+export const MAX_IMAGE_SEED = 2_147_483_647;
+
+export function createImageSeed(): number {
+  return randomInt(0, MAX_IMAGE_SEED);
+}
 
 const TYPE_TO_SPANISH: Record<string, { noun: string; article: string }> = {
   CHARACTER: { noun: 'personaje', article: 'un' },
@@ -108,19 +114,17 @@ export function buildSpanishPromptFromData(data: {
   name: string;
   description: string | null;
   type: string;
+  attributes?: unknown;
 }): string {
-  const { noun, article } = TYPE_TO_SPANISH[data.type] ?? {
-    noun: 'entidad',
-    article: 'una',
-  };
-  const parts: string[] = [`Ilustración realista de ${article} ${noun}`];
-  if (data.description) {
-    parts.push(data.description);
-  }
-  parts.push(
-    'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
+  return buildSpanishPrompt(
+    {
+      canonicalName: data.name,
+      description: data.description,
+      type: data.type,
+      attributes: data.attributes,
+    },
+    {},
   );
-  return parts.join('. ');
 }
 
 export function buildSpanishPrompt(
@@ -139,14 +143,15 @@ export function buildSpanishPrompt(
   };
   const parts: string[] = [
     `Ilustración realista de ${article} ${noun} llamado ${entity.canonicalName}`,
-    'Mantener exactamente la identidad visual del mismo personaje o entidad entre variantes',
+    'La referencia visual y los rasgos de identidad de la ficha tienen prioridad sobre el nombre de la entidad',
+    'Conservar el rostro, la estructura facial, el color y estilo del cabello, los ojos, el tono de piel, la edad aparente, la complexión y los rasgos distintivos',
   ];
   if (entity.description) {
     parts.push(entity.description);
   }
   const attributes = serializeAttributes(entity.attributes);
   if (attributes) {
-    parts.push(`Atributos de identidad: ${attributes}`);
+    parts.push(`Rasgos y datos de identidad de la ficha: ${attributes}`);
   }
   const requestedChanges = Object.entries(instructions).map(
     ([key, value]) => `${getInstructionLabel(entity.type, key)}: ${value}`,
@@ -156,9 +161,12 @@ export function buildSpanishPrompt(
   }
   if (requestedChanges.length > 0) {
     parts.push(
-      `Cambios solicitados para esta variante: ${requestedChanges.join('. ')}`,
+      `Cambios solicitados para esta variante (aplicar sin cambiar la identidad): ${requestedChanges.join('. ')}`,
     );
   }
+  parts.push(
+    'Generar una variante nueva: cambiar composición, pose, encuadre, fondo o iluminación cuando corresponda; no copiar exactamente la composición de la referencia salvo que se solicite explícitamente',
+  );
   parts.push(
     'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
   );
@@ -179,8 +187,25 @@ function serializeAttributes(attributes: unknown): string {
   }
   return Object.entries(attributes)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}: ${String(value)}`)
+    .map(([key, value]) => `${key}: ${serializeAttributeValue(value)}`)
     .join(', ');
+}
+
+function serializeAttributeValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value === null) {
+    return 'sin especificar';
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

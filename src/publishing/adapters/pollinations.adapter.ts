@@ -6,14 +6,29 @@ import type {
   ImageGenerationInput,
   ImageGenerationResult,
 } from '../ports/image-generation.port';
+import { createImageSeed } from '../image-publishing.utils';
 export { IMAGE_GENERATION } from '../ports/image-generation.port';
 
 const GENERATION_TIMEOUT_MS = 30_000;
-
+const IMAGE_REFERENCE_MODELS = new Set([
+  'kontext',
+  'gptimage',
+  'gptimage-large',
+  'gpt-image-2',
+  'seedream',
+  'seedream5',
+  'seedream-pro',
+  'nanobanana',
+  'nanobanana-2',
+  'nanobanana-pro',
+  'klein',
+]);
 @Injectable()
 export class PollinationsAdapter implements ImageGeneration {
   private readonly baseUrl: string;
   private readonly defaultModel: string;
+  private readonly referenceModel: string | null;
+  private readonly apiKey: string | null;
   private readonly defaultWidth: number;
   private readonly defaultHeight: number;
 
@@ -23,6 +38,10 @@ export class PollinationsAdapter implements ImageGeneration {
       'https://image.pollinations.ai/p',
     );
     this.defaultModel = this.config.get<string>('POLLINATIONS_MODEL', 'flux');
+    this.referenceModel =
+      this.config.get<string>('POLLINATIONS_REFERENCE_MODEL')?.trim() || null;
+    this.apiKey =
+      this.config.get<string>('POLLINATIONS_API_KEY')?.trim() || null;
     this.defaultWidth = Number(this.config.get<string>('IMAGE_WIDTH', '512'));
     this.defaultHeight = Number(this.config.get<string>('IMAGE_HEIGHT', '512'));
   }
@@ -30,8 +49,11 @@ export class PollinationsAdapter implements ImageGeneration {
   async generate(input: ImageGenerationInput): Promise<ImageGenerationResult> {
     const width = input.width ?? this.defaultWidth;
     const height = input.height ?? this.defaultHeight;
-    const model = input.model ?? this.defaultModel;
-    const seed = input.seed === undefined ? '' : `&seed=${input.seed}`;
+    const requestedModel = input.model ?? this.defaultModel;
+    const model = input.referenceImageUrl
+      ? this.resolveReferenceModel(requestedModel)
+      : requestedModel;
+    const seed = `&seed=${input.seed ?? createImageSeed()}`;
     const referenceImage = input.referenceImageUrl
       ? `&image=${encodeURIComponent(input.referenceImageUrl)}`
       : '';
@@ -45,7 +67,12 @@ export class PollinationsAdapter implements ImageGeneration {
     const timer = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, {
+        signal: controller.signal,
+        ...(this.apiKey
+          ? { headers: { Authorization: `Bearer ${this.apiKey}` } }
+          : {}),
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -68,5 +95,14 @@ export class PollinationsAdapter implements ImageGeneration {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private resolveReferenceModel(requestedModel: string): string {
+    if (IMAGE_REFERENCE_MODELS.has(requestedModel)) {
+      return requestedModel;
+    }
+    return this.referenceModel && IMAGE_REFERENCE_MODELS.has(this.referenceModel)
+      ? this.referenceModel
+      : requestedModel;
   }
 }

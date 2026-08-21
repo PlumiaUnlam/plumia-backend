@@ -177,6 +177,7 @@ export class ImageAssetsService {
         name: dto.name,
         description: dto.description ?? null,
         type: dto.type,
+        attributes: dto.attributes,
       });
       const width =
         dto.width ?? Number(this.config.get<string>('IMAGE_WIDTH', '512'));

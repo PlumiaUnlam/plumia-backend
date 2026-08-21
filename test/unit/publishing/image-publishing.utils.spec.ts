@@ -20,10 +20,13 @@ describe('image publishing prompts', () => {
     );
 
     expect(prompt).toContain('Maren Solís');
-    expect(prompt).toContain('Mantener exactamente la identidad visual');
-    expect(prompt).toContain('Atributos de identidad: age: 29, eyes: green');
+    expect(prompt).toContain('La referencia visual y los rasgos de identidad');
+    expect(prompt).toContain(
+      'Rasgos y datos de identidad de la ficha: age: 29, eyes: green',
+    );
     expect(prompt).toContain('expresión: sonriente');
     expect(prompt).toContain('instrucción adicional: conservar la cicatriz');
+    expect(prompt).toContain('Generar una variante nueva');
     expect(prompt).toContain('Sin texto');
   });
 
@@ -56,5 +59,20 @@ describe('image publishing prompts', () => {
         description: 'Una fortaleza sobre la montaña.',
       }),
     ).toContain('Ilustración realista de un lugar');
+  });
+
+  it('includes the visual identity profile in preview prompts', () => {
+    const prompt = buildSpanishPromptFromData({
+      name: 'Maren Solís',
+      type: 'CHARACTER',
+      description: 'Archivista del valle.',
+      attributes: {
+        visualIdentity: 'Cabello negro, ojos verdes y una cicatriz en la ceja.',
+      },
+    });
+
+    expect(prompt).toContain(
+      'visualIdentity: Cabello negro, ojos verdes y una cicatriz en la ceja.',
+    );
   });
 });

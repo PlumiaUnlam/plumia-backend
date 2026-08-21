@@ -1,4 +1,11 @@
-import { IsString, IsOptional, IsInt, Min, Max } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  Min,
+  Max,
+  IsObject,
+} from 'class-validator';
 
 export class GeneratePreviewImageDto {
   @IsString()
@@ -10,6 +17,10 @@ export class GeneratePreviewImageDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  @IsObject()
+  attributes?: Record<string, unknown>;
 
   @IsOptional()
   @IsInt()

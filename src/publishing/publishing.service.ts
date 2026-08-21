@@ -18,19 +18,12 @@ import {
   MIME_EXTENSIONS,
   UPLOAD_TIMEOUT_MS,
   buildSpanishPrompt,
+  createImageSeed,
   fetchWithTimeout,
   toUserFriendlyError,
 } from './image-publishing.utils';
 import { ImageGenerationEventsService } from './workers/image-generation-events.service';
 import { ImageAssetsService } from './image-assets.service';
-
-function stableSeed(value: string): number {
-  let hash = 0;
-  for (const character of value) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  }
-  return hash % 2_147_483_647;
-}
 
 @Injectable()
 export class PublishingService {
@@ -60,7 +53,7 @@ export class PublishingService {
       dto.width ?? Number(this.config.get<string>('IMAGE_WIDTH', '512'));
     const height =
       dto.height ?? Number(this.config.get<string>('IMAGE_HEIGHT', '512'));
-    const seed = stableSeed(entity.id);
+    const seed = createImageSeed();
 
     const job = await this.prisma.$transaction(async (tx) => {
       const created = await tx.imageGenerationJob.create({
