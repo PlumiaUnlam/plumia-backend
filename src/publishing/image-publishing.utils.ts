@@ -166,8 +166,6 @@ export function buildSpanishPrompt(
   }
   parts.push(
     'Generar una variante nueva: cambiar composición, pose, encuadre, fondo o iluminación cuando corresponda; no copiar exactamente la composición de la referencia salvo que se solicite explícitamente',
-  );
-  parts.push(
     'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
   );
   return parts.join('. ');

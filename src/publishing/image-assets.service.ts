@@ -142,11 +142,14 @@ export class ImageAssetsService {
           });
         }
         if (image.isPrimary) {
-          const nextImageUrl = nextPrimary
-            ? this.storage.getPublicUrl(nextPrimary.storageKey)
-            : entity.imageUrl === this.storage.getPublicUrl(image.storageKey)
-              ? null
-              : entity.imageUrl;
+          let nextImageUrl = entity.imageUrl;
+          if (nextPrimary) {
+            nextImageUrl = this.storage.getPublicUrl(nextPrimary.storageKey);
+          } else if (
+            entity.imageUrl === this.storage.getPublicUrl(image.storageKey)
+          ) {
+            nextImageUrl = null;
+          }
           await tx.entity.update({
             where: { id: entity.id },
             data: { imageUrl: nextImageUrl },
