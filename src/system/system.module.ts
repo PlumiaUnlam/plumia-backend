@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuditModule } from '../audit/audit.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { EntityExtractionClient } from './entity-extraction/entity-extraction.client';
 import { EntityExtractionPipelineService } from './entity-extraction/entity-extraction-pipeline.service';
@@ -7,7 +8,7 @@ import { SystemController } from './system.controller';
 import { SystemService } from './system.service';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AuditModule],
   controllers: [SystemController],
   providers: [
     SystemService,

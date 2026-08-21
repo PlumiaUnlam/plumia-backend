@@ -107,6 +107,7 @@ enum AuditStatus {
   ACTIVE
   RESOLVED
   DISMISSED
+  OBSOLETE
 }
 
 enum ExportFormat {
@@ -598,6 +599,7 @@ model RelationshipProposal {
 
 model AuditAlert {
   id                 String        @id @default(uuid()) @db.Uuid
+  fingerprint        String?       @unique @db.VarChar(200)
   projectId          String        @map("project_id") @db.Uuid
   sceneId            String        @map("scene_id") @db.Uuid
   detectionLevel     AuditLevel    @map("detection_level")
