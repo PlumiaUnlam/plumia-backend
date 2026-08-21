@@ -1,10 +1,14 @@
 import { ValidationPipe, UnauthorizedException } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import type { PrismaClient, User } from '@prisma/client';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { FirebaseAdminService } from '../../src/auth/firebase-admin.service';
+import { CHAT_GENERATION_PROVIDER } from '../../src/chat/ports/chat-generation-provider.port';
+import type { ChatGenerationInput } from '../../src/chat/ports/chat-generation-provider.port';
+import { EMBEDDING_PROVIDER } from '../../src/chat/ports/embedding-provider.port';
 import { IMAGE_GENERATION } from '../../src/publishing/ports/image-generation.port';
 import { IMAGE_GENERATION_QUEUE } from '../../src/publishing/ports/image-generation-queue.port';
 import { ImageGenerationOutboxPoller } from '../../src/publishing/workers/image-generation-outbox-poller.service';
@@ -18,6 +22,25 @@ import { StorageService } from '../../src/storage/storage.service';
 export const E2E_USER_ID = 'e2e-user';
 export const E2E_USER_EMAIL = 'e2e-user@example.com';
 export const E2E_TOKEN = 'e2e-token';
+export const e2eChatGenerationMock = {
+  generate: jest.fn((input: ChatGenerationInput) =>
+    Promise.resolve({
+      answer: `Respuesta respaldada: ${input.question}`,
+      sourceIds: input.sources.map((source) => source.id),
+      claims: [
+        {
+          text: `Respuesta respaldada: ${input.question}`,
+          evidence: input.sources.map((source) => ({
+            sourceId: source.id,
+            quote: source.excerpt.slice(0, 160),
+          })),
+        },
+      ],
+      inputTokens: 25,
+      outputTokens: 10,
+    }),
+  ),
+};
 
 export async function createE2eApp(): Promise<INestApplication> {
   process.env['APP_ROLE'] = 'web';
@@ -48,11 +71,22 @@ export async function createE2eApp(): Promise<INestApplication> {
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   })
+    .overrideGuard(ThrottlerGuard)
+    .useValue({ canActivate: jest.fn(() => true) })
     .overrideProvider(AuthService)
     .useValue(authMock)
     .overrideProvider(FirebaseAdminService)
     .useValue({
       verifyToken: jest.fn(() => Promise.resolve({ uid: E2E_USER_ID })),
+    })
+    .overrideProvider(CHAT_GENERATION_PROVIDER)
+    .useValue(e2eChatGenerationMock)
+    .overrideProvider(EMBEDDING_PROVIDER)
+    .useValue({
+      model: 'test-embedding',
+      isConfigured: jest.fn(() => false),
+      embedDocuments: jest.fn(() => Promise.resolve([])),
+      embedQuery: jest.fn(() => Promise.resolve([])),
     })
     .overrideProvider(StorageService)
     .useValue({

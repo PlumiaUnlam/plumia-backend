@@ -4,6 +4,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import {
   createE2eApp,
+  e2eChatGenerationMock,
   E2E_TOKEN,
   resetDatabase,
   seedE2eUser,
@@ -147,6 +148,24 @@ export function createEndpointTestContext(): EndpointTestContext {
   });
 
   beforeEach(async () => {
+    e2eChatGenerationMock.generate.mockClear();
+    e2eChatGenerationMock.generate.mockImplementation((input) =>
+      Promise.resolve({
+        answer: `Respuesta respaldada: ${input.question}`,
+        sourceIds: input.sources.map((source) => source.id),
+        claims: [
+          {
+            text: `Respuesta respaldada: ${input.question}`,
+            evidence: input.sources.map((source) => ({
+              sourceId: source.id,
+              quote: source.excerpt.slice(0, 160),
+            })),
+          },
+        ],
+        inputTokens: 25,
+        outputTokens: 10,
+      }),
+    );
     await resetDatabase(prisma);
     await seedE2eUser(prisma);
   });
