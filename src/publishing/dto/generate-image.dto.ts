@@ -1,12 +1,60 @@
-import { IsString, IsOptional, IsInt, Min, Max } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  Min,
+  Max,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class GenerateImageDto {
-  @IsString()
+  @IsUUID()
   entityId!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   prompt?: string;
+
+  @IsOptional()
+  @IsUUID()
+  referenceImageId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  expression?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  pose?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  background?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  framing?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  lighting?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  style?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  additionalInstructions?: string;
 
   @IsOptional()
   @IsInt()

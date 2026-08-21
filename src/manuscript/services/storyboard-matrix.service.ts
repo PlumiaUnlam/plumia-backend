@@ -109,6 +109,7 @@ export class StoryboardMatrixService {
       customType === undefined || customType.length === 0 ? null : customType;
     const [arc] = await this.prisma.$queryRaw<Omit<MatrixArcRecord, 'notes'>[]>`
       INSERT INTO storyboard_arc (
+        id,
         project_id,
         title,
         source_type,
@@ -119,6 +120,7 @@ export class StoryboardMatrixService {
         updated_at
       )
       VALUES (
+        gen_random_uuid(),
         ${projectId}::uuid,
         ${dto.title},
         ${dto.sourceType},
@@ -175,6 +177,7 @@ export class StoryboardMatrixService {
     const sortKey = await this.nextNoteSortKey(arc.id, dto.chapterId);
     const [note] = await this.prisma.$queryRaw<MatrixNoteRecord[]>`
       INSERT INTO storyboard_matrix_note (
+        id,
         arc_id,
         chapter_id,
         content,
@@ -182,6 +185,7 @@ export class StoryboardMatrixService {
         updated_at
       )
       VALUES (
+        gen_random_uuid(),
         ${arc.id}::uuid,
         ${dto.chapterId}::uuid,
         ${dto.content},

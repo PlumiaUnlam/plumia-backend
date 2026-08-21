@@ -1,7 +1,7 @@
-import { IsString } from 'class-validator';
+import { IsString, IsUUID } from 'class-validator';
 
 export class AttachImageDto {
-  @IsString()
+  @IsUUID()
   entityId!: string;
 
   @IsString()

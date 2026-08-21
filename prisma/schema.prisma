@@ -130,6 +130,13 @@ enum SummaryJobStatus {
   FAILED
 }
 
+enum ImageGenerationJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 // ============================================================
 // 2.1 Auth y Usuarios
 // ============================================================
@@ -158,6 +165,7 @@ model User {
   exportJobs        ExportJob[]
   writingSessions   WritingSession[]
   writingGoals      WritingGoal[]
+  imageGenerationJobs ImageGenerationJob[]
 }
 
 model UserApiKey {
@@ -391,6 +399,7 @@ model Entity {
   sourceRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalSourceEntity")
   targetRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalTargetEntity")
   generatedImages GeneratedImage[]
+  imageGenerationJobs ImageGenerationJob[]
   timelineEvents  TimelineEventEntity[]
 
   @@index([projectId], map: "idx_entity_project")
@@ -812,10 +821,41 @@ model GeneratedImage {
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  generationJob ImageGenerationJob?
 
   @@index([entityId], map: "idx_image_entity")
   @@index([isPrimary], map: "idx_image_primary")
   @@map("generated_image")
+}
+
+model ImageGenerationJob {
+  id                String                   @id @default(uuid()) @db.Uuid
+  entityId          String                   @map("entity_id") @db.Uuid
+  userId            String                   @map("user_id")
+  prompt            String
+  instructions      Json                     @default("{}") @db.JsonB
+  referenceImageId  String?                  @map("reference_image_id") @db.Uuid
+  referenceImageUrl String?                  @map("reference_image_url") @db.VarChar(1000)
+  width             Int
+  height            Int
+  seed              Int
+  status            ImageGenerationJobStatus @default(QUEUED)
+  progress          Int                      @default(0)
+  bullJobId         String?                  @map("bull_job_id") @db.VarChar(150)
+  generatedImageId  String?                  @unique @map("generated_image_id") @db.Uuid
+  errorMessage      String?                  @map("error_message")
+  createdAt         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt         DateTime?                @map("started_at") @db.Timestamptz(6)
+  completedAt       DateTime?                @map("completed_at") @db.Timestamptz(6)
+
+  entity         Entity         @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  generatedImage GeneratedImage? @relation(fields: [generatedImageId], references: [id], onDelete: SetNull)
+
+  @@index([entityId, createdAt], map: "idx_image_job_entity_created")
+  @@index([userId, createdAt], map: "idx_image_job_user_created")
+  @@index([status], map: "idx_image_job_status")
+  @@map("image_generation_job")
 }
 
 model StoryboardNote {

@@ -5,6 +5,8 @@ export interface ImageGenerationInput {
   width?: number;
   height?: number;
   model?: string;
+  seed?: number;
+  referenceImageUrl?: string;
 }
 
 export interface ImageGenerationResult {

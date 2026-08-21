@@ -4,7 +4,11 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import type { PrismaClient, User } from '@prisma/client';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
+import { FirebaseAdminService } from '../../src/auth/firebase-admin.service';
 import { IMAGE_GENERATION } from '../../src/publishing/ports/image-generation.port';
+import { IMAGE_GENERATION_QUEUE } from '../../src/publishing/ports/image-generation-queue.port';
+import { ImageGenerationOutboxPoller } from '../../src/publishing/workers/image-generation-outbox-poller.service';
+import { ImageGenerationWorkersService } from '../../src/publishing/workers/image-generation-workers.service';
 import { SUMMARY_QUEUE } from '../../src/summary/ports/summary-queue.port';
 import { SUMMARY_GENERATION_PROVIDER } from '../../src/summary/ports/summary-generation-provider.port';
 import { SummaryOutboxPoller } from '../../src/summary/workers/summary-outbox-poller.service';
@@ -46,6 +50,10 @@ export async function createE2eApp(): Promise<INestApplication> {
   })
     .overrideProvider(AuthService)
     .useValue(authMock)
+    .overrideProvider(FirebaseAdminService)
+    .useValue({
+      verifyToken: jest.fn(() => Promise.resolve({ uid: E2E_USER_ID })),
+    })
     .overrideProvider(StorageService)
     .useValue({
       generatePresignedUploadUrl: jest.fn(
@@ -76,6 +84,7 @@ export async function createE2eApp(): Promise<INestApplication> {
         }
         return url.slice(index + marker.length);
       }),
+      deleteObject: jest.fn(() => Promise.resolve(undefined)),
     })
     .overrideProvider(IMAGE_GENERATION)
     .useValue({
@@ -85,6 +94,20 @@ export async function createE2eApp(): Promise<INestApplication> {
           contentType: 'image/png',
         }),
       ),
+    })
+    .overrideProvider(IMAGE_GENERATION_QUEUE)
+    .useValue({
+      enqueueGeneration: jest.fn(() => Promise.resolve(undefined)),
+    })
+    .overrideProvider(ImageGenerationWorkersService)
+    .useValue({
+      onModuleInit: jest.fn(),
+      onModuleDestroy: jest.fn(() => Promise.resolve(undefined)),
+    })
+    .overrideProvider(ImageGenerationOutboxPoller)
+    .useValue({
+      onModuleInit: jest.fn(),
+      onModuleDestroy: jest.fn(),
     })
     .overrideProvider(SUMMARY_QUEUE)
     .useValue({
@@ -145,6 +168,7 @@ export async function resetDatabase(prisma: PrismaClient): Promise<void> {
       "storyboard_matrix_note",
       "storyboard_arc",
       "storyboard_note",
+      "image_generation_job",
       "generated_image",
       "export_job",
       "version",
