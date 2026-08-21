@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma, ProposalStatus, type EntityType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toEntityType } from '../domain/entity-type';
@@ -10,17 +14,17 @@ import type { EntityProposalOverrideDto } from '../dto/entity-proposal-override.
 
 interface ProposalPayload {
   canonicalName: string;
-  aliases?: string[];
+  aliases: string[];
   type: EntityType;
-  description?: string | null;
-  attributes?: Record<string, unknown>;
-  imageUrl?: string | null;
-  proposalKind?: EntityProposalKind;
-  confidenceScore?: number;
-  sourceSceneId?: string;
-  sourceSceneTitle?: string | null;
-  evidence?: string[];
-  normalizedName?: string;
+  description?: string | null | undefined;
+  attributes: Record<string, unknown>;
+  imageUrl?: string | null | undefined;
+  proposalKind?: EntityProposalKind | undefined;
+  confidenceScore?: number | undefined;
+  sourceSceneId?: string | undefined;
+  sourceSceneTitle?: string | null | undefined;
+  evidence?: string[] | undefined;
+  normalizedName?: string | undefined;
 }
 
 @Injectable()
@@ -126,11 +130,6 @@ export class EntityProposalService {
         return null;
       }
 
-      const proposedData = {
-        ...this.parseProposalPayload(proposal.proposedData),
-        ...(override ?? {}),
-      };
-
       const entity = proposal.entityId
         ? await tx.entity.findFirst({
             where: {
@@ -143,6 +142,32 @@ export class EntityProposalService {
             },
           })
         : null;
+
+      const storedPayload = this.readProposalPayload(proposal.proposedData);
+      const mergedPayload = {
+        ...storedPayload,
+        ...(override ?? {}),
+      };
+
+      // Extraction uses null when it has no image suggestion. For an update,
+      // that must not clear the image already selected by the author.
+      if (
+        entity &&
+        storedPayload['imageUrl'] === null &&
+        !this.hasOwnField(override, 'imageUrl')
+      ) {
+        delete mergedPayload['imageUrl'];
+      }
+
+      const proposedData = this.normalizeProposalPayload(
+        mergedPayload,
+        entity
+          ? {
+              canonicalName: entity.canonicalName,
+              type: entity.type,
+            }
+          : undefined,
+      );
 
       const consolidatedEntity = entity
         ? await tx.entity.update({
@@ -230,8 +255,114 @@ export class EntityProposalService {
     }
   }
 
-  private parseProposalPayload(value: Prisma.JsonValue): ProposalPayload {
-    return value as unknown as ProposalPayload;
+  private readProposalPayload(
+    value: Prisma.JsonValue,
+  ): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : {};
+  }
+
+  private hasOwnField(value: unknown, key: string): boolean {
+    return (
+      value !== null &&
+      typeof value === 'object' &&
+      Object.prototype.hasOwnProperty.call(value, key)
+    );
+  }
+
+  private normalizeProposalPayload(
+    value: unknown,
+    fallback?: Pick<ProposalPayload, 'canonicalName' | 'type'>,
+  ): ProposalPayload {
+    const raw =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+    const rawCanonicalName = raw['canonicalName'];
+    const canonicalName =
+      typeof rawCanonicalName === 'string' && rawCanonicalName.trim()
+        ? rawCanonicalName.trim()
+        : (fallback?.canonicalName ?? '');
+
+    if (!canonicalName) {
+      throw new BadRequestException(
+        'La propuesta de entidad no contiene un nombre válido',
+      );
+    }
+
+    const rawTypeValue = raw['type'];
+    const rawType =
+      typeof rawTypeValue === 'string' && rawTypeValue.trim()
+        ? rawTypeValue.trim().toUpperCase()
+        : (fallback?.type ?? 'CONCEPT');
+    const rawAliases = raw['aliases'];
+    const aliases = Array.isArray(rawAliases)
+      ? [
+          ...new Set(
+            rawAliases
+              .filter((alias): alias is string => typeof alias === 'string')
+              .map((alias) => alias.trim())
+              .filter(Boolean),
+          ),
+        ]
+      : [];
+    const rawDescription = raw['description'];
+    const description =
+      rawDescription === null
+        ? null
+        : typeof rawDescription === 'string'
+          ? rawDescription
+          : undefined;
+    const rawAttributes = raw['attributes'];
+    const attributes =
+      rawAttributes &&
+      typeof rawAttributes === 'object' &&
+      !Array.isArray(rawAttributes)
+        ? (rawAttributes as Record<string, unknown>)
+        : {};
+    const rawImageUrl = raw['imageUrl'];
+    const imageUrl =
+      rawImageUrl === null
+        ? null
+        : typeof rawImageUrl === 'string'
+          ? rawImageUrl
+          : undefined;
+
+    return {
+      canonicalName,
+      aliases,
+      type: toEntityType(String(rawType)),
+      description,
+      attributes,
+      imageUrl,
+      proposalKind:
+        typeof raw['proposalKind'] === 'string'
+          ? (raw['proposalKind'] as EntityProposalKind)
+          : undefined,
+      confidenceScore:
+        typeof raw['confidenceScore'] === 'number'
+          ? raw['confidenceScore']
+          : undefined,
+      sourceSceneId:
+        typeof raw['sourceSceneId'] === 'string'
+          ? raw['sourceSceneId']
+          : undefined,
+      sourceSceneTitle:
+        typeof raw['sourceSceneTitle'] === 'string' ||
+        raw['sourceSceneTitle'] === null
+          ? raw['sourceSceneTitle']
+          : undefined,
+      evidence: Array.isArray(raw['evidence'])
+        ? raw['evidence'].filter(
+            (evidence): evidence is string => typeof evidence === 'string',
+          )
+        : [],
+      normalizedName:
+        typeof raw['normalizedName'] === 'string'
+          ? raw['normalizedName']
+          : undefined,
+    };
   }
 
   private buildAcceptedUpdateEntityData(
