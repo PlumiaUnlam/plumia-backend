@@ -1,3 +1,5 @@
+/* eslint-disable max-lines */
+
 import { Injectable } from '@nestjs/common';
 import { Prisma, type Scene } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';

@@ -1,3 +1,5 @@
+/* eslint-disable max-lines */
+
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, ProposalStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
