@@ -698,6 +698,8 @@ model Chunk {
   chunkIndex  Int                          @map("chunk_index")
   isDirty     Boolean                      @default(false) @map("is_dirty")
   contentHash String?                      @map("content_hash") @db.VarChar(64)
+  embeddingContentHash String?             @map("embedding_content_hash") @db.VarChar(64)
+  embeddingModel String?                   @map("embedding_model") @db.VarChar(100)
   createdAt   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -709,6 +711,7 @@ model Chunk {
   @@unique([sceneId, chunkIndex])
   @@index([sceneId], map: "idx_chunk_scene")
   @@index([isDirty], map: "idx_chunk_dirty")
+  @@index([projectId, embeddingContentHash, embeddingModel], map: "idx_chunk_embedding_freshness")
   @@map("chunk")
 }
 

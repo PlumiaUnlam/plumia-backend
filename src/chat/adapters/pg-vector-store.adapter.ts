@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
+  ChunkEmbeddingUpdateInput,
   ChunkUpsertInput,
   VectorSearchInput,
   VectorSearchResult,
@@ -19,19 +20,35 @@ export class PgVectorStore implements VectorStore {
     await this.prisma.$executeRaw`
       INSERT INTO "chunk" (
         "id", "project_id", "scene_id", "content", "embedding",
-        "token_count", "chunk_index", "content_hash", "created_at", "updated_at"
+        "token_count", "chunk_index", "content_hash", "embedding_content_hash",
+        "created_at", "updated_at"
       )
       VALUES (
         gen_random_uuid(), ${input.projectId}::uuid, ${input.sceneId}::uuid, ${input.content}, ${embedding}::vector,
-        ${input.tokenCount}, ${input.chunkIndex}, ${input.contentHash ?? null}, now(), now()
+        ${input.tokenCount}, ${input.chunkIndex}, ${input.contentHash ?? null}, ${input.contentHash ?? null},
+        now(), now()
       )
       ON CONFLICT ("scene_id", "chunk_index") DO UPDATE SET
         "content" = EXCLUDED."content",
         "embedding" = EXCLUDED."embedding",
         "token_count" = EXCLUDED."token_count",
         "content_hash" = EXCLUDED."content_hash",
-        "is_dirty" = false,
+        "embedding_content_hash" = EXCLUDED."content_hash",
         "updated_at" = now()
+    `;
+  }
+
+  async updateChunkEmbedding(input: ChunkEmbeddingUpdateInput): Promise<void> {
+    const embedding = toVectorLiteral(input.embedding);
+    await this.prisma.$executeRaw`
+      UPDATE "chunk"
+      SET
+        "embedding" = ${embedding}::vector,
+        "embedding_content_hash" = ${input.contentHash},
+        "embedding_model" = ${input.model},
+        "updated_at" = now()
+      WHERE "id" = ${input.chunkId}::uuid
+        AND "content_hash" = ${input.contentHash}
     `;
   }
 
@@ -46,6 +63,7 @@ export class PgVectorStore implements VectorStore {
       FROM "chunk"
       WHERE "project_id" = ${input.projectId}::uuid
         AND "embedding" IS NOT NULL
+        AND "embedding_content_hash" = "content_hash"
       ORDER BY "embedding" <=> ${embedding}::vector
       LIMIT ${input.limit}
     `;

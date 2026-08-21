@@ -27,7 +27,15 @@ export interface VectorSearchResult {
   distance: number;
 }
 
+export interface ChunkEmbeddingUpdateInput {
+  chunkId: string;
+  embedding: number[];
+  contentHash: string;
+  model: string;
+}
+
 export interface VectorStore {
   upsertChunk(input: ChunkUpsertInput): Promise<void>;
+  updateChunkEmbedding(input: ChunkEmbeddingUpdateInput): Promise<void>;
   search(input: VectorSearchInput): Promise<VectorSearchResult[]>;
 }
