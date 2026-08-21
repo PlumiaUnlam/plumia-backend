@@ -8,7 +8,18 @@ describe('ImageAssetsService', () => {
   const entityId = 'entity-1';
   const imageId = 'image-1';
 
-  function createService() {
+  function createService(): {
+    prisma: {
+      entity: { findFirst: jest.Mock };
+      generatedImage: { findFirst: jest.Mock };
+      $transaction: jest.Mock;
+    };
+    storage: {
+      deleteObject: jest.Mock;
+      getPublicUrl: jest.Mock;
+    };
+    service: ImageAssetsService;
+  } {
     const prisma = {
       entity: { findFirst: jest.fn() },
       generatedImage: { findFirst: jest.fn() },

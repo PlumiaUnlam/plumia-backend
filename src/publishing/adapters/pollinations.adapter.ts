@@ -39,9 +39,9 @@ export class PollinationsAdapter implements ImageGeneration {
     );
     this.defaultModel = this.config.get<string>('POLLINATIONS_MODEL', 'flux');
     this.referenceModel =
-      this.config.get<string>('POLLINATIONS_REFERENCE_MODEL')?.trim() || null;
+      this.config.get<string>('POLLINATIONS_REFERENCE_MODEL')?.trim() ?? null;
     this.apiKey =
-      this.config.get<string>('POLLINATIONS_API_KEY')?.trim() || null;
+      this.config.get<string>('POLLINATIONS_API_KEY')?.trim() ?? null;
     this.defaultWidth = Number(this.config.get<string>('IMAGE_WIDTH', '512'));
     this.defaultHeight = Number(this.config.get<string>('IMAGE_HEIGHT', '512'));
   }
@@ -101,8 +101,12 @@ export class PollinationsAdapter implements ImageGeneration {
     if (IMAGE_REFERENCE_MODELS.has(requestedModel)) {
       return requestedModel;
     }
-    return this.referenceModel && IMAGE_REFERENCE_MODELS.has(this.referenceModel)
-      ? this.referenceModel
-      : requestedModel;
+    if (
+      this.referenceModel &&
+      IMAGE_REFERENCE_MODELS.has(this.referenceModel)
+    ) {
+      return this.referenceModel;
+    }
+    return requestedModel;
   }
 }
