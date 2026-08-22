@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { StorageModule } from '../storage/storage.module';
 import { PrismaBookRepository } from './adapters/prisma-book-repository.adapter';
 import { PrismaChapterRepository } from './adapters/prisma-chapter-repository.adapter';
 import { PrismaProjectRepository } from './adapters/prisma-project-repository.adapter';
@@ -23,6 +24,7 @@ import { StoryboardCardService } from './services/storyboard-card.service';
 import { StoryboardMatrixService } from './services/storyboard-matrix.service';
 
 @Module({
+  imports: [StorageModule],
   controllers: [
     ProjectsController,
     BooksController,

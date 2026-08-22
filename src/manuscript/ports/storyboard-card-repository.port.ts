@@ -12,6 +12,8 @@ export interface StoryboardCardRecord {
   tags: string[];
   characters: string[];
   entityIds: string[];
+  audioStorageKey: string | null;
+  audioDurationSecs: number | null;
   sortKey: string;
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +60,12 @@ export interface StoryboardCardRepository {
     userId: string,
     cardId: string,
     data: UpdateStoryboardCardData,
+  ): Promise<StoryboardCardRecord | null>;
+  attachAudioForUser(
+    userId: string,
+    cardId: string,
+    audioStorageKey: string,
+    audioDurationSecs: number,
   ): Promise<StoryboardCardRecord | null>;
   softDeleteForUser(
     userId: string,

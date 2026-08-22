@@ -21,11 +21,26 @@ import type { Response } from 'express';
 import { FirebaseAdminService } from '../auth/firebase-admin.service';
 import { Public } from '../common/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
-import { StorageService } from './storage.service';
+import {
+  STORAGE_FOLDERS,
+  StorageService,
+  type StorageFolder,
+} from './storage.service';
 import type { AuthenticatedRequest } from './authenticated-request';
 
-const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
-const STORAGE_KEY_PATTERN = /^(entities|scenes)\/([^/]+)\/[^/]+$/;
+const ALLOWED_MIME = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+  'audio/webm',
+  'audio/webm;codecs=opus',
+  'audio/ogg',
+  'audio/ogg;codecs=opus',
+  'audio/mp4',
+];
+const STORAGE_KEY_PATTERN =
+  /^(entities|scenes|storyboard-audio)\/([^/]+)\/[^/]+$/;
 
 class PresignedUploadDto {
   @IsString()
@@ -46,8 +61,8 @@ class PresignedUploadDto {
 
   @IsString()
   @IsOptional()
-  @IsIn(['entities', 'scenes'])
-  storageFolder?: 'entities' | 'scenes';
+  @IsIn(STORAGE_FOLDERS)
+  storageFolder?: StorageFolder;
 }
 
 class PresignedDownloadDto {
@@ -74,9 +89,11 @@ export class StorageController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   async presignedUpload(
-    @Request() _req: AuthenticatedRequest,
+    @Request() req: AuthenticatedRequest,
     @Body() dto: PresignedUploadDto,
   ): Promise<{ presignedUrl: string; publicUrl: string; storageKey: string }> {
+    await this.assertUploadTarget(req.user.id, dto.entityId, dto.storageFolder);
+
     try {
       const existingKey = dto.existingImageUrl
         ? this.storageService.extractKeyFromUrl(dto.existingImageUrl)
@@ -97,6 +114,29 @@ export class StorageController {
     }
   }
 
+  private async assertUploadTarget(
+    userId: string,
+    resourceId: string,
+    storageFolder: StorageFolder = 'entities',
+  ): Promise<void> {
+    if (storageFolder !== 'storyboard-audio') {
+      return;
+    }
+
+    const note = await this.prisma.storyboardNote.findFirst({
+      where: {
+        id: resourceId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
+      select: { id: true },
+    });
+
+    if (!note) {
+      throw new NotFoundException('Storyboard card not found');
+    }
+  }
+
   @Post('presigned-download-by-key')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { ttl: 60000, limit: 30 } })
@@ -110,7 +150,7 @@ export class StorageController {
       throw new HttpException('Invalid storage key', HttpStatus.BAD_REQUEST);
     }
 
-    const scope = match[1] as 'entities' | 'scenes';
+    const scope = match[1] as StorageFolder;
     const resourceId = match[2];
 
     if (!resourceId) {
@@ -133,7 +173,7 @@ export class StorageController {
       if (entity.project.userId !== req.user.id) {
         throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
       }
-    } else {
+    } else if (scope === 'scenes') {
       const scene = await this.prisma.scene.findFirst({
         where: { id: resourceId, deletedAt: null },
         select: {
@@ -156,6 +196,19 @@ export class StorageController {
 
       if (scene.chapter.book.project.userId !== req.user.id) {
         throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+      }
+    } else {
+      const note = await this.prisma.storyboardNote.findFirst({
+        where: {
+          id: resourceId,
+          deletedAt: null,
+          project: { userId: req.user.id, deletedAt: null },
+        },
+        select: { id: true },
+      });
+
+      if (!note) {
+        throw new NotFoundException('Storyboard card not found');
       }
     }
 

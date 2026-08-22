@@ -15,6 +15,9 @@ const ALLOWED_MIME_TYPES = [
   'image/png',
   'image/webp',
   'image/avif',
+  'audio/webm',
+  'audio/ogg',
+  'audio/mp4',
 ] as const;
 
 const MIME_EXTENSIONS: Record<string, string> = {
@@ -22,7 +25,17 @@ const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
   'image/webp': 'webp',
   'image/avif': 'avif',
+  'audio/webm': 'webm',
+  'audio/ogg': 'ogg',
+  'audio/mp4': 'm4a',
 };
+
+export const STORAGE_FOLDERS = [
+  'entities',
+  'scenes',
+  'storyboard-audio',
+] as const;
+export type StorageFolder = (typeof STORAGE_FOLDERS)[number];
 
 @Injectable()
 export class StorageService {
@@ -49,20 +62,25 @@ export class StorageService {
     _filename: string,
     contentType: string,
     existingKey?: string,
-    storageFolder = 'entities',
+    storageFolder: StorageFolder = 'entities',
   ): Promise<{ presignedUrl: string; publicUrl: string; storageKey: string }> {
+    const baseContentType = contentType.split(';', 1)[0]?.trim().toLowerCase();
     if (
+      !baseContentType ||
       !ALLOWED_MIME_TYPES.includes(
-        contentType as (typeof ALLOWED_MIME_TYPES)[number],
+        baseContentType as (typeof ALLOWED_MIME_TYPES)[number],
       )
     ) {
       throw new Error(`Content type ${contentType} is not allowed`);
+    }
+    if (!STORAGE_FOLDERS.includes(storageFolder)) {
+      throw new Error(`Storage folder ${storageFolder} is not allowed`);
     }
 
     const key =
       existingKey ??
       (() => {
-        const ext = MIME_EXTENSIONS[contentType] ?? 'bin';
+        const ext = MIME_EXTENSIONS[baseContentType] ?? 'bin';
         const uuid = randomUUID();
         return `${storageFolder}/${entityId}/${uuid}.${ext}`;
       })();
