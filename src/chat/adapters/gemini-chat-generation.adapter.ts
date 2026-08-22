@@ -1,5 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
   HarmBlockThreshold,
@@ -81,6 +85,7 @@ Devuelve exclusivamente JSON valido con {"claims": [{"text": string, "evidence":
 
 @Injectable()
 export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
+  private readonly logger = new Logger(GeminiChatGenerationAdapter.name);
   private readonly ai: GoogleGenAI;
   private readonly apiKey: string;
   private readonly models: string[];
@@ -122,20 +127,43 @@ export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
 
   async generate(input: ChatGenerationInput): Promise<ChatGenerationResult> {
     if (!this.apiKey) {
+      this.logger.error(
+        'Gemini chat generation is not configured: no API key was found.',
+      );
       throw new ServiceUnavailableException(
         'El servicio de Chat IA no esta configurado.',
       );
     }
 
+    if (this.models.length === 0) {
+      this.logger.error(
+        'Gemini chat generation has no usable models configured.',
+      );
+    }
+
     for (const [index, model] of this.models.entries()) {
+      this.logger.log(
+        `Gemini chat generation attempt: model=${model} sources=${input.sources.length} history=${input.history.length} questionChars=${input.question.length}`,
+      );
       try {
         return await this.generateWithModel(model, input);
       } catch (error: unknown) {
-        if (!shouldTryFallback(error) || index === this.models.length - 1) {
+        const retryable = shouldTryFallback(error);
+        const details = describeProviderError(error);
+        this.logger.error(
+          `Gemini chat generation failed: model=${model} status=${details.status} code=${details.code} retryable=${retryable} message=${details.message}`,
+        );
+        if (!retryable || index === this.models.length - 1) {
           break;
         }
+        this.logger.warn(
+          `Gemini chat generation will try the next model after failure: currentModel=${model}`,
+        );
       }
     }
+    this.logger.error(
+      `Gemini chat generation exhausted all models: models=${this.models.join(',') || '(none)'}`,
+    );
     throw new ServiceUnavailableException(
       'El servicio de Chat IA no esta disponible temporalmente.',
     );
@@ -184,6 +212,46 @@ function shouldTryFallback(error: unknown): boolean {
   }
   const status = toRecord(error)?.['status'];
   return typeof status === 'number' && FALLBACK_STATUS_CODES.has(status);
+}
+
+function describeProviderError(error: unknown): {
+  status: string;
+  code: string;
+  message: string;
+} {
+  const record = toRecord(error);
+  const nestedError = toRecord(record?.['error']);
+  const status = firstScalar(
+    record?.['status'],
+    record?.['statusCode'],
+    record?.['httpStatus'],
+    nestedError?.['status'],
+    nestedError?.['statusCode'],
+  );
+  const code = firstScalar(record?.['code'], nestedError?.['code']);
+  const message =
+    error instanceof Error
+      ? error.message
+      : (firstScalar(record?.['message'], nestedError?.['message']) ??
+        'Unknown provider error');
+
+  return {
+    status: status ?? 'unknown',
+    code: code ?? 'unknown',
+    message: sanitizeLogValue(message),
+  };
+}
+
+function firstScalar(...values: unknown[]): string | undefined {
+  const value = values.find(
+    (candidate) =>
+      typeof candidate === 'string' || typeof candidate === 'number',
+  );
+  return value === undefined ? undefined : String(value);
+}
+
+function sanitizeLogValue(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim().slice(0, 500) || 'Unknown error';
 }
 
 function buildUserPrompt(input: ChatGenerationInput): string {
