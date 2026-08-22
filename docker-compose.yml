@@ -66,9 +66,9 @@ services:
       WHISPER_HOST: 0.0.0.0
       WHISPER_PORT: 8001
     ports:
-      - '8001:8001'
+      - '127.0.0.1:8001:8001'
     volumes:
-      - whisper-models:/root/.cache/huggingface
+      - whisper-models:/home/whisper/.cache/huggingface
     healthcheck:
       test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import logging
 import tempfile
+import threading
 from pathlib import Path
 from typing import Annotated
 
@@ -15,16 +17,20 @@ COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
 app = FastAPI(title="PlumIA Local Whisper")
 model: WhisperModel | None = None
+model_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def get_model() -> WhisperModel:
     global model
     if model is None:
-        model = WhisperModel(
-            MODEL_NAME,
-            device=DEVICE,
-            compute_type=COMPUTE_TYPE,
-        )
+        with model_lock:
+            if model is None:
+                model = WhisperModel(
+                    MODEL_NAME,
+                    device=DEVICE,
+                    compute_type=COMPUTE_TYPE,
+                )
     return model
 
 
@@ -67,9 +73,10 @@ def transcribe(
             segment.text.strip() for segment in segments if segment.text.strip()
         ).strip()
     except Exception as error:
+        logger.exception("Whisper no pudo procesar el audio")
         raise HTTPException(
             status_code=502,
-            detail=f"Whisper no pudo procesar el audio: {error}",
+            detail="Whisper no pudo procesar el audio.",
         ) from error
     finally:
         if temporary_path:

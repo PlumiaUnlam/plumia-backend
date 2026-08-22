@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  Inject,
   NotFoundException,
   Param,
   Post,
@@ -16,7 +17,15 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, IsIn, IsNotEmpty, IsOptional } from 'class-validator';
+import {
+  IsString,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  Validate,
+  ValidatorConstraint,
+  type ValidatorConstraintInterface,
+} from 'class-validator';
 import type { Response } from 'express';
 import { FirebaseAdminService } from '../auth/firebase-admin.service';
 import { Public } from '../common/decorators/public.decorator';
@@ -24,8 +33,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   STORAGE_FOLDERS,
   StorageService,
+  normalizeContentType,
   type StorageFolder,
 } from './storage.service';
+import {
+  STORAGE_RESOURCE_AUTHORIZATION,
+  type StorageResourceAuthorization,
+} from './ports/storage-resource-authorization.port';
 import type { AuthenticatedRequest } from './authenticated-request';
 
 const ALLOWED_MIME = [
@@ -34,13 +48,26 @@ const ALLOWED_MIME = [
   'image/webp',
   'image/avif',
   'audio/webm',
-  'audio/webm;codecs=opus',
   'audio/ogg',
-  'audio/ogg;codecs=opus',
   'audio/mp4',
 ];
 const STORAGE_KEY_PATTERN =
   /^(entities|scenes|storyboard-audio)\/([^/]+)\/[^/]+$/;
+
+@ValidatorConstraint({ name: 'allowedMimeType', async: false })
+class AllowedMimeTypeConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (typeof value !== 'string') {
+      return false;
+    }
+
+    return ALLOWED_MIME.includes(normalizeContentType(value));
+  }
+
+  defaultMessage(): string {
+    return 'Content type is not allowed';
+  }
+}
 
 class PresignedUploadDto {
   @IsString()
@@ -52,7 +79,7 @@ class PresignedUploadDto {
   filename!: string;
 
   @IsString()
-  @IsIn(ALLOWED_MIME)
+  @Validate(AllowedMimeTypeConstraint)
   contentType!: string;
 
   @IsString()
@@ -83,6 +110,8 @@ export class StorageController {
     private readonly storageService: StorageService,
     private readonly prisma: PrismaService,
     private readonly firebaseAdmin: FirebaseAdminService,
+    @Inject(STORAGE_RESOURCE_AUTHORIZATION)
+    private readonly storageResourceAuthorization: StorageResourceAuthorization,
   ) {}
 
   @Post('presigned-upload')
@@ -123,16 +152,20 @@ export class StorageController {
       return;
     }
 
-    const note = await this.prisma.storyboardNote.findFirst({
-      where: {
-        id: resourceId,
-        deletedAt: null,
-        project: { userId, deletedAt: null },
-      },
-      select: { id: true },
-    });
+    await this.assertStoryboardCardAccess(userId, resourceId);
+  }
 
-    if (!note) {
+  private async assertStoryboardCardAccess(
+    userId: string,
+    cardId: string,
+  ): Promise<void> {
+    const hasAccess =
+      await this.storageResourceAuthorization.hasStoryboardCardAccess(
+        userId,
+        cardId,
+      );
+
+    if (!hasAccess) {
       throw new NotFoundException('Storyboard card not found');
     }
   }
@@ -198,18 +231,7 @@ export class StorageController {
         throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
       }
     } else {
-      const note = await this.prisma.storyboardNote.findFirst({
-        where: {
-          id: resourceId,
-          deletedAt: null,
-          project: { userId: req.user.id, deletedAt: null },
-        },
-        select: { id: true },
-      });
-
-      if (!note) {
-        throw new NotFoundException('Storyboard card not found');
-      }
+      await this.assertStoryboardCardAccess(req.user.id, resourceId);
     }
 
     const url = await this.storageService.generatePresignedGetUrl(

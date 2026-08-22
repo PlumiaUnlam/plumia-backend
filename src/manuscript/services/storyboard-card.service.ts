@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { StorageService } from '../../storage/storage.service';
@@ -23,6 +24,8 @@ type StoryboardCardFields = Omit<
 
 @Injectable()
 export class StoryboardCardService {
+  private readonly logger = new Logger(StoryboardCardService.name);
+
   constructor(
     @Inject(STORYBOARD_CARD_REPOSITORY)
     private readonly storyboardCardRepository: StoryboardCardRepository,
@@ -111,7 +114,13 @@ export class StoryboardCardService {
       throw new NotFoundException('Storyboard card not found');
     }
 
-    await this.deleteAudio(existing.audioStorageKey);
+    await this.deleteAudio(cardId, card.audioStorageKey);
+    if (
+      existing.audioStorageKey &&
+      existing.audioStorageKey !== card.audioStorageKey
+    ) {
+      await this.deleteAudio(cardId, existing.audioStorageKey);
+    }
 
     return card;
   }
@@ -159,7 +168,7 @@ export class StoryboardCardService {
       existing.audioStorageKey &&
       existing.audioStorageKey !== dto.audioStorageKey
     ) {
-      await this.deleteAudio(existing.audioStorageKey);
+      await this.deleteAudio(cardId, existing.audioStorageKey);
     }
 
     return card;
@@ -181,15 +190,32 @@ export class StoryboardCardService {
     return this.storageService.generatePresignedGetUrl(card.audioStorageKey);
   }
 
-  private async deleteAudio(storageKey: string | null): Promise<void> {
+  private async deleteAudio(
+    cardId: string,
+    storageKey: string | null,
+  ): Promise<void> {
     if (!storageKey) {
       return;
     }
 
     try {
       await this.storageService.deleteObject(storageKey);
-    } catch {
-      // La tarjeta ya se eliminó o reemplazó; un fallo de limpieza no bloquea la operación.
+    } catch (error: unknown) {
+      this.logger.error(
+        `No se pudo eliminar el audio ${storageKey} de R2. Se reintentará la limpieza.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      try {
+        await this.storyboardCardRepository.scheduleAudioCleanup(
+          cardId,
+          storageKey,
+        );
+      } catch (scheduleError: unknown) {
+        this.logger.error(
+          `No se pudo registrar la limpieza pendiente del audio ${storageKey}.`,
+          scheduleError instanceof Error ? scheduleError.stack : undefined,
+        );
+      }
     }
   }
 }

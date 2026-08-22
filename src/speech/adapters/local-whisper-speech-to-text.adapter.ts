@@ -60,10 +60,8 @@ export class LocalWhisperSpeechToTextAdapter implements SpeechToTextProvider {
     }
 
     if (!response.ok) {
-      const providerMessage = readStringProperty(payload, 'detail');
       throw new ServiceUnavailableException(
-        providerMessage ??
-          `El servicio local de Whisper respondió con HTTP ${response.status}.`,
+        getProviderErrorMessage(response.status),
       );
     }
 
@@ -77,6 +75,19 @@ export class LocalWhisperSpeechToTextAdapter implements SpeechToTextProvider {
     const language = readStringProperty(payload, 'language');
     return language ? { text, language } : { text };
   }
+}
+
+function getProviderErrorMessage(status: number): string {
+  if (status === 413) {
+    return 'El audio supera el límite permitido.';
+  }
+  if (status === 415) {
+    return 'El archivo debe ser un audio válido.';
+  }
+  if (status === 422) {
+    return 'No se detectó voz en el audio.';
+  }
+  return `El servicio local de Whisper respondió con HTTP ${status}.`;
 }
 
 function readPositiveNumber(

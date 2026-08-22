@@ -7,6 +7,7 @@ import {
 } from '../domain/storyboard-card-status';
 import {
   CreateStoryboardCardData,
+  STORYBOARD_AUDIO_CLEANUP_EVENT,
   StoryboardCardRecord,
   StoryboardCardRepository,
   UpdateStoryboardCardData,
@@ -191,6 +192,21 @@ export class PrismaStoryboardCardRepository implements StoryboardCardRepository 
     });
 
     return this.findByIdForUser(userId, cardId);
+  }
+
+  async scheduleAudioCleanup(
+    cardId: string,
+    storageKey: string,
+  ): Promise<void> {
+    await this.prisma.outbox.create({
+      data: {
+        aggregateType: 'StoryboardNote',
+        aggregateId: cardId,
+        eventType: STORYBOARD_AUDIO_CLEANUP_EVENT,
+        payload: { storageKey },
+        createdAt: new Date(),
+      },
+    });
   }
 
   async softDeleteForUser(

@@ -37,6 +37,10 @@ export const STORAGE_FOLDERS = [
 ] as const;
 export type StorageFolder = (typeof STORAGE_FOLDERS)[number];
 
+export function normalizeContentType(contentType: string): string {
+  return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+}
+
 @Injectable()
 export class StorageService {
   private readonly s3: S3Client;
@@ -64,7 +68,7 @@ export class StorageService {
     existingKey?: string,
     storageFolder: StorageFolder = 'entities',
   ): Promise<{ presignedUrl: string; publicUrl: string; storageKey: string }> {
-    const baseContentType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+    const baseContentType = normalizeContentType(contentType);
     if (
       !baseContentType ||
       !ALLOWED_MIME_TYPES.includes(
@@ -75,6 +79,12 @@ export class StorageService {
     }
     if (!STORAGE_FOLDERS.includes(storageFolder)) {
       throw new Error(`Storage folder ${storageFolder} is not allowed`);
+    }
+    if (
+      existingKey &&
+      !existingKey.startsWith(`${storageFolder}/${entityId}/`)
+    ) {
+      throw new Error('Existing storage key does not belong to this resource');
     }
 
     const key =

@@ -83,7 +83,7 @@ describe('Storyboard endpoints e2e', () => {
       .set(ctx.auth())
       .attach('audio', Buffer.from('fake-webm-audio'), {
         filename: 'voice-note.webm',
-        contentType: 'audio/webm',
+        contentType: 'audio/webm;codecs=opus',
       })
       .expect(201);
 
@@ -107,7 +107,7 @@ describe('Storyboard endpoints e2e', () => {
       .send({
         entityId: card.id,
         filename: 'voice-note.webm',
-        contentType: 'audio/webm',
+        contentType: 'audio/webm;codecs=opus',
         storageFolder: 'storyboard-audio',
       })
       .expect(200);

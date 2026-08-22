@@ -1,6 +1,8 @@
 import type { StoryboardCardStatus } from '../domain/storyboard-card-status';
 
 export const STORYBOARD_CARD_REPOSITORY = Symbol('STORYBOARD_CARD_REPOSITORY');
+export const STORYBOARD_AUDIO_CLEANUP_EVENT =
+  'storyboard.audio.cleanup.requested';
 
 export interface StoryboardCardRecord {
   id: string;
@@ -67,6 +69,7 @@ export interface StoryboardCardRepository {
     audioStorageKey: string,
     audioDurationSecs: number,
   ): Promise<StoryboardCardRecord | null>;
+  scheduleAudioCleanup(cardId: string, storageKey: string): Promise<void>;
   softDeleteForUser(
     userId: string,
     cardId: string,
