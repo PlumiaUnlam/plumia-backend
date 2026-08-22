@@ -274,17 +274,6 @@ export class ChatService {
       });
     }
 
-    const socialResponse = getSocialResponse(question);
-    if (socialResponse) {
-      return this.persistExchange(thread, question, {
-        answer: socialResponse,
-        sources: [],
-        inputTokens: 0,
-        outputTokens: 0,
-        currentChapterId,
-      });
-    }
-
     const applicationGuidance = getApplicationGuidance(
       question,
       thread.projectId,
@@ -293,6 +282,17 @@ export class ChatService {
       return this.persistExchange(thread, question, {
         answer: applicationGuidance.answer,
         sources: [applicationGuidance.source],
+        inputTokens: 0,
+        outputTokens: 0,
+        currentChapterId,
+      });
+    }
+
+    const socialResponse = getSocialResponse(question);
+    if (socialResponse) {
+      return this.persistExchange(thread, question, {
+        answer: socialResponse,
+        sources: [],
         inputTokens: 0,
         outputTokens: 0,
         currentChapterId,

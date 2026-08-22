@@ -8,7 +8,9 @@ interface ApplicationGuide {
 }
 
 const NAVIGATION_INTENT =
-  /\b(donde|como\s+(?:puedo\s+)?(?:ver|abrir|acceder|ir)|en que (?:lugar|seccion|pantalla)|llevame|mostrame donde)\b/i;
+  /\b(?:donde|como\s+(?:puedo\s+)?(?:ver|abrir|acceder|ir|usar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
+const APPLICATION_HELP_INTENT =
+  /\b(?:ayuda|manual|documentacion|guia|funcionalidades?|como\s+(?:se\s+)?(?:usa|uso|usar|funciona)|para\s+que\s+sirve|que\s+(?:puedo|se\s+puede)\s+hacer)\b/i;
 
 const GUIDES: ApplicationGuide[] = [
   {
@@ -37,6 +39,14 @@ const GUIDES: ApplicationGuide[] = [
       `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=wiki`,
   },
   {
+    matches:
+      /\b(editor|manuscrito|escenas?|capitulos?|capítulos?|chat|asistente)\b/i,
+    label: 'PlumIA · Editor y manuscrito',
+    answer:
+      'El manuscrito se trabaja en el Editor. Desde la barra lateral podés elegir libros, capítulos y escenas; en el panel derecho tenés la Wiki, el chat y las estadísticas. También podés abrir el historial de versiones de la escena desde “Hist.”.',
+    path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+  },
+  {
     matches: /\b(relaciones?|vinculos?|grafo)\b/i,
     label: 'PlumIA · Relaciones',
     answer:
@@ -61,6 +71,14 @@ const GUIDES: ApplicationGuide[] = [
   },
 ];
 
+const GENERAL_APPLICATION_GUIDE: ApplicationGuide = {
+  matches: /$^/,
+  label: 'PlumIA · Guía de uso',
+  answer:
+    'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, entidades y relaciones de la Wiki, hechos de la Línea Temporal, notas del Storyboard, resúmenes y alertas de auditoría.\n\nTambién puedo indicarte dónde está cada función: el manuscrito y el chat están en el Editor; la Wiki, las Relaciones, la Línea Temporal y los Resúmenes están en Worldbuilding; y las notas e ideas están en el Storyboard. Las referencias de mis respuestas se pueden abrir desde el ícono de enlace.',
+  path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+};
+
 export function getApplicationGuidance(
   question: string,
   projectId: string,
@@ -69,10 +87,15 @@ export function getApplicationGuidance(
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
-  if (!NAVIGATION_INTENT.test(normalizedQuestion)) {
+  const isNavigationQuestion = NAVIGATION_INTENT.test(normalizedQuestion);
+  const isApplicationHelpQuestion =
+    APPLICATION_HELP_INTENT.test(normalizedQuestion);
+  if (!isNavigationQuestion && !isApplicationHelpQuestion) {
     return null;
   }
-  const guide = GUIDES.find((entry) => entry.matches.test(normalizedQuestion));
+  const guide =
+    GUIDES.find((entry) => entry.matches.test(normalizedQuestion)) ??
+    (isApplicationHelpQuestion ? GENERAL_APPLICATION_GUIDE : null);
   if (!guide) {
     return null;
   }
