@@ -7,6 +7,7 @@ import {
 } from '../domain/storyboard-card-status';
 import {
   CreateStoryboardCardData,
+  STORYBOARD_AUDIO_CLEANUP_EVENT,
   StoryboardCardRecord,
   StoryboardCardRepository,
   UpdateStoryboardCardData,
@@ -162,6 +163,52 @@ export class PrismaStoryboardCardRepository implements StoryboardCardRepository 
     return this.findByIdForUser(userId, cardId);
   }
 
+  async attachAudioForUser(
+    userId: string,
+    cardId: string,
+    audioStorageKey: string,
+    audioDurationSecs: number,
+  ): Promise<StoryboardCardRecord | null> {
+    const existing = await this.prisma.storyboardNote.findFirst({
+      where: {
+        id: cardId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return null;
+    }
+
+    await this.prisma.storyboardNote.update({
+      where: { id: existing.id },
+      data: {
+        noteType: 'voice',
+        audioStorageKey,
+        audioDurationSecs,
+      },
+    });
+
+    return this.findByIdForUser(userId, cardId);
+  }
+
+  async scheduleAudioCleanup(
+    cardId: string,
+    storageKey: string,
+  ): Promise<void> {
+    await this.prisma.outbox.create({
+      data: {
+        aggregateType: 'StoryboardNote',
+        aggregateId: cardId,
+        eventType: STORYBOARD_AUDIO_CLEANUP_EVENT,
+        payload: { storageKey },
+        createdAt: new Date(),
+      },
+    });
+  }
+
   async softDeleteForUser(
     userId: string,
     cardId: string,
@@ -241,6 +288,8 @@ export class PrismaStoryboardCardRepository implements StoryboardCardRepository 
       tags: note.tags,
       characters: note.characters,
       entityIds: note.entityIds,
+      audioStorageKey: note.audioStorageKey,
+      audioDurationSecs: note.audioDurationSecs,
       sortKey: note.sortKey,
       createdAt: note.createdAt,
       updatedAt: note.updatedAt,

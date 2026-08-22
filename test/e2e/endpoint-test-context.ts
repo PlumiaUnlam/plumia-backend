@@ -79,10 +79,13 @@ export interface StoryboardCardResponse extends IdResponse {
   projectId: string;
   chapterId: string | null;
   title: string;
+  description: string;
   status: string;
   tags: string[];
   characters: string[];
   entityIds: string[];
+  hasAudio: boolean;
+  audioDurationSecs: number | null;
 }
 
 export interface StoryboardMatrixNoteResponse extends IdResponse {

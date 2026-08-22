@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { StorageModule } from '../storage/storage.module';
 import { PrismaBookRepository } from './adapters/prisma-book-repository.adapter';
 import { PrismaChapterRepository } from './adapters/prisma-chapter-repository.adapter';
 import { PrismaProjectRepository } from './adapters/prisma-project-repository.adapter';
@@ -21,8 +22,10 @@ import { ProjectService } from './services/project.service';
 import { SceneService } from './services/scene.service';
 import { StoryboardCardService } from './services/storyboard-card.service';
 import { StoryboardMatrixService } from './services/storyboard-matrix.service';
+import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup-poller.service';
 
 @Module({
+  imports: [StorageModule],
   controllers: [
     ProjectsController,
     BooksController,
@@ -38,6 +41,7 @@ import { StoryboardMatrixService } from './services/storyboard-matrix.service';
     SceneService,
     StoryboardCardService,
     StoryboardMatrixService,
+    StoryboardAudioCleanupPoller,
     { provide: PROJECT_REPOSITORY, useClass: PrismaProjectRepository },
     { provide: BOOK_REPOSITORY, useClass: PrismaBookRepository },
     { provide: CHAPTER_REPOSITORY, useClass: PrismaChapterRepository },

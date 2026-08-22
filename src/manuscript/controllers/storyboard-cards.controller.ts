@@ -10,7 +10,9 @@ import {
   Post,
   Request,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { StoryboardCardResponseDto } from '../dto/responses/storyboard-card-response.dto';
+import { AttachStoryboardAudioDto } from '../dto/storyboard/attach-storyboard-audio.dto';
 import { CreateStoryboardCardDto } from '../dto/storyboard/create-storyboard-card.dto';
 import { UpdateStoryboardCardDto } from '../dto/storyboard/update-storyboard-card.dto';
 import { StoryboardCardService } from '../services/storyboard-card.service';
@@ -54,6 +56,31 @@ export class StoryboardCardsController {
   ): Promise<StoryboardCardResponseDto> {
     const card = await this.storyboardCardService.update(req.user.id, id, dto);
     return StoryboardCardResponseDto.from(card);
+  }
+
+  @Post('storyboard-cards/:id/audio')
+  @Throttle({ default: { ttl: 60000, limit: 20 } })
+  async attachAudio(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AttachStoryboardAudioDto,
+  ): Promise<StoryboardCardResponseDto> {
+    const card = await this.storyboardCardService.attachAudio(
+      req.user.id,
+      id,
+      dto,
+    );
+    return StoryboardCardResponseDto.from(card);
+  }
+
+  @Get('storyboard-cards/:id/audio')
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  async getAudioUrl(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ url: string }> {
+    const url = await this.storyboardCardService.getAudioUrl(req.user.id, id);
+    return { url };
   }
 
   @Delete('storyboard-cards/:id')
