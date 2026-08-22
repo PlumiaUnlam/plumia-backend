@@ -90,8 +90,34 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         ],
       },
     },
+    inconsistencies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          entityName: { type: 'string' },
+          field: { type: 'string' },
+          currentValue: { type: 'string' },
+          observedValue: { type: 'string' },
+          explanation: { type: 'string' },
+          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
+          confidenceScore: { type: 'number' },
+          evidence: { type: 'array', items: { type: 'string' } },
+        },
+        required: [
+          'entityName',
+          'field',
+          'currentValue',
+          'observedValue',
+          'explanation',
+          'severity',
+          'confidenceScore',
+          'evidence',
+        ],
+      },
+    },
   },
-  required: ['entities', 'relationships'],
+  required: ['entities', 'relationships', 'inconsistencies'],
 } as const;
 
 @Injectable()
@@ -180,6 +206,9 @@ export class EntityExtractionClient {
       entities: Array.isArray(parsed.entities) ? parsed.entities : [],
       relationships: Array.isArray(parsed.relationships)
         ? parsed.relationships
+        : [],
+      inconsistencies: Array.isArray(parsed.inconsistencies)
+        ? parsed.inconsistencies
         : [],
     };
   }

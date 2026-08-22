@@ -1,7 +1,9 @@
 /* eslint-disable max-lines */
 
+import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, ProposalStatus } from '@prisma/client';
+import { AuditSeverity, Prisma, ProposalStatus } from '@prisma/client';
+import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toEntityType } from '../../knowledge/domain/entity-type';
 import { EntityExtractionClient } from './entity-extraction.client';
@@ -10,6 +12,7 @@ import type {
   ChunkEvidence,
   ConfirmedEntityLike,
   ExtractionCandidate,
+  ExtractedInconsistency,
   ExtractedRelationship,
   PendingProposalLike,
   ProposalDataLike,
@@ -108,6 +111,7 @@ export class EntityExtractionPipelineService {
     private readonly prisma: PrismaService,
     private readonly extractionClient: EntityExtractionClient,
     private readonly resolution: EntityResolutionService,
+    private readonly auditService: AuditService,
   ) {}
 
   async processOutboxEvent(outboxId: string): Promise<void> {
@@ -341,6 +345,14 @@ export class EntityExtractionPipelineService {
       })),
     });
 
+    await this.processInconsistencyCandidates({
+      projectId: input.projectId,
+      sceneId: input.scene.id,
+      chunk: input.chunk,
+      inconsistencies: extracted.inconsistencies,
+      confirmedEntities: input.confirmedEntities,
+    });
+
     const candidates = this.resolution.dedupeCandidates(extracted.entities);
     const resolvedEntityReferences = new Map<
       string,
@@ -507,6 +519,135 @@ export class EntityExtractionPipelineService {
     });
 
     await this.clearChunkDirtyFlag(input.chunk.id);
+  }
+
+  private async processInconsistencyCandidates(input: {
+    projectId: string;
+    sceneId: string;
+    chunk: ChunkRow;
+    inconsistencies: ExtractedInconsistency[];
+    confirmedEntities: ConfirmedEntityLike[];
+  }): Promise<void> {
+    const activeFingerprints = new Set<string>();
+
+    for (const inconsistency of input.inconsistencies ?? []) {
+      const entity = this.findConfirmedEntityByName(
+        inconsistency.entityName,
+        input.confirmedEntities,
+      );
+      const field = inconsistency.field?.trim();
+      const currentValue = inconsistency.currentValue?.trim();
+      const observedValue = inconsistency.observedValue?.trim();
+      const explanation = inconsistency.explanation?.trim();
+      const evidence = [...new Set(inconsistency.evidence ?? [])]
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+      if (
+        !entity ||
+        !field ||
+        !currentValue ||
+        !observedValue ||
+        !explanation ||
+        evidence.length === 0
+      ) {
+        continue;
+      }
+
+      const fingerprint = this.createInconsistencyFingerprint({
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        chunkHash: input.chunk.contentHash ?? '',
+        entityId: entity.id,
+        field,
+        currentValue,
+        observedValue,
+      });
+      activeFingerprints.add(fingerprint);
+
+      await this.auditService.createEntityContinuityAlert({
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        sourceChunkId: input.chunk.id,
+        sourceChunkHash: input.chunk.contentHash,
+        fingerprint,
+        entityId: entity.id,
+        entityName: entity.canonicalName,
+        field,
+        currentValue,
+        observedValue,
+        explanation,
+        evidence,
+        confidence: this.normalizeConfidence(inconsistency.confidenceScore),
+        severity: this.toAuditSeverity(inconsistency.severity),
+      });
+    }
+
+    await this.auditService.obsoleteContinuityAlertsForChunk({
+      sceneId: input.sceneId,
+      sourceChunkId: input.chunk.id,
+      activeFingerprints,
+    });
+  }
+
+  private findConfirmedEntityByName(
+    name: string,
+    entities: ConfirmedEntityLike[],
+  ): ConfirmedEntityLike | null {
+    const normalizedName = this.resolution.normalize(name ?? '');
+    if (!normalizedName) {
+      return null;
+    }
+
+    return (
+      entities.find((entity) =>
+        [entity.canonicalName, ...entity.aliases].some(
+          (label) => this.resolution.normalize(label) === normalizedName,
+        ),
+      ) ?? null
+    );
+  }
+
+  private createInconsistencyFingerprint(input: {
+    projectId: string;
+    sceneId: string;
+    chunkHash: string;
+    entityId: string;
+    field: string;
+    currentValue: string;
+    observedValue: string;
+  }): string {
+    const values = [
+      input.projectId,
+      input.sceneId,
+      input.chunkHash,
+      input.entityId,
+      input.field,
+      input.currentValue,
+      input.observedValue,
+    ].map((value) => this.resolution.normalize(value));
+
+    return createHash('sha256').update(values.join('|')).digest('hex');
+  }
+
+  private normalizeConfidence(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0.5;
+    }
+
+    return Math.min(1, Math.max(0, value));
+  }
+
+  private toAuditSeverity(
+    severity: ExtractedInconsistency['severity'],
+  ): AuditSeverity {
+    if (severity === 'HIGH') {
+      return AuditSeverity.HIGH;
+    }
+    if (severity === 'LOW') {
+      return AuditSeverity.LOW;
+    }
+    return AuditSeverity.MEDIUM;
   }
 
   private async pruneProposalsWithoutActiveSupport(

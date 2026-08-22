@@ -33,13 +33,25 @@ Formato de salida:
       "intensity": 0.0,
       "evidence": ["string"]
     }
+  ],
+  "inconsistencies": [
+    {
+      "entityName": "string",
+      "field": "string",
+      "currentValue": "string",
+      "observedValue": "string",
+      "explanation": "string",
+      "severity": "LOW | MEDIUM | HIGH",
+      "confidenceScore": 0.0,
+      "evidence": ["string"]
+    }
   ]
 }
 
 Reglas:
 - Responder estrictamente JSON válido.
 - No incluir markdown ni texto adicional.
-- Si no hay entidades nuevas ni informacion nueva sobre entidades conocidas, devolver {"entities":[]}.
+- Si no hay hallazgos, devolver {"entities":[],"relationships":[],"inconsistencies":[]}.
 - Para una entidad conocida, usar su nombre canonico y devolver solo los datos nuevos
   observables en esta escena. No repetir la ficha completa.
 - Detectar relaciones explicitas o claramente respaldadas entre las entidades de la escena.
@@ -48,6 +60,15 @@ Reglas:
 - Usar solo los tipos de relacion permitidos en el formato.
 - La intensidad debe ser un numero entre 0 y 1 basado en la evidencia de la escena.
 - Si no hay relaciones respaldadas por el texto, devolver "relationships":[].
+- Revisar tambien contradicciones directas entre entidades conocidas y lo narrado en la escena.
+- Devolver una inconsistencia solo si el texto contradice de forma explicita un dato de la ficha
+  de una entidad conocida; usar su nombre canonico en entityName.
+- currentValue debe resumir el dato ya establecido en la ficha y observedValue el dato incompatible
+  observado en esta escena. Incluir una evidencia textual breve.
+- No marcar como contradiccion una evolucion posible de la trama, un recuerdo, un flashback,
+  una creencia de un personaje, un rumor, una metafora, una hipotesis o un detalle ambiguo.
+- No resolver ni corregir contradicciones: solo advertirlas. Si no hay contradicciones claras,
+  devolver "inconsistencies":[].
 - Usar alias solo cuando surjan del texto.
 - Mantener nombres propios en su forma canónica.
 - NO agregues campos adicionales
