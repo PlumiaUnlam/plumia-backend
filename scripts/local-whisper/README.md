@@ -2,38 +2,35 @@
 
 Este servicio recibe audio desde el backend NestJS y devuelve la transcripción usando `faster-whisper`. No guarda los audios: cada archivo se escribe temporalmente, se procesa y se elimina.
 
-## Inicio en Windows
+## Inicio con Docker Compose
 
-Desde la raíz de `plumia-backend`:
+No hace falta instalar Python, crear un `venv` ni instalar dependencias en Windows. Desde la raíz de `plumia-backend`, con Docker Desktop iniciado:
 
 ```powershell
-py -3.11 -m venv .venv-whisper
-.\.venv-whisper\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r scripts/local-whisper/requirements.txt
-python scripts/local-whisper/server.py
+docker compose up --build
 ```
 
-La primera transcripción descarga el modelo configurado. Por defecto usa `base`, CPU e `int8`. Para priorizar precisión se puede iniciar con:
+El Compose levanta `api`, `postgres`, `redis` y `whisper`. Dentro de la red de Docker, NestJS encuentra Whisper en `http://whisper:8001`; el navegador sigue llamando al backend en `http://localhost:3000`.
+
+La primera transcripción descarga el modelo configurado y puede tardar un poco. El modelo queda guardado en el volumen `whisper-models`, por lo que no se vuelve a descargar en cada inicio.
+
+Por defecto se usa `base` en CPU con `int8`. Para cambiar el modelo antes de levantar los servicios:
 
 ```powershell
 $env:WHISPER_MODEL = "small"
-python scripts/local-whisper/server.py
+docker compose up --build
 ```
 
-Configurar el backend con:
-
-```dotenv
-STT_PROVIDER=local
-LOCAL_WHISPER_URL=http://127.0.0.1:8001
-LOCAL_WHISPER_LANGUAGE=es
-LOCAL_WHISPER_TIMEOUT_MS=90000
-```
-
-Si el backend NestJS corre dentro de Docker y Whisper corre en Windows, usar `http://host.docker.internal:8001` como `LOCAL_WHISPER_URL`.
-
-Verificación rápida:
+Verificar que el servicio está disponible:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8001/health
 ```
+
+Para levantar solo la infraestructura y Whisper mientras el backend corre fuera de Docker:
+
+```powershell
+docker compose up postgres redis whisper
+```
+
+En ese caso el backend local debe usar `LOCAL_WHISPER_URL=http://127.0.0.1:8001`.

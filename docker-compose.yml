@@ -10,6 +10,8 @@ services:
       DIRECT_URL: postgresql://plumia:plumia_dev@postgres:5432/plumia_development
       REDIS_URL: redis://redis:6379
       GOOGLE_APPLICATION_CREDENTIALS: /app/firebase-service-account.json
+      STT_PROVIDER: local
+      LOCAL_WHISPER_URL: http://whisper:8001
     ports:
       - '3000:3000'
     volumes:
@@ -18,6 +20,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      whisper:
         condition: service_healthy
 
   postgres:
@@ -50,6 +54,29 @@ services:
       timeout: 5s
       retries: 5
 
+  whisper:
+    build:
+      context: .
+      dockerfile: scripts/local-whisper/Dockerfile
+    container_name: plumia_whisper
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_HOST: 0.0.0.0
+      WHISPER_PORT: 8001
+    ports:
+      - '8001:8001'
+    volumes:
+      - whisper-models:/root/.cache/huggingface
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
 volumes:
   pgdata:
   redisdata:
+  whisper-models:
