@@ -42,7 +42,7 @@ import {
 } from './ports/storage-resource-authorization.port';
 import type { AuthenticatedRequest } from './authenticated-request';
 
-const ALLOWED_MIME = [
+const ALLOWED_MIME = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
@@ -50,7 +50,7 @@ const ALLOWED_MIME = [
   'audio/webm',
   'audio/ogg',
   'audio/mp4',
-];
+]);
 const STORAGE_KEY_PATTERN =
   /^(entities|scenes|storyboard-audio)\/([^/]+)\/[^/]+$/;
 
@@ -61,7 +61,7 @@ class AllowedMimeTypeConstraint implements ValidatorConstraintInterface {
       return false;
     }
 
-    return ALLOWED_MIME.includes(normalizeContentType(value));
+    return ALLOWED_MIME.has(normalizeContentType(value));
   }
 
   defaultMessage(): string {

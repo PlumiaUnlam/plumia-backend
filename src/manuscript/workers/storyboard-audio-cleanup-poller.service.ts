@@ -1,10 +1,9 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  OutboxPoller,
+  type PendingOutboxEvent,
+} from '../../common/workers/outbox-poller';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import { STORYBOARD_AUDIO_CLEANUP_EVENT } from '../ports/storyboard-card-repository.port';
@@ -14,68 +13,18 @@ interface AudioCleanupPayload {
 }
 
 @Injectable()
-export class StoryboardAudioCleanupPoller
-  implements OnModuleInit, OnModuleDestroy
-{
+export class StoryboardAudioCleanupPoller extends OutboxPoller {
   private readonly logger = new Logger(StoryboardAudioCleanupPoller.name);
-  private timer: NodeJS.Timeout | null = null;
-  private running = false;
 
   constructor(
-    private readonly config: ConfigService,
-    private readonly prisma: PrismaService,
+    config: ConfigService,
+    prisma: PrismaService,
     private readonly storageService: StorageService,
-  ) {}
-
-  onModuleInit(): void {
-    if (this.config.get<string>('APP_ROLE', 'all') === 'worker') {
-      return;
-    }
-
-    this.timer = setInterval(() => void this.poll(), 1000);
-    void this.poll();
+  ) {
+    super(config, prisma, STORYBOARD_AUDIO_CLEANUP_EVENT);
   }
 
-  onModuleDestroy(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private async poll(): Promise<void> {
-    if (this.running) {
-      return;
-    }
-
-    this.running = true;
-    try {
-      const events = await this.prisma.outbox.findMany({
-        where: {
-          processedAt: null,
-          eventType: STORYBOARD_AUDIO_CLEANUP_EVENT,
-        },
-        orderBy: { createdAt: 'asc' },
-        take: 50,
-      });
-
-      for (const event of events) {
-        await this.processEvent(event);
-      }
-    } catch (error: unknown) {
-      this.logger.error(
-        'No se pudo procesar la cola de limpieza de audios.',
-        error instanceof Error ? error.stack : undefined,
-      );
-    } finally {
-      this.running = false;
-    }
-  }
-
-  private async processEvent(event: {
-    id: string;
-    payload: unknown;
-  }): Promise<void> {
+  protected async processEvent(event: PendingOutboxEvent): Promise<void> {
     const payload = event.payload as AudioCleanupPayload;
     if (typeof payload.storageKey !== 'string' || !payload.storageKey) {
       await this.markProcessed(event.id);
@@ -106,12 +55,5 @@ export class StoryboardAudioCleanupPoller
         this.logger.debug(error.stack ?? error.message);
       }
     }
-  }
-
-  private async markProcessed(eventId: string): Promise<void> {
-    await this.prisma.outbox.update({
-      where: { id: eventId },
-      data: { processedAt: new Date() },
-    });
   }
 }
