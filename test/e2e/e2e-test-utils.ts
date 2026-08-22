@@ -17,6 +17,7 @@ import { SUMMARY_QUEUE } from '../../src/summary/ports/summary-queue.port';
 import { SUMMARY_GENERATION_PROVIDER } from '../../src/summary/ports/summary-generation-provider.port';
 import { SummaryOutboxPoller } from '../../src/summary/workers/summary-outbox-poller.service';
 import { SummaryWorkersService } from '../../src/summary/workers/summary-workers.service';
+import { SPEECH_TO_TEXT_PROVIDER } from '../../src/speech/ports/speech-to-text-provider.port';
 import { StorageService } from '../../src/storage/storage.service';
 
 export const E2E_USER_ID = 'e2e-user';
@@ -67,6 +68,50 @@ export async function createE2eApp(): Promise<INestApplication> {
       });
     },
   };
+  const uploadedStorageKeys = new Set<string>();
+  const storageMock = {
+    generatePresignedUploadUrl: jest.fn(
+      (
+        entityId: string,
+        filename: string,
+        _contentType: string,
+        existingKey?: string,
+        storageFolder = 'entities',
+      ) => {
+        const key = existingKey ?? `${storageFolder}/${entityId}/${filename}`;
+        return Promise.resolve({
+          presignedUrl: `https://storage.test/upload/${key}`,
+          publicUrl: `https://cdn.test/test-bucket/${key}`,
+          storageKey: key,
+        });
+      },
+    ),
+    generatePresignedGetUrl: jest.fn((key: string) =>
+      Promise.resolve(`https://storage.test/get/${key}`),
+    ),
+    getPublicUrl: jest.fn(
+      (key: string) => `https://cdn.test/test-bucket/${key}`,
+    ),
+    extractKeyFromUrl: jest.fn((url: string) => {
+      const marker = 'test-bucket/';
+      const index = url.indexOf(marker);
+      if (index === -1) {
+        throw new Error('Could not extract key from image URL');
+      }
+      return url.slice(index + marker.length);
+    }),
+    headFile: jest.fn((key: string) =>
+      Promise.resolve(uploadedStorageKeys.has(key)),
+    ),
+    markUploaded: jest.fn((key: string) => {
+      uploadedStorageKeys.add(key);
+    }),
+    hasUploaded: jest.fn((key: string) => uploadedStorageKeys.has(key)),
+    deleteObject: jest.fn((key: string) => {
+      uploadedStorageKeys.delete(key);
+      return Promise.resolve(undefined);
+    }),
+  };
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
@@ -89,36 +134,15 @@ export async function createE2eApp(): Promise<INestApplication> {
       embedQuery: jest.fn(() => Promise.resolve([])),
     })
     .overrideProvider(StorageService)
+    .useValue(storageMock)
+    .overrideProvider(SPEECH_TO_TEXT_PROVIDER)
     .useValue({
-      generatePresignedUploadUrl: jest.fn(
-        (
-          entityId: string,
-          filename: string,
-          _contentType: string,
-          existingKey?: string,
-        ) => {
-          const key = existingKey ?? `entities/${entityId}/${filename}`;
-          return Promise.resolve({
-            presignedUrl: `https://storage.test/upload/${key}`,
-            publicUrl: `https://cdn.test/test-bucket/${key}`,
-          });
-        },
+      transcribe: jest.fn(() =>
+        Promise.resolve({
+          text: 'La protagonista descubre una puerta secreta.',
+          language: 'es',
+        }),
       ),
-      generatePresignedGetUrl: jest.fn((key: string) =>
-        Promise.resolve(`https://storage.test/get/${key}`),
-      ),
-      getPublicUrl: jest.fn(
-        (key: string) => `https://cdn.test/test-bucket/${key}`,
-      ),
-      extractKeyFromUrl: jest.fn((url: string) => {
-        const marker = 'test-bucket/';
-        const index = url.indexOf(marker);
-        if (index === -1) {
-          throw new Error('Could not extract key from image URL');
-        }
-        return url.slice(index + marker.length);
-      }),
-      deleteObject: jest.fn(() => Promise.resolve(undefined)),
     })
     .overrideProvider(IMAGE_GENERATION)
     .useValue({

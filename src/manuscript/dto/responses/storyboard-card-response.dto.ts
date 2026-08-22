@@ -10,6 +10,8 @@ export class StoryboardCardResponseDto {
   tags!: string[];
   characters!: string[];
   entityIds!: string[];
+  hasAudio!: boolean;
+  audioDurationSecs!: number | null;
   sortKey!: string;
   createdAt!: string;
   updatedAt!: string;
@@ -25,6 +27,8 @@ export class StoryboardCardResponseDto {
       tags: card.tags,
       characters: card.characters,
       entityIds: card.entityIds,
+      hasAudio: Boolean(card.audioStorageKey),
+      audioDurationSecs: card.audioDurationSecs,
       sortKey: card.sortKey,
       createdAt: card.createdAt.toISOString(),
       updatedAt: card.updatedAt.toISOString(),
