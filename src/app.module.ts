@@ -13,6 +13,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { PublishingModule } from './publishing/publishing.module';
 import { ReadingModule } from './reading/reading.module';
 import { StorageModule } from './storage/storage.module';
+import { SpeechModule } from './speech/speech.module';
 import { SystemModule } from './system/system.module';
 import { SummaryModule } from './summary/summary.module';
 import { UserModule } from './user/user.module';
@@ -32,6 +33,7 @@ import { UserModule } from './user/user.module';
     ReadingModule,
     AnalyticsModule,
     StorageModule,
+    SpeechModule,
     SystemModule,
     SummaryModule,
   ],
