@@ -820,7 +820,7 @@ export class ChatService {
       .slice(0, MAX_WIKI_SOURCES)
       .map((entry) => entry.source);
 
-    const timelineSources = timelineEvents
+    const timelineSourceEntries = timelineEvents
       .filter(
         (event) =>
           !currentChapter ||
@@ -843,41 +843,74 @@ export class ChatService {
           ...event.entities.map((entry) => entry.entity.canonicalName),
         ].join(' ');
         return {
+          event,
           index,
           score: scoreText(searchable, terms, question),
-          source: {
-            id: `timeline:${event.id}`,
-            kind: 'timeline' as const,
-            label: `Linea de tiempo · ${event.title}`,
-            route: `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=timeline`,
-            excerpt: compactText(
-              [
-                event.date ?? event.temporalLabel,
-                event.description,
-                event.entities.length
-                  ? `Entidades: ${event.entities
-                      .map((entry) => entry.entity.canonicalName)
-                      .join(', ')}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · '),
-              900,
-            ),
-            ...(event.sourceSceneId ? { sceneId: event.sourceSceneId } : {}),
-            ...(event.sourceScene
-              ? {
-                  chapterId: event.sourceScene.chapter.id,
-                  chapterTitle: event.sourceScene.chapter.title,
-                }
-              : {}),
-          } satisfies ChatSource,
         };
       })
       .filter((entry) => entry.score > 0 || broadTimelineIntent)
       .sort((left, right) => left.index - right.index)
-      .slice(0, MAX_TIMELINE_SOURCES)
-      .map((entry) => entry.source);
+      .slice(0, MAX_TIMELINE_SOURCES);
+
+    const timelineSourceSceneIds = [
+      ...new Set(
+        timelineSourceEntries
+          .map((entry) => entry.event.sourceSceneId)
+          .filter((sceneId): sceneId is string => Boolean(sceneId)),
+      ),
+    ];
+    const timelineSourceChunks =
+      timelineSourceSceneIds.length > 0
+        ? await this.prisma.chunk.findMany({
+            where: { sceneId: { in: timelineSourceSceneIds } },
+            select: { sceneId: true, content: true },
+            orderBy: { chunkIndex: 'asc' },
+          })
+        : [];
+    const timelineChunksByScene = new Map<string, Array<{ content: string }>>();
+    for (const chunk of timelineSourceChunks) {
+      const sceneChunks = timelineChunksByScene.get(chunk.sceneId) ?? [];
+      sceneChunks.push({ content: chunk.content });
+      timelineChunksByScene.set(chunk.sceneId, sceneChunks);
+    }
+
+    const timelineSources = timelineSourceEntries.map(({ event }) => {
+      const textQuote = event.sourceSceneId
+        ? findTimelineSourceQuote(
+            timelineChunksByScene.get(event.sourceSceneId),
+            event.title,
+            event.description,
+          )
+        : undefined;
+      return {
+        id: `timeline:${event.id}`,
+        kind: 'timeline' as const,
+        label: `Linea de tiempo · ${event.title}`,
+        route: `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=timeline`,
+        excerpt: compactText(
+          [
+            event.date ?? event.temporalLabel,
+            event.description,
+            event.entities.length
+              ? `Entidades: ${event.entities
+                  .map((entry) => entry.entity.canonicalName)
+                  .join(', ')}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          900,
+        ),
+        ...(event.sourceSceneId ? { sceneId: event.sourceSceneId } : {}),
+        ...(event.sourceScene
+          ? {
+              chapterId: event.sourceScene.chapter.id,
+              chapterTitle: event.sourceScene.chapter.title,
+            }
+          : {}),
+        ...(textQuote ? { textQuote } : {}),
+      } satisfies ChatSource;
+    });
 
     const chapterPositionById = new Map(
       projectChapters.map((chapter) => [chapter.id, chapter]),
@@ -1433,6 +1466,34 @@ function excerptAround(text: string, term?: string, maxLength = 900): string {
   return `${start > 0 ? '…' : ''}${slice}${
     start + maxLength < compact.length ? '…' : ''
   }`;
+}
+
+function findTimelineSourceQuote(
+  chunks: ReadonlyArray<{ content: string }> | undefined,
+  title: string,
+  description: string | null,
+): string | undefined {
+  if (!chunks || chunks.length === 0) {
+    return undefined;
+  }
+
+  const terms = extractSearchTerms(`${title} ${description ?? ''}`);
+  let bestChunk: { content: string } | undefined;
+  let bestScore = 0;
+
+  for (const chunk of chunks) {
+    const score = scoreText(chunk.content, terms, title);
+    if (score > bestScore) {
+      bestChunk = chunk;
+      bestScore = score;
+    }
+  }
+
+  if (!bestChunk) {
+    return undefined;
+  }
+  const focusTerm = terms.find((term) => includesTerm(bestChunk.content, term));
+  return focusTerm ? quoteAround(bestChunk.content, focusTerm) : undefined;
 }
 
 function quoteAround(text: string, term?: string, maxLength = 220): string {
