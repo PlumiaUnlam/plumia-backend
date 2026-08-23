@@ -125,6 +125,22 @@ describe('Chat intent routing e2e', () => {
       ambiguousWorkResponse,
     ).assistantMessage;
     expect(ambiguousWorkAssistant.actions).toEqual([]);
+
+    for (const question of [
+      '¿Para qué sirve la cicatriz?',
+      '¿Qué puedo hacer con la espada?',
+    ]) {
+      const workQuestionResponse = await request(ctx.server)
+        .post(`/chat/threads/${thread.id}/messages`)
+        .set(ctx.auth())
+        .send({ content: question })
+        .expect(201);
+      const workQuestionAssistant =
+        responseBody<ChatExchangeResponse>(
+          workQuestionResponse,
+        ).assistantMessage;
+      expect(workQuestionAssistant.actions).toEqual([]);
+    }
   });
 
   it('uses an application question as context for a short follow-up', async () => {

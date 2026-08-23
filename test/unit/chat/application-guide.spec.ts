@@ -59,6 +59,15 @@ describe('application guide', () => {
         projectId,
       ),
     ).toBeNull();
+    expect(
+      getApplicationGuidance('¿Para qué sirve la cicatriz?', projectId),
+    ).toBeNull();
+    expect(
+      getApplicationGuidance('¿Qué puedo hacer con la espada?', projectId),
+    ).toBeNull();
+    expect(
+      getApplicationGuidance('¿Cómo funciona la historia?', projectId),
+    ).toBeNull();
   });
 
   it('uses the previous application question to route a short follow-up', () => {
@@ -83,6 +92,27 @@ describe('application guide', () => {
   it('does not turn an ambiguous short follow-up into navigation without context', () => {
     expect(
       getApplicationGuidance('¿Y la línea de tiempo?', projectId),
+    ).toBeNull();
+  });
+
+  it('uses only the latest user message as follow-up context', () => {
+    expect(
+      getApplicationGuidance('¿Y la línea de tiempo?', projectId, {
+        history: [
+          {
+            role: 'user',
+            content: '¿Dónde veo los resúmenes?',
+          },
+          {
+            role: 'assistant',
+            content: 'Los resúmenes están en Worldbuilding.',
+          },
+          {
+            role: 'user',
+            content: '¿Quién es Maren?',
+          },
+        ],
+      }),
     ).toBeNull();
   });
 });

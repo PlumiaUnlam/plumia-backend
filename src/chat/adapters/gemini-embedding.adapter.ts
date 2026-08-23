@@ -44,8 +44,8 @@ export class GeminiEmbeddingAdapter implements EmbeddingProvider {
     return this.embed(contents, 'RETRIEVAL_DOCUMENT');
   }
 
-  async embedQuery(content: string): Promise<number[]> {
-    const [embedding] = await this.embed([content], 'RETRIEVAL_QUERY');
+  async embedQuery(content: string, signal?: AbortSignal): Promise<number[]> {
+    const [embedding] = await this.embed([content], 'RETRIEVAL_QUERY', signal);
     if (!embedding) {
       throw new Error('Gemini API returned no query embedding');
     }
@@ -55,6 +55,7 @@ export class GeminiEmbeddingAdapter implements EmbeddingProvider {
   private async embed(
     contents: string[],
     taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY',
+    signal?: AbortSignal,
   ): Promise<number[][]> {
     if (!this.isConfigured() || contents.length === 0) {
       return [];
@@ -65,6 +66,7 @@ export class GeminiEmbeddingAdapter implements EmbeddingProvider {
       config: {
         taskType,
         outputDimensionality: EMBEDDING_DIMENSIONS,
+        ...(signal ? { abortSignal: signal } : {}),
       },
     });
     const embeddings = response.embeddings ?? [];

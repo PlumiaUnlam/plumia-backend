@@ -10,9 +10,14 @@ import {
   Post,
   Request,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import type {
+  Request as ExpressRequest,
+  Response as ExpressResponse,
+} from 'express';
 import type { AuthenticatedRequest } from '../manuscript/controllers/authenticated-request';
 import { ChatService } from './chat.service';
 import type {
@@ -25,6 +30,8 @@ import { CreateChatThreadDto } from './dto/create-chat-thread.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
 import { UpdateChatThreadDto } from './dto/update-chat-thread.dto';
 import { ListChatThreadsQueryDto } from './dto/list-chat-threads-query.dto';
+
+type ChatAuthenticatedRequest = AuthenticatedRequest & ExpressRequest;
 
 @Controller()
 export class ChatController {
@@ -84,11 +91,26 @@ export class ChatController {
     default: { ttl: 60000, limit: 12, getTracker: getAuthenticatedTracker },
   })
   sendMessage(
-    @Request() req: AuthenticatedRequest,
+    @Request() req: ChatAuthenticatedRequest,
     @Param('threadId', ParseUUIDPipe) threadId: string,
     @Body() dto: SendChatMessageDto,
+    @Res({ passthrough: true }) response: ExpressResponse,
   ): Promise<ChatExchange> {
-    return this.chatService.sendMessage(req.user.id, threadId, dto);
+    const abortController = new AbortController();
+    const abortRequest = (): void => {
+      abortController.abort();
+    };
+    req.once('aborted', abortRequest);
+    response.once('close', abortRequest);
+
+    return this.chatService
+      .sendMessage(req.user.id, threadId, dto, {
+        signal: abortController.signal,
+      })
+      .finally(() => {
+        req.removeListener('aborted', abortRequest);
+        response.removeListener('close', abortRequest);
+      });
   }
 }
 

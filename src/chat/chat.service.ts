@@ -39,7 +39,10 @@ const MAX_HISTORY_MESSAGES = 10;
 const MAX_MANUSCRIPT_SOURCES = 14;
 const MAX_WIKI_SOURCES = 10;
 const MAX_TIMELINE_SOURCES = 20;
-const MAX_CHUNK_CANDIDATES = 200;
+const MAX_CHUNK_CANDIDATES = 80;
+const MAX_ENTITY_CANDIDATES = 40;
+const MAX_RELATIONSHIP_CANDIDATES = 80;
+const MAX_TIMELINE_CANDIDATES = 80;
 const MAX_CONTEXT_CHARS = 48_000;
 
 const TIMELINE_GENERIC_TERMS = new Set([
@@ -55,6 +58,23 @@ const TIMELINE_GENERIC_TERMS = new Set([
   'registrados',
   'temporal',
   'tiempo',
+]);
+const ENTITY_GENERIC_TERMS = new Set([
+  'entidad',
+  'entidades',
+  'ficha',
+  'fichas',
+  'imagen',
+  'imagenes',
+  'personaje',
+  'personajes',
+  'protagonista',
+  'protagonistas',
+  'relacion',
+  'relaciones',
+  'vinculo',
+  'vinculos',
+  'wiki',
 ]);
 const STOP_WORDS = new Set([
   'a',
@@ -234,8 +254,11 @@ export class ChatService {
     userId: string,
     threadId: string,
     input: { content: string },
+    options: { signal?: AbortSignal } = {},
   ): Promise<ChatExchange> {
+    const signal = options.signal;
     const thread = await this.getThreadForUser(userId, threadId);
+    throwIfAborted(signal);
     if (thread.isArchived) {
       throw new BadRequestException(
         'Archived chat threads cannot receive new messages',
@@ -254,15 +277,21 @@ export class ChatService {
       role: message.role as ChatHistoryEntry['role'],
       content: message.content,
     }));
+    throwIfAborted(signal);
 
     const policyRefusal = getPolicyRefusal(question);
     if (policyRefusal) {
-      return this.persistExchange(thread, question, {
-        answer: policyRefusal,
-        sources: [],
-        inputTokens: 0,
-        outputTokens: 0,
-      });
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: policyRefusal,
+          sources: [],
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        signal,
+      );
     }
 
     const applicationGuidance = getApplicationGuidance(
@@ -271,48 +300,70 @@ export class ChatService {
       { history },
     );
     if (applicationGuidance) {
-      return this.persistExchange(thread, question, {
-        answer: applicationGuidance.answer,
-        sources: [],
-        actions: [applicationGuidance.action],
-        inputTokens: 0,
-        outputTokens: 0,
-      });
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: applicationGuidance.answer,
+          sources: [],
+          actions: [applicationGuidance.action],
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        signal,
+      );
     }
 
     const socialResponse = getSocialResponse(question);
     if (socialResponse) {
-      return this.persistExchange(thread, question, {
-        answer: socialResponse,
-        sources: [],
-        inputTokens: 0,
-        outputTokens: 0,
-      });
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: socialResponse,
+          sources: [],
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        signal,
+      );
     }
 
     if (isCreativeRequest(question)) {
-      return this.persistExchange(thread, question, {
-        answer:
-          'Puedo ayudarte a consultar y auditar tu obra, pero no escribir, continuar ni autocompletar el manuscrito. Tu voz y tus decisiones creativas siguen siendo exclusivamente tuyas.',
-        sources: [],
-        inputTokens: 0,
-        outputTokens: 0,
-      });
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer:
+            'Puedo ayudarte a consultar y auditar tu obra, pero no escribir, continuar ni autocompletar el manuscrito. Tu voz y tus decisiones creativas siguen siendo exclusivamente tuyas.',
+          sources: [],
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        signal,
+      );
     }
 
     const sources = await this.retrieveSources(
       thread.projectId,
       question,
       history,
+      signal,
     );
+    throwIfAborted(signal);
     if (sources.length === 0) {
-      return this.persistExchange(thread, question, {
-        answer:
-          'No encontre informacion suficiente en el manuscrito, la Wiki ni la linea de tiempo para responder con seguridad.',
-        sources: [],
-        inputTokens: 0,
-        outputTokens: 0,
-      });
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer:
+            'No encontre informacion suficiente en el manuscrito, la Wiki ni la linea de tiempo para responder con seguridad.',
+          sources: [],
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        signal,
+      );
     }
 
     const deterministicAnswer = buildDeterministicEvidenceAnswer(
@@ -320,27 +371,40 @@ export class ChatService {
       sources,
     );
     if (deterministicAnswer) {
-      return this.persistExchange(thread, question, {
-        answer: deterministicAnswer.answer,
-        sources: deterministicAnswer.sources,
-        inputTokens: 0,
-        outputTokens: 0,
-      });
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: deterministicAnswer.answer,
+          sources: deterministicAnswer.sources,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        signal,
+      );
     }
 
+    throwIfAborted(signal);
     const result = await this.generator.generate({
       question,
       history,
       sources,
+      ...(signal ? { signal } : {}),
     });
+    throwIfAborted(signal);
     const groundedResponse = buildGroundedResponse(result, sources);
 
-    return this.persistExchange(thread, question, {
-      answer: groundedResponse.answer,
-      sources: groundedResponse.sources,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-    });
+    return this.persistExchange(
+      thread,
+      question,
+      {
+        answer: groundedResponse.answer,
+        sources: groundedResponse.sources,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      },
+      signal,
+    );
   }
 
   private async persistExchange(
@@ -353,14 +417,18 @@ export class ChatService {
       inputTokens: number;
       outputTokens: number;
     },
+    signal?: AbortSignal,
   ): Promise<ChatExchange> {
+    throwIfAborted(signal);
     const userCreatedAt = new Date();
     const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1);
     const [userMessage, assistantMessage] = await this.prisma.$transaction(
       async (tx) => {
+        throwIfAborted(signal);
         const existingMessageCount = await tx.chatMessage.count({
           where: { threadId: thread.id },
         });
+        throwIfAborted(signal);
         const user = await tx.chatMessage.create({
           data: {
             threadId: thread.id,
@@ -369,6 +437,7 @@ export class ChatService {
             createdAt: userCreatedAt,
           },
         });
+        throwIfAborted(signal);
         const assistant = await tx.chatMessage.create({
           data: {
             threadId: thread.id,
@@ -382,6 +451,7 @@ export class ChatService {
             createdAt: assistantCreatedAt,
           },
         });
+        throwIfAborted(signal);
         await tx.chatThread.update({
           where: { id: thread.id },
           data: {
@@ -404,6 +474,7 @@ export class ChatService {
     projectId: string,
     question: string,
     history: ChatHistoryEntry[],
+    signal?: AbortSignal,
   ): Promise<ChatSource[]> {
     const historyQuery = history
       .filter((message) => message.role === 'user')
@@ -427,7 +498,9 @@ export class ChatService {
     const semanticMatches = await this.embeddingIndex.search(
       projectId,
       question,
+      signal,
     );
+    throwIfAborted(signal);
     const semanticChunkIds = semanticMatches.map((match) => match.chunkId);
     const semanticRanks = new Map(
       semanticMatches.map((match, index) => [match.chunkId, index]),
@@ -442,6 +515,49 @@ export class ChatService {
       })),
     ];
     const scopedTerms = terms.slice(0, 10);
+    const entityTerms = scopedTerms.filter(
+      (term) =>
+        !ENTITY_GENERIC_TERMS.has(term) && !TIMELINE_GENERIC_TERMS.has(term),
+    );
+    const wikiRetrievalIntent = genericWikiIntent || entityTerms.length > 0;
+    const entityCandidateFilters: Prisma.EntityWhereInput[] =
+      entityTerms.flatMap((term) => [
+        { canonicalName: { contains: term, mode: 'insensitive' } },
+        { aliases: { has: term } },
+        { description: { contains: term, mode: 'insensitive' } },
+        {
+          facts: {
+            some: {
+              isRetconned: false,
+              content: { contains: term, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          states: {
+            some: {
+              OR: [
+                { fromValue: { contains: term, mode: 'insensitive' } },
+                { toValue: { contains: term, mode: 'insensitive' } },
+              ],
+            },
+          },
+        },
+      ]);
+    const relationshipCandidateFilters: Prisma.RelationshipWhereInput[] =
+      entityTerms.flatMap((term) => [
+        {
+          sourceEntity: {
+            canonicalName: { contains: term, mode: 'insensitive' },
+          },
+        },
+        {
+          targetEntity: {
+            canonicalName: { contains: term, mode: 'insensitive' },
+          },
+        },
+        { description: { contains: term, mode: 'insensitive' } },
+      ]);
     const timelineCandidateFilters = scopedTerms.flatMap((term) => [
       { title: { contains: term, mode: 'insensitive' as const } },
       { description: { contains: term, mode: 'insensitive' as const } },
@@ -481,7 +597,16 @@ export class ChatService {
             : { take: MAX_CHUNK_CANDIDATES }),
         }),
         this.prisma.entity.findMany({
-          where: { projectId, deletedAt: null, isActive: true },
+          where: {
+            projectId,
+            deletedAt: null,
+            isActive: true,
+            ...(wikiRetrievalIntent
+              ? entityCandidateFilters.length > 0
+                ? { OR: entityCandidateFilters }
+                : {}
+              : { id: { in: [] } }),
+          },
           include: {
             facts: {
               where: { isRetconned: false },
@@ -499,10 +624,18 @@ export class ChatService {
               },
             },
           },
-          take: 200,
+          orderBy: { updatedAt: 'desc' },
+          take: MAX_ENTITY_CANDIDATES,
         }),
         this.prisma.relationship.findMany({
-          where: { projectId },
+          where: {
+            projectId,
+            ...(wikiRetrievalIntent
+              ? relationshipCandidateFilters.length > 0
+                ? { OR: relationshipCandidateFilters }
+                : {}
+              : { id: { in: [] } }),
+          },
           include: {
             sourceEntity: true,
             targetEntity: true,
@@ -510,6 +643,8 @@ export class ChatService {
               include: { chapter: { include: { book: true } } },
             },
           },
+          orderBy: { updatedAt: 'desc' },
+          take: MAX_RELATIONSHIP_CANDIDATES,
         }),
         this.prisma.timelineEvent.findMany({
           where: {
@@ -526,9 +661,11 @@ export class ChatService {
             },
           },
           orderBy: { position: 'asc' },
+          take: MAX_TIMELINE_CANDIDATES,
         }),
       ],
     );
+    throwIfAborted(signal);
 
     const manuscriptSources = rankManuscriptSources(
       chunks,
@@ -653,6 +790,7 @@ export class ChatService {
             orderBy: { chunkIndex: 'asc' },
           })
         : [];
+    throwIfAborted(signal);
     const timelineChunksByScene = new Map<string, Array<{ content: string }>>();
     for (const chunk of timelineSourceChunks) {
       const sceneChunks = timelineChunksByScene.get(chunk.sceneId) ?? [];
@@ -1249,6 +1387,14 @@ function isChatAction(value: unknown): value is ChatAction {
     typeof candidate['description'] === 'string' &&
     typeof candidate['route'] === 'string'
   );
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    const error = new Error('Chat request aborted by the client');
+    error.name = 'AbortError';
+    throw error;
+  }
 }
 
 const CHAT_SOURCE_KINDS = new Set<string>(['manuscript', 'wiki', 'timeline']);

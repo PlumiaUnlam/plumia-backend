@@ -203,6 +203,81 @@ describe('ChatService', () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
+  it('forwards cancellation to generation and does not persist an aborted answer', async () => {
+    prismaMock.chunk.findMany.mockResolvedValue([
+      manuscriptChunk('chunk-cancel', 'La cicatriz aparece junto al archivo.'),
+    ]);
+    const abortController = new AbortController();
+    generator.generate.mockImplementation((input) => {
+      expect(input.signal).toBe(abortController.signal);
+      abortController.abort();
+      return Promise.resolve({
+        answer: 'Respuesta que no debe persistirse.',
+        sourceIds: ['manuscript:chunk-cancel'],
+        claims: [],
+        inputTokens: 10,
+        outputTokens: 5,
+      });
+    });
+
+    await expect(
+      service.sendMessage(
+        'user-1',
+        thread.id,
+        { content: '¿Qué sabemos sobre la cicatriz?' },
+        { signal: abortController.signal },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(tx.chatMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('limits retrieval candidates before building the RAG context', async () => {
+    prismaMock.chunk.findMany.mockResolvedValue([
+      manuscriptChunk(
+        'chunk-filtered',
+        'La cicatriz aparece junto al archivo.',
+      ),
+    ]);
+    generator.generate.mockResolvedValue({
+      answer: 'La cicatriz aparece junto al archivo.',
+      sourceIds: ['manuscript:chunk-filtered'],
+      claims: [
+        {
+          text: 'La cicatriz aparece junto al archivo.',
+          evidence: [
+            {
+              sourceId: 'manuscript:chunk-filtered',
+              quote: 'La cicatriz aparece junto al archivo.',
+            },
+          ],
+        },
+      ],
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+
+    await service.sendMessage('user-1', thread.id, {
+      content: '¿Qué sabemos sobre la cicatriz?',
+    });
+
+    const chunkCalls = prismaMock.chunk.findMany.mock.calls as Array<
+      [{ take?: number }]
+    >;
+    const entityCalls = prismaMock.entity.findMany.mock.calls as Array<
+      [{ take?: number }]
+    >;
+    const relationshipCalls = prismaMock.relationship.findMany.mock
+      .calls as Array<[{ take?: number }]>;
+    const timelineCalls = prismaMock.timelineEvent.findMany.mock.calls as Array<
+      [{ take?: number }]
+    >;
+    expect(chunkCalls.at(-1)?.[0].take).toBe(80);
+    expect(entityCalls.at(-1)?.[0].take).toBe(40);
+    expect(relationshipCalls.at(-1)?.[0].take).toBe(80);
+    expect(timelineCalls.at(-1)?.[0].take).toBe(80);
+  });
+
   it('does not accept new messages in archived threads', async () => {
     prismaMock.chatThread.findFirst.mockResolvedValue({
       ...thread,

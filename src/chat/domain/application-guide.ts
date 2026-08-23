@@ -176,11 +176,14 @@ export function getApplicationGuidance(
   const isNavigationQuestion = NAVIGATION_INTENT.test(normalizedQuestion);
   const isApplicationHelpQuestion = isApplicationHelp(normalizedQuestion);
   const guide = findBestGuide(normalizedQuestion);
+  const lastUserQuestion = [...(context.history ?? [])]
+    .reverse()
+    .find((entry) => entry.role === 'user');
   const isFollowUpNavigation =
     FOLLOW_UP_INTENT.test(normalizedQuestion) &&
     Boolean(guide) &&
-    context.history?.some(
-      (entry) => entry.role === 'user' && isApplicationQuestion(entry.content),
+    Boolean(
+      lastUserQuestion && isApplicationQuestion(lastUserQuestion.content),
     );
   if (
     !isNavigationQuestion &&
@@ -237,9 +240,9 @@ function isApplicationQuestion(question: string): boolean {
 
 function isApplicationHelp(question: string): boolean {
   return (
-    APPLICATION_HELP_INTENT.test(question) ||
-    (APPLICATION_HOW_TO_INTENT.test(question) &&
-      APPLICATION_UI_CONTEXT.test(question))
+    APPLICATION_UI_CONTEXT.test(question) &&
+    (APPLICATION_HELP_INTENT.test(question) ||
+      APPLICATION_HOW_TO_INTENT.test(question))
   );
 }
 

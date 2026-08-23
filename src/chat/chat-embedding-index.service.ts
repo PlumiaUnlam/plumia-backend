@@ -35,18 +35,25 @@ export class ChatEmbeddingIndexService {
   async search(
     projectId: string,
     question: string,
+    signal?: AbortSignal,
   ): Promise<VectorSearchResult[]> {
+    throwIfAborted(signal);
     if (!this.embeddingProvider.isConfigured()) {
       return [];
     }
     try {
       await this.ensureIndexBatch(projectId);
-      const queryEmbedding = await this.embeddingProvider.embedQuery(question);
+      throwIfAborted(signal);
+      const queryEmbedding = signal
+        ? await this.embeddingProvider.embedQuery(question, signal)
+        : await this.embeddingProvider.embedQuery(question);
+      throwIfAborted(signal);
       const matches = await this.vectorStore.search({
         projectId,
         embedding: queryEmbedding,
         limit: SEMANTIC_RESULT_LIMIT,
       });
+      throwIfAborted(signal);
       return matches.filter(
         (match) =>
           Number.isFinite(match.distance) &&
@@ -54,6 +61,9 @@ export class ChatEmbeddingIndexService {
           match.distance <= MAX_COSINE_DISTANCE,
       );
     } catch (error: unknown) {
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `Semantic retrieval unavailable for project ${projectId}: ${message}`,
@@ -122,4 +132,16 @@ export class ChatEmbeddingIndexService {
       }),
     );
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error('Chat retrieval aborted by the client');
+  error.name = 'AbortError';
+  return error;
 }

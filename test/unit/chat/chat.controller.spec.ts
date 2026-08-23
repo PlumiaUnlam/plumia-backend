@@ -32,18 +32,26 @@ describe('ChatController', () => {
       chatService as unknown as ChatService,
     );
     const dto = { content: '¿Dónde aparece Maren?' };
+    const request = {
+      user: { id: 'user-1' },
+      once: jest.fn(),
+      removeListener: jest.fn(),
+    };
+    const response = {
+      once: jest.fn(),
+      removeListener: jest.fn(),
+    };
 
     await expect(
       controller.sendMessage(
-        { user: { id: 'user-1' } } as never,
+        request as never,
         'thread-1',
         dto,
+        response as never,
       ),
     ).resolves.toBe(exchange);
-    expect(chatService.sendMessage).toHaveBeenCalledWith(
-      'user-1',
-      'thread-1',
-      dto,
-    );
+    expect(chatService.sendMessage).toHaveBeenCalledTimes(1);
+    expect(request.once).toHaveBeenCalledWith('aborted', expect.any(Function));
+    expect(response.once).toHaveBeenCalledWith('close', expect.any(Function));
   });
 });

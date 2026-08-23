@@ -17,6 +17,7 @@ interface GenerateRequest {
     responseMimeType?: string;
     systemInstruction?: string;
     safetySettings?: unknown;
+    abortSignal?: AbortSignal;
   };
 }
 
@@ -130,6 +131,31 @@ describe('GeminiChatGenerationAdapter', () => {
     expect(requests.map(([request]) => request.model)).toEqual([
       'gemini-3.6-flash',
     ]);
+  });
+
+  it('passes the request abort signal to Gemini', async () => {
+    mockGenerateContent.mockResolvedValue({
+      text: JSON.stringify({
+        claims: [
+          {
+            text: 'Respuesta respaldada.',
+            evidence: [{ sourceId: 'wiki:1', quote: 'Dato concreto' }],
+          },
+        ],
+      }),
+    });
+    const adapter = new GeminiChatGenerationAdapter(config());
+    const abortController = new AbortController();
+
+    await adapter.generate({
+      question: 'Pregunta',
+      history: [],
+      sources: [],
+      signal: abortController.signal,
+    });
+
+    const requests = mockGenerateContent.mock.calls as Array<[GenerateRequest]>;
+    expect(requests[0]?.[0].config.abortSignal).toBe(abortController.signal);
   });
 
   it('always appends the stable fallback even when a model list is configured', async () => {

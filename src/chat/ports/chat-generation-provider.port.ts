@@ -11,6 +11,7 @@ export interface ChatGenerationInput {
   question: string;
   history: ChatHistoryEntry[];
   sources: ChatSource[];
+  signal?: AbortSignal;
 }
 
 export interface ChatGroundedClaim {

@@ -126,6 +126,7 @@ export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
   }
 
   async generate(input: ChatGenerationInput): Promise<ChatGenerationResult> {
+    throwIfAborted(input.signal);
     if (!this.apiKey) {
       this.logger.error(
         'Gemini chat generation is not configured: no API key was found.',
@@ -142,12 +143,16 @@ export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
     }
 
     for (const [index, model] of this.models.entries()) {
+      throwIfAborted(input.signal);
       this.logger.log(
         `Gemini chat generation attempt: model=${model} sources=${input.sources.length} history=${input.history.length} questionChars=${input.question.length}`,
       );
       try {
         return await this.generateWithModel(model, input);
       } catch (error: unknown) {
+        if (input.signal?.aborted) {
+          throw createAbortError();
+        }
         const retryable = shouldTryFallback(error);
         const details = describeProviderError(error);
         this.logger.error(
@@ -186,8 +191,11 @@ export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
         safetySettings: SAFETY_SETTINGS,
         responseMimeType: 'application/json',
         responseJsonSchema: RESPONSE_SCHEMA,
+        ...(input.signal ? { abortSignal: input.signal } : {}),
       },
     });
+
+    throwIfAborted(input.signal);
 
     const parsed = parseResponse(response.text ?? '{}');
     return {
@@ -204,6 +212,18 @@ export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
       outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
     };
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error('Chat generation aborted by the client');
+  error.name = 'AbortError';
+  return error;
 }
 
 function shouldTryFallback(error: unknown): boolean {
