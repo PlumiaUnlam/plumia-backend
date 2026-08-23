@@ -35,6 +35,80 @@ import type {
   VectorStore,
 } from './ports/vector-store.port';
 
+interface RetrievalPlan {
+  terms: string[];
+  countTerm: string | null;
+  firstMentionIntent: boolean;
+  broadTimelineIntent: boolean;
+  genericWikiIntent: boolean;
+  wikiRetrievalIntent: boolean;
+  semanticRanks: ReadonlyMap<string, number>;
+  chunkCandidateFilters: Prisma.ChunkWhereInput[];
+  entityCandidateFilters: Prisma.EntityWhereInput[];
+  relationshipCandidateFilters: Prisma.RelationshipWhereInput[];
+  timelineCandidateFilters: Prisma.TimelineEventWhereInput[];
+}
+
+interface RetrievedEntity {
+  id: string;
+  canonicalName: string;
+  aliases: string[];
+  type: string;
+  description: string | null;
+  attributes: Prisma.JsonValue;
+  imageUrl: string | null;
+  facts: Array<{ content: string }>;
+  states: Array<{
+    attributeKey: string;
+    fromValue: string | null;
+    toValue: string | null;
+  }>;
+}
+
+interface RetrievedChunk {
+  id: string;
+  content: string;
+  scene: {
+    id: string;
+    title: string | null;
+    sortKey: string;
+    order: number;
+    chapter: {
+      id: string;
+      title: string;
+      sortKey: string;
+      book: { id: string; title: string; sortKey: string };
+    };
+  };
+}
+
+interface RetrievedRelationship {
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationType: string;
+  description: string | null;
+  sourceEntity: { canonicalName: string };
+  targetEntity: { canonicalName: string };
+}
+
+interface RetrievedTimelineEvent {
+  id: string;
+  title: string;
+  description: string | null;
+  date: string | null;
+  temporalLabel: string | null;
+  sourceSceneId: string | null;
+  entities: Array<{ entity: { canonicalName: string } }>;
+  sourceScene: { chapter: { id: string; title: string } } | null;
+}
+
+type RetrievalCandidates = readonly [
+  RetrievedChunk[],
+  RetrievedEntity[],
+  RetrievedRelationship[],
+  RetrievedTimelineEvent[],
+];
+
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_MANUSCRIPT_SOURCES = 14;
 const MAX_WIKI_SOURCES = 10;
@@ -482,131 +556,71 @@ export class ChatService {
       .map((message) => message.content)
       .join(' ');
     const terms = extractSearchTerms(`${question} ${historyQuery}`);
-    const countTerm = extractCountTerm(question);
-    const normalizedQuestion = normalize(question);
-    const firstMentionIntent = /\b(primera|primer)\b/.test(normalizedQuestion);
-    const timelineIntent =
-      /\b(linea de tiempo|cronolog|evento|eventos|fecha|fechas|dia)\b/.test(
-        normalizedQuestion,
-      );
-    const broadTimelineIntent =
-      timelineIntent && terms.every((term) => TIMELINE_GENERIC_TERMS.has(term));
-    const genericWikiIntent =
-      /\b(wiki|ficha|fichas|personaje|personajes|entidad|entidades|relacion|relaciones|imagen|imagenes|protagonista)\b/.test(
-        normalizedQuestion,
-      );
     const semanticMatches = await this.embeddingIndex.search(
       projectId,
       question,
       signal,
     );
     throwIfAborted(signal);
-    const semanticChunkIds = semanticMatches.map((match) => match.chunkId);
-    const semanticRanks = new Map(
-      semanticMatches.map((match, index) => [match.chunkId, index]),
+    const plan = buildRetrievalPlan(question, terms, semanticMatches);
+    const [chunks, entities, relationships, timelineEvents] =
+      await this.fetchRetrievalCandidates(projectId, plan, signal);
+    throwIfAborted(signal);
+
+    const manuscriptSources = rankManuscriptSources(
+      chunks,
+      terms,
+      plan.countTerm,
+      question,
+      plan.semanticRanks,
     );
-    const chunkTextTerms = (countTerm ? [countTerm] : terms).slice(0, 10);
-    const chunkCandidateFilters = [
-      ...(semanticChunkIds.length > 0
-        ? [{ id: { in: semanticChunkIds } }]
-        : []),
-      ...chunkTextTerms.map((term) => ({
-        content: { contains: term, mode: 'insensitive' as const },
-      })),
-    ];
-    const scopedTerms = terms.slice(0, 10);
-    const entityTerms = scopedTerms.filter(
-      (term) =>
-        !ENTITY_GENERIC_TERMS.has(term) && !TIMELINE_GENERIC_TERMS.has(term),
+    const wikiSources = buildWikiSources(
+      entities,
+      relationships,
+      terms,
+      question,
+      plan.genericWikiIntent,
     );
-    const wikiRetrievalIntent = genericWikiIntent || entityTerms.length > 0;
-    const entityCandidateFilters: Prisma.EntityWhereInput[] =
-      entityTerms.flatMap((term) => [
-        { canonicalName: { contains: term, mode: 'insensitive' } },
-        { aliases: { has: term } },
-        { description: { contains: term, mode: 'insensitive' } },
-        {
-          facts: {
-            some: {
-              isRetconned: false,
-              content: { contains: term, mode: 'insensitive' },
-            },
-          },
-        },
-        {
-          states: {
-            some: {
-              OR: [
-                { fromValue: { contains: term, mode: 'insensitive' } },
-                { toValue: { contains: term, mode: 'insensitive' } },
-              ],
-            },
-          },
-        },
-      ]);
-    const relationshipCandidateFilters: Prisma.RelationshipWhereInput[] =
-      entityTerms.flatMap((term) => [
-        {
-          sourceEntity: {
-            canonicalName: { contains: term, mode: 'insensitive' },
-          },
-        },
-        {
-          targetEntity: {
-            canonicalName: { contains: term, mode: 'insensitive' },
-          },
-        },
-        { description: { contains: term, mode: 'insensitive' } },
-      ]);
-    const timelineCandidateFilters = scopedTerms.flatMap((term) => [
-      { title: { contains: term, mode: 'insensitive' as const } },
-      { description: { contains: term, mode: 'insensitive' as const } },
-      { date: { contains: term, mode: 'insensitive' as const } },
-      { temporalLabel: { contains: term, mode: 'insensitive' as const } },
-      {
-        entities: {
-          some: {
-            entity: {
-              canonicalName: {
-                contains: term,
-                mode: 'insensitive' as const,
-              },
-            },
-          },
-        },
-      },
+    const timelineSources = await this.buildTimelineSources(
+      projectId,
+      timelineEvents,
+      terms,
+      question,
+      plan.broadTimelineIntent,
+      signal,
+    );
+
+    if (plan.countTerm) {
+      return aggregateCountSources(manuscriptSources);
+    }
+
+    return fitContext([
+      ...manuscriptSources,
+      ...timelineSources,
+      ...wikiSources,
     ]);
+  }
+
+  private async fetchRetrievalCandidates(
+    projectId: string,
+    plan: RetrievalPlan,
+    signal?: AbortSignal,
+  ): Promise<RetrievalCandidates> {
+    const chunksQuery = {
+      where: buildChunkWhere(projectId, plan),
+      include: {
+        scene: { include: { chapter: { include: { book: true } } } },
+      },
+      ...(!plan.countTerm && !plan.firstMentionIntent
+        ? { take: MAX_CHUNK_CANDIDATES }
+        : {}),
+    };
+
     const [chunks, entities, relationships, timelineEvents] = await Promise.all(
       [
-        this.prisma.chunk.findMany({
-          where: {
-            projectId,
-            scene: {
-              deletedAt: null,
-              chapter: { deletedAt: null, book: { deletedAt: null } },
-            },
-            ...(chunkCandidateFilters.length > 0
-              ? { OR: chunkCandidateFilters }
-              : {}),
-          },
-          include: {
-            scene: { include: { chapter: { include: { book: true } } } },
-          },
-          ...(countTerm || firstMentionIntent
-            ? {}
-            : { take: MAX_CHUNK_CANDIDATES }),
-        }),
+        this.prisma.chunk.findMany(chunksQuery),
         this.prisma.entity.findMany({
-          where: {
-            projectId,
-            deletedAt: null,
-            isActive: true,
-            ...(wikiRetrievalIntent
-              ? entityCandidateFilters.length > 0
-                ? { OR: entityCandidateFilters }
-                : {}
-              : { id: { in: [] } }),
-          },
+          where: buildEntityWhere(projectId, plan),
           include: {
             facts: {
               where: { isRetconned: false },
@@ -628,14 +642,7 @@ export class ChatService {
           take: MAX_ENTITY_CANDIDATES,
         }),
         this.prisma.relationship.findMany({
-          where: {
-            projectId,
-            ...(wikiRetrievalIntent
-              ? relationshipCandidateFilters.length > 0
-                ? { OR: relationshipCandidateFilters }
-                : {}
-              : { id: { in: [] } }),
-          },
+          where: buildRelationshipWhere(projectId, plan),
           include: {
             sourceEntity: true,
             targetEntity: true,
@@ -647,13 +654,7 @@ export class ChatService {
           take: MAX_RELATIONSHIP_CANDIDATES,
         }),
         this.prisma.timelineEvent.findMany({
-          where: {
-            projectId,
-            deletedAt: null,
-            ...(!broadTimelineIntent && timelineCandidateFilters.length > 0
-              ? { OR: timelineCandidateFilters }
-              : {}),
-          },
+          where: buildTimelineWhere(projectId, plan),
           include: {
             entities: { include: { entity: true } },
             sourceScene: {
@@ -666,185 +667,55 @@ export class ChatService {
       ],
     );
     throwIfAborted(signal);
-
-    const manuscriptSources = rankManuscriptSources(
+    return [
       chunks,
-      terms,
-      countTerm,
-      question,
-      semanticRanks,
-    );
+      entities,
+      relationships,
+      timelineEvents,
+    ] as RetrievalCandidates;
+  }
 
-    const relationshipByEntity = new Map<string, string[]>();
-    for (const relationship of relationships) {
-      const description = `${relationship.sourceEntity.canonicalName} ${humanizeEnum(
-        relationship.relationType,
-      )} ${relationship.targetEntity.canonicalName}${
-        relationship.description ? `: ${relationship.description}` : ''
-      }`;
-      for (const entityId of [
-        relationship.sourceEntityId,
-        relationship.targetEntityId,
-      ]) {
-        const current = relationshipByEntity.get(entityId) ?? [];
-        current.push(description);
-        relationshipByEntity.set(entityId, current);
-      }
-    }
-
-    const rankedWikiSources = entities
-      .map((entity) => {
-        const facts = entity.facts.map((fact) => fact.content);
-        const states = entity.states.map(
-          (state) =>
-            `${state.attributeKey}: ${state.toValue ?? state.fromValue ?? 'sin valor'}`,
-        );
-        const relationshipsForEntity =
-          relationshipByEntity.get(entity.id) ?? [];
-        const searchable = [
-          entity.canonicalName,
-          entity.aliases.join(' '),
-          entityTypeLabel(entity.type),
-          entity.description ?? '',
-          JSON.stringify(entity.attributes),
-          facts.join(' '),
-          states.join(' '),
-          relationshipsForEntity.join(' '),
-        ].join(' ');
-        return {
-          score:
-            scoreText(searchable, terms, question) +
-            scoreFuzzyNames([entity.canonicalName, ...entity.aliases], terms),
-          source: {
-            id: `wiki:${entity.id}`,
-            kind: 'wiki' as const,
-            label: `${entityTypeLabel(entity.type)} · ${entity.canonicalName}`,
-            excerpt: compactText(
-              [
-                entity.description,
-                entity.aliases.length
-                  ? `Alias: ${entity.aliases.join(', ')}`
-                  : null,
-                Object.keys(entity.attributes as object).length
-                  ? `Ficha: ${JSON.stringify(entity.attributes)}`
-                  : null,
-                facts.length ? `Hechos: ${facts.join(' | ')}` : null,
-                states.length ? `Estados: ${states.join(' | ')}` : null,
-                relationshipsForEntity.length
-                  ? `Relaciones: ${relationshipsForEntity.join(' | ')}`
-                  : null,
-                entity.imageUrl
-                  ? 'La entidad tiene una imagen asociada.'
-                  : null,
-              ]
-                .filter(Boolean)
-                .join('\n'),
-              1_200,
-            ),
-            entityId: entity.id,
-            imageUrl: entity.imageUrl,
-          } satisfies ChatSource,
-        };
-      })
-      .sort((left, right) => right.score - left.score);
-    const wikiSources = rankedWikiSources
-      .filter(
-        (entry, index) =>
-          entry.score > 0 ||
-          (genericWikiIntent && index < Math.min(4, rankedWikiSources.length)),
-      )
-      .slice(0, MAX_WIKI_SOURCES)
-      .map((entry) => entry.source);
-
-    const timelineSourceEntries = timelineEvents
-      .map((event, index) => {
-        const searchable = [
-          event.title,
-          event.description ?? '',
-          event.date ?? '',
-          event.temporalLabel ?? '',
-          ...event.entities.map((entry) => entry.entity.canonicalName),
-        ].join(' ');
-        return {
-          event,
-          index,
-          score: scoreText(searchable, terms, question),
-        };
-      })
+  private async buildTimelineSources(
+    projectId: string,
+    timelineEvents: RetrievedTimelineEvent[],
+    terms: string[],
+    question: string,
+    broadTimelineIntent: boolean,
+    signal?: AbortSignal,
+  ): Promise<ChatSource[]> {
+    const entries = timelineEvents
+      .map((event, index) => ({
+        event,
+        index,
+        score: scoreText(buildTimelineSearchText(event), terms, question),
+      }))
       .filter((entry) => entry.score > 0 || broadTimelineIntent)
       .sort((left, right) => left.index - right.index)
       .slice(0, MAX_TIMELINE_SOURCES);
-
-    const timelineSourceSceneIds = [
+    const sceneIds = [
       ...new Set(
-        timelineSourceEntries
+        entries
           .map((entry) => entry.event.sourceSceneId)
           .filter((sceneId): sceneId is string => Boolean(sceneId)),
       ),
     ];
-    const timelineSourceChunks =
-      timelineSourceSceneIds.length > 0
-        ? await this.prisma.chunk.findMany({
-            where: { sceneId: { in: timelineSourceSceneIds } },
+    const chunks =
+      sceneIds.length === 0
+        ? []
+        : await this.prisma.chunk.findMany({
+            where: { sceneId: { in: sceneIds } },
             select: { sceneId: true, content: true },
             orderBy: { chunkIndex: 'asc' },
-          })
-        : [];
+          });
     throwIfAborted(signal);
-    const timelineChunksByScene = new Map<string, Array<{ content: string }>>();
-    for (const chunk of timelineSourceChunks) {
-      const sceneChunks = timelineChunksByScene.get(chunk.sceneId) ?? [];
-      sceneChunks.push({ content: chunk.content });
-      timelineChunksByScene.set(chunk.sceneId, sceneChunks);
-    }
-
-    const timelineSources = timelineSourceEntries.map(({ event }) => {
-      const textQuote = event.sourceSceneId
-        ? findTimelineSourceQuote(
-            timelineChunksByScene.get(event.sourceSceneId),
-            event.title,
-            event.description,
-          )
-        : undefined;
-      return {
-        id: `timeline:${event.id}`,
-        kind: 'timeline' as const,
-        label: `Linea de tiempo · ${event.title}`,
-        route: `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=timeline`,
-        excerpt: compactText(
-          [
-            event.date ?? event.temporalLabel,
-            event.description,
-            event.entities.length
-              ? `Entidades: ${event.entities
-                  .map((entry) => entry.entity.canonicalName)
-                  .join(', ')}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(' · '),
-          900,
-        ),
-        ...(event.sourceSceneId ? { sceneId: event.sourceSceneId } : {}),
-        ...(event.sourceScene
-          ? {
-              chapterId: event.sourceScene.chapter.id,
-              chapterTitle: event.sourceScene.chapter.title,
-            }
-          : {}),
-        ...(textQuote ? { textQuote } : {}),
-      } satisfies ChatSource;
-    });
-
-    if (countTerm) {
-      return aggregateCountSources(manuscriptSources);
-    }
-
-    return fitContext([
-      ...manuscriptSources,
-      ...timelineSources,
-      ...wikiSources,
-    ]);
+    const chunksByScene = groupChunksByScene(chunks);
+    return entries.map(({ event }) =>
+      buildTimelineSource(
+        projectId,
+        event,
+        chunksByScene.get(event.sourceSceneId ?? ''),
+      ),
+    );
   }
 
   private async getThreadForUser(
@@ -893,6 +764,399 @@ export class ChatService {
   }
 }
 
+function buildRetrievalPlan(
+  question: string,
+  terms: string[],
+  semanticMatches: VectorSearchResult[],
+): RetrievalPlan {
+  const normalizedQuestion = normalize(question);
+  const countTerm = extractCountTerm(question);
+  const firstMentionIntent = hasAnyWord(normalizedQuestion, [
+    'primera',
+    'primer',
+  ]);
+  const timelineIntent =
+    normalizedQuestion.includes('linea de tiempo') ||
+    normalizedQuestion.includes('cronolog') ||
+    hasAnyWord(normalizedQuestion, [
+      'evento',
+      'eventos',
+      'fecha',
+      'fechas',
+      'dia',
+    ]);
+  const broadTimelineIntent =
+    timelineIntent && terms.every((term) => TIMELINE_GENERIC_TERMS.has(term));
+  const genericWikiIntent = hasAnyWord(normalizedQuestion, [
+    'wiki',
+    'ficha',
+    'fichas',
+    'personaje',
+    'personajes',
+    'entidad',
+    'entidades',
+    'relacion',
+    'relaciones',
+    'imagen',
+    'imagenes',
+    'protagonista',
+  ]);
+  const semanticChunkIds = semanticMatches.map((match) => match.chunkId);
+  const semanticRanks = new Map(
+    semanticMatches.map((match, index) => [match.chunkId, index]),
+  );
+  const chunkTextTerms = (countTerm ? [countTerm] : terms).slice(0, 10);
+  const chunkCandidateFilters: Prisma.ChunkWhereInput[] = [
+    ...(semanticChunkIds.length > 0 ? [{ id: { in: semanticChunkIds } }] : []),
+    ...chunkTextTerms.map((term) => ({
+      content: { contains: term, mode: 'insensitive' as const },
+    })),
+  ];
+  const scopedTerms = terms.slice(0, 10);
+  const entityTerms = scopedTerms.filter(
+    (term) =>
+      !ENTITY_GENERIC_TERMS.has(term) && !TIMELINE_GENERIC_TERMS.has(term),
+  );
+  const wikiRetrievalIntent = genericWikiIntent || entityTerms.length > 0;
+  const entityCandidateFilters = buildEntityCandidateFilters(entityTerms);
+  const relationshipCandidateFilters =
+    buildRelationshipCandidateFilters(entityTerms);
+  const timelineCandidateFilters = buildTimelineCandidateFilters(scopedTerms);
+
+  return {
+    terms,
+    countTerm,
+    firstMentionIntent,
+    broadTimelineIntent,
+    genericWikiIntent,
+    wikiRetrievalIntent,
+    semanticRanks,
+    chunkCandidateFilters,
+    entityCandidateFilters,
+    relationshipCandidateFilters,
+    timelineCandidateFilters,
+  };
+}
+
+function buildChunkWhere(
+  projectId: string,
+  plan: RetrievalPlan,
+): Prisma.ChunkWhereInput {
+  const where: Prisma.ChunkWhereInput = {
+    projectId,
+    scene: {
+      deletedAt: null,
+      chapter: { deletedAt: null, book: { deletedAt: null } },
+    },
+  };
+  if (plan.chunkCandidateFilters.length > 0) {
+    where.OR = plan.chunkCandidateFilters;
+  }
+  return where;
+}
+
+function buildEntityWhere(
+  projectId: string,
+  plan: RetrievalPlan,
+): Prisma.EntityWhereInput {
+  const where: Prisma.EntityWhereInput = {
+    projectId,
+    deletedAt: null,
+    isActive: true,
+  };
+  if (!plan.wikiRetrievalIntent) {
+    where.id = { in: [] };
+  } else if (plan.entityCandidateFilters.length > 0) {
+    where.OR = plan.entityCandidateFilters;
+  }
+  return where;
+}
+
+function buildRelationshipWhere(
+  projectId: string,
+  plan: RetrievalPlan,
+): Prisma.RelationshipWhereInput {
+  const where: Prisma.RelationshipWhereInput = { projectId };
+  if (!plan.wikiRetrievalIntent) {
+    where.id = { in: [] };
+  } else if (plan.relationshipCandidateFilters.length > 0) {
+    where.OR = plan.relationshipCandidateFilters;
+  }
+  return where;
+}
+
+function buildTimelineWhere(
+  projectId: string,
+  plan: RetrievalPlan,
+): Prisma.TimelineEventWhereInput {
+  const where: Prisma.TimelineEventWhereInput = {
+    projectId,
+    deletedAt: null,
+  };
+  if (!plan.broadTimelineIntent && plan.timelineCandidateFilters.length > 0) {
+    where.OR = plan.timelineCandidateFilters;
+  }
+  return where;
+}
+
+function buildEntityCandidateFilters(
+  terms: string[],
+): Prisma.EntityWhereInput[] {
+  return terms.flatMap((term) => [
+    { canonicalName: { contains: term, mode: 'insensitive' } },
+    { aliases: { has: term } },
+    { description: { contains: term, mode: 'insensitive' } },
+    {
+      facts: {
+        some: {
+          isRetconned: false,
+          content: { contains: term, mode: 'insensitive' },
+        },
+      },
+    },
+    {
+      states: {
+        some: {
+          OR: [
+            { fromValue: { contains: term, mode: 'insensitive' } },
+            { toValue: { contains: term, mode: 'insensitive' } },
+          ],
+        },
+      },
+    },
+  ]);
+}
+
+function buildRelationshipCandidateFilters(
+  terms: string[],
+): Prisma.RelationshipWhereInput[] {
+  return terms.flatMap((term) => [
+    {
+      sourceEntity: {
+        canonicalName: { contains: term, mode: 'insensitive' },
+      },
+    },
+    {
+      targetEntity: {
+        canonicalName: { contains: term, mode: 'insensitive' },
+      },
+    },
+    { description: { contains: term, mode: 'insensitive' } },
+  ]);
+}
+
+function buildTimelineCandidateFilters(
+  terms: string[],
+): Prisma.TimelineEventWhereInput[] {
+  return terms.flatMap((term) => [
+    { title: { contains: term, mode: 'insensitive' as const } },
+    { description: { contains: term, mode: 'insensitive' as const } },
+    { date: { contains: term, mode: 'insensitive' as const } },
+    { temporalLabel: { contains: term, mode: 'insensitive' as const } },
+    {
+      entities: {
+        some: {
+          entity: {
+            canonicalName: {
+              contains: term,
+              mode: 'insensitive' as const,
+            },
+          },
+        },
+      },
+    },
+  ]);
+}
+
+function hasAnyWord(value: string, words: readonly string[]): boolean {
+  const tokens = new Set(extractWordTokens(value));
+  return words.some((word) => tokens.has(word));
+}
+
+function extractWordTokens(value: string): string[] {
+  const tokens: string[] = [];
+  const tokenPattern = /[a-z0-9]{3,}/g;
+  let match = tokenPattern.exec(value);
+  while (match) {
+    tokens.push(match[0]);
+    match = tokenPattern.exec(value);
+  }
+  return tokens;
+}
+
+function buildWikiSources(
+  entities: RetrievedEntity[],
+  relationships: RetrievedRelationship[],
+  terms: string[],
+  question: string,
+  genericWikiIntent: boolean,
+): ChatSource[] {
+  const relationshipByEntity = buildRelationshipByEntity(relationships);
+  const rankedSources = entities
+    .map((entity) => {
+      const relationshipsForEntity = relationshipByEntity.get(entity.id) ?? [];
+      return buildWikiSource(entity, relationshipsForEntity, terms, question);
+    })
+    .sort((left, right) => right.score - left.score);
+
+  return rankedSources
+    .filter(
+      (entry, index) =>
+        entry.score > 0 ||
+        (genericWikiIntent && index < Math.min(4, rankedSources.length)),
+    )
+    .slice(0, MAX_WIKI_SOURCES)
+    .map((entry) => entry.source);
+}
+
+function buildRelationshipByEntity(
+  relationships: RetrievedRelationship[],
+): Map<string, string[]> {
+  const relationshipByEntity = new Map<string, string[]>();
+  for (const relationship of relationships) {
+    const description = buildRelationshipDescription(relationship);
+    const entityIds = [
+      relationship.sourceEntityId,
+      relationship.targetEntityId,
+    ];
+    for (const entityId of entityIds) {
+      const current = relationshipByEntity.get(entityId) ?? [];
+      current.push(description);
+      relationshipByEntity.set(entityId, current);
+    }
+  }
+  return relationshipByEntity;
+}
+
+function buildRelationshipDescription(
+  relationship: RetrievedRelationship,
+): string {
+  const description = [
+    relationship.sourceEntity.canonicalName,
+    humanizeEnum(relationship.relationType),
+    relationship.targetEntity.canonicalName,
+  ].join(' ');
+  return relationship.description
+    ? `${description}: ${relationship.description}`
+    : description;
+}
+
+function buildWikiSource(
+  entity: RetrievedEntity,
+  relationships: string[],
+  terms: string[],
+  question: string,
+): { score: number; source: ChatSource } {
+  const facts = entity.facts.map((fact) => fact.content);
+  const states = entity.states.map((state) => {
+    const value = state.toValue ?? state.fromValue ?? 'sin valor';
+    return `${state.attributeKey}: ${value}`;
+  });
+  const searchable = [
+    entity.canonicalName,
+    entity.aliases.join(' '),
+    entityTypeLabel(entity.type),
+    entity.description ?? '',
+    JSON.stringify(entity.attributes),
+    facts.join(' '),
+    states.join(' '),
+    relationships.join(' '),
+  ].join(' ');
+
+  return {
+    score:
+      scoreText(searchable, terms, question) +
+      scoreFuzzyNames([entity.canonicalName, ...entity.aliases], terms),
+    source: {
+      id: `wiki:${entity.id}`,
+      kind: 'wiki',
+      label: `${entityTypeLabel(entity.type)} · ${entity.canonicalName}`,
+      excerpt: buildWikiExcerpt(entity, facts, states, relationships),
+      entityId: entity.id,
+      imageUrl: entity.imageUrl,
+    },
+  };
+}
+
+function buildWikiExcerpt(
+  entity: RetrievedEntity,
+  facts: string[],
+  states: string[],
+  relationships: string[],
+): string {
+  const attributes = entity.attributes as object;
+  const sections = [
+    entity.description,
+    entity.aliases.length > 0 ? `Alias: ${entity.aliases.join(', ')}` : null,
+    Object.keys(attributes).length > 0
+      ? `Ficha: ${JSON.stringify(entity.attributes)}`
+      : null,
+    facts.length > 0 ? `Hechos: ${facts.join(' | ')}` : null,
+    states.length > 0 ? `Estados: ${states.join(' | ')}` : null,
+    relationships.length > 0
+      ? `Relaciones: ${relationships.join(' | ')}`
+      : null,
+    entity.imageUrl ? 'La entidad tiene una imagen asociada.' : null,
+  ];
+  return compactText(sections.filter(Boolean).join('\n'), 1_200);
+}
+
+function buildTimelineSearchText(event: RetrievedTimelineEvent): string {
+  return [
+    event.title,
+    event.description ?? '',
+    event.date ?? '',
+    event.temporalLabel ?? '',
+    ...event.entities.map((entry) => entry.entity.canonicalName),
+  ].join(' ');
+}
+
+function groupChunksByScene(
+  chunks: ReadonlyArray<{ sceneId: string; content: string }>,
+): Map<string, Array<{ content: string }>> {
+  const chunksByScene = new Map<string, Array<{ content: string }>>();
+  for (const chunk of chunks) {
+    const sceneChunks = chunksByScene.get(chunk.sceneId) ?? [];
+    sceneChunks.push({ content: chunk.content });
+    chunksByScene.set(chunk.sceneId, sceneChunks);
+  }
+  return chunksByScene;
+}
+
+function buildTimelineSource(
+  projectId: string,
+  event: RetrievedTimelineEvent,
+  chunks: ReadonlyArray<{ content: string }> | undefined,
+): ChatSource {
+  const textQuote = findTimelineSourceQuote(
+    chunks,
+    event.title,
+    event.description,
+  );
+  const eventDate = event.date ?? event.temporalLabel;
+  const entities = event.entities.map((entry) => entry.entity.canonicalName);
+  const excerptParts = [
+    eventDate,
+    event.description,
+    entities.length > 0 ? `Entidades: ${entities.join(', ')}` : null,
+  ];
+  return {
+    id: `timeline:${event.id}`,
+    kind: 'timeline',
+    label: `Linea de tiempo · ${event.title}`,
+    route: `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=timeline`,
+    excerpt: compactText(excerptParts.filter(Boolean).join(' · '), 900),
+    ...(event.sourceSceneId ? { sceneId: event.sourceSceneId } : {}),
+    ...(event.sourceScene
+      ? {
+          chapterId: event.sourceScene.chapter.id,
+          chapterTitle: event.sourceScene.chapter.title,
+        }
+      : {}),
+    ...(textQuote ? { textQuote } : {}),
+  };
+}
+
 function buildDeterministicEvidenceAnswer(
   question: string,
   sources: ChatSource[],
@@ -919,8 +1183,13 @@ function buildDeterministicEvidenceAnswer(
       const breakdown = [...byChapter.entries()]
         .map(([chapter, count]) => `${count} en ${chapter}`)
         .join(', ');
+      const occurrenceWord = total === 1 ? 'vez' : 'veces';
+      const breakdownText = breakdown ? `: ${breakdown}` : '';
+      const citation = manuscriptSources
+        .map((_, index) => index + 1)
+        .join(', ');
       return {
-        answer: `“${countTerm}” aparece ${total} ${total === 1 ? 'vez' : 'veces'} en el manuscrito consultado${breakdown ? `: ${breakdown}` : ''}. [${manuscriptSources.map((_, index) => index + 1).join(', ')}]`,
+        answer: `“${countTerm}” aparece ${total} ${occurrenceWord} en el manuscrito consultado${breakdownText}. [${citation}]`,
         sources: manuscriptSources,
       };
     }
@@ -1036,24 +1305,45 @@ function reciprocalRank(rank: number | undefined): number {
 
 function extractSearchTerms(value: string): string[] {
   const normalized = normalize(value);
-  return [...new Set(normalized.match(/[a-z0-9]{3,}/g) ?? [])]
+  return [...new Set(extractWordTokens(normalized))]
     .filter((term) => !STOP_WORDS.has(term))
     .slice(0, 20);
 }
 
 function extractCountTerm(question: string): string | null {
   const normalizedQuestion = normalize(question);
-  if (!/\b(cuantas|cuantos|cantidad|numero|veces)\b/.test(normalizedQuestion)) {
+  if (
+    !hasAnyWord(normalizedQuestion, [
+      'cuantas',
+      'cuantos',
+      'cantidad',
+      'numero',
+      'veces',
+    ])
+  ) {
     return null;
   }
-  const quoted = normalizedQuestion.match(/["“”']([^"“”']{3,50})["“”']/)?.[1];
+  const quotedMatch = /["“”']([^"“”']{3,50})["“”']/.exec(normalizedQuestion);
+  const quoted = quotedMatch?.[1];
   if (quoted) {
     return quoted.trim();
   }
-  const match = normalizedQuestion.match(
-    /(?:veces\s+)?(?:aparece|aparecen|menciona|mencionan|repite|repiten)\s+(?:el|la|los|las|un|una)?\s*([a-z0-9]{3,})/,
+  const verbMatch =
+    /\b(?:aparece|aparecen|menciona|mencionan|repite|repiten)\b/.exec(
+      normalizedQuestion,
+    );
+  if (!verbMatch) {
+    return null;
+  }
+  const words = extractWordTokens(
+    normalizedQuestion.slice(verbMatch.index + verbMatch[0].length),
   );
-  return match?.[1] ?? null;
+  const firstWord = words[0];
+  if (!firstWord) {
+    return null;
+  }
+  const articles = new Set(['el', 'la', 'los', 'las', 'un', 'una']);
+  return articles.has(firstWord) ? (words[1] ?? null) : firstWord;
 }
 
 function scoreText(text: string, terms: string[], question: string): number {
@@ -1081,12 +1371,29 @@ function countOccurrences(text: string, term: string): number {
   if (!normalizedTerm) {
     return 0;
   }
-  const escapedTerm = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return (
-    normalizedText.match(
-      new RegExp(`(^|[^a-z0-9])${escapedTerm}(?=$|[^a-z0-9])`, 'g'),
-    )?.length ?? 0
-  );
+  let count = 0;
+  let searchStart = 0;
+  while (searchStart <= normalizedText.length) {
+    const index = normalizedText.indexOf(normalizedTerm, searchStart);
+    if (index < 0) {
+      break;
+    }
+    const before = normalizedText[index - 1];
+    const after = normalizedText[index + normalizedTerm.length];
+    if (!isWordCharacter(before) && !isWordCharacter(after)) {
+      count += 1;
+    }
+    searchStart = index + normalizedTerm.length;
+  }
+  return count;
+}
+
+function isWordCharacter(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
 }
 
 function aggregateCountSources(sources: ChatSource[]): ChatSource[] {
@@ -1106,14 +1413,20 @@ function aggregateCountSources(sources: ChatSource[]): ChatSource[] {
   }
   return [...byChapter.values()].map((source) => ({
     ...source,
-    excerpt: `${source.occurrenceCount ?? 0} coincidencias exactas en ${source.chapterTitle ?? source.label}. Ejemplo: ${source.excerpt}`,
+    excerpt: buildCountExcerpt(source),
   }));
+}
+
+function buildCountExcerpt(source: ChatSource): string {
+  const chapter = source.chapterTitle ?? source.label;
+  const count = source.occurrenceCount ?? 0;
+  return `${count} coincidencias exactas en ${chapter}. Ejemplo: ${source.excerpt}`;
 }
 
 function scoreFuzzyNames(names: string[], terms: string[]): number {
   let bestScore = 0;
   for (const name of names) {
-    const nameTokens = normalize(name).match(/[a-z0-9]{3,}/g) ?? [];
+    const nameTokens = extractWordTokens(normalize(name));
     for (const nameToken of nameTokens) {
       for (const term of terms) {
         const similarity = trigramSimilarity(nameToken, term);
@@ -1170,10 +1483,8 @@ function excerptAround(text: string, term?: string, maxLength = 900): string {
     return compact;
   }
   const index = term ? normalize(compact).indexOf(normalize(term)) : -1;
-  const start = Math.max(
-    0,
-    (index < 0 ? 0 : index) - Math.floor(maxLength / 3),
-  );
+  const termStart = Math.max(0, index);
+  const start = Math.max(0, termStart - Math.floor(maxLength / 3));
   const slice = compact.slice(start, start + maxLength).trim();
   return `${start > 0 ? '…' : ''}${slice}${
     start + maxLength < compact.length ? '…' : ''
@@ -1307,65 +1618,78 @@ function parseSources(value: Prisma.JsonValue | null): ChatSource[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const sources: ChatSource[] = [];
-  for (const source of value) {
-    if (!source || typeof source !== 'object' || Array.isArray(source)) {
-      continue;
-    }
-    const id = Reflect.get(source, 'id');
-    const kind = Reflect.get(source, 'kind');
-    const label = Reflect.get(source, 'label');
-    const excerpt = Reflect.get(source, 'excerpt');
-    if (
-      typeof id !== 'string' ||
-      typeof kind !== 'string' ||
-      !CHAT_SOURCE_KINDS.has(kind) ||
-      typeof label !== 'string' ||
-      typeof excerpt !== 'string'
-    ) {
-      continue;
-    }
-    const optionalString = (key: string): string | undefined => {
-      const field = Reflect.get(source, key);
-      return typeof field === 'string' ? field : undefined;
-    };
-    const bookId = optionalString('bookId');
-    const bookTitle = optionalString('bookTitle');
-    const chapterId = optionalString('chapterId');
-    const chapterTitle = optionalString('chapterTitle');
-    const sceneId = optionalString('sceneId');
-    const entityId = optionalString('entityId');
-    const textQuote = optionalString('textQuote');
-    const route = optionalString('route');
-    const sceneTitle = Reflect.get(source, 'sceneTitle');
-    const imageUrl = Reflect.get(source, 'imageUrl');
-    const occurrenceCount = Reflect.get(source, 'occurrenceCount');
-    sources.push({
-      id,
-      kind: kind as ChatSource['kind'],
-      label,
-      excerpt,
-      ...(bookId ? { bookId } : {}),
-      ...(bookTitle ? { bookTitle } : {}),
-      ...(chapterId ? { chapterId } : {}),
-      ...(chapterTitle ? { chapterTitle } : {}),
-      ...(sceneId ? { sceneId } : {}),
-      ...(typeof sceneTitle === 'string' || sceneTitle === null
-        ? { sceneTitle }
-        : {}),
-      ...(entityId ? { entityId } : {}),
-      ...(typeof imageUrl === 'string' || imageUrl === null
-        ? { imageUrl }
-        : {}),
-      ...(typeof occurrenceCount === 'number' &&
-      Number.isFinite(occurrenceCount)
-        ? { occurrenceCount }
-        : {}),
-      ...(textQuote ? { textQuote } : {}),
-      ...(route ? { route } : {}),
-    });
+  return value.flatMap((source) => {
+    const parsed = parseSource(source);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function parseSource(value: Prisma.JsonValue): ChatSource | null {
+  if (!isJsonObject(value)) {
+    return null;
   }
-  return sources;
+  const id = readString(value, 'id');
+  const kind = readString(value, 'kind');
+  const label = readString(value, 'label');
+  const excerpt = readString(value, 'excerpt');
+  if (!id || !kind || !CHAT_SOURCE_KINDS.has(kind) || !label || !excerpt) {
+    return null;
+  }
+
+  const sceneTitle = readNullableString(value, 'sceneTitle');
+  const imageUrl = readNullableString(value, 'imageUrl');
+  const occurrenceCount = readFiniteNumber(value, 'occurrenceCount');
+  return {
+    id,
+    kind: kind as ChatSource['kind'],
+    label,
+    excerpt,
+    ...optionalProperty(readString(value, 'bookId'), 'bookId'),
+    ...optionalProperty(readString(value, 'bookTitle'), 'bookTitle'),
+    ...optionalProperty(readString(value, 'chapterId'), 'chapterId'),
+    ...optionalProperty(readString(value, 'chapterTitle'), 'chapterTitle'),
+    ...optionalProperty(readString(value, 'sceneId'), 'sceneId'),
+    ...(sceneTitle !== undefined ? { sceneTitle } : {}),
+    ...optionalProperty(readString(value, 'entityId'), 'entityId'),
+    ...(imageUrl !== undefined ? { imageUrl } : {}),
+    ...(occurrenceCount === undefined ? {} : { occurrenceCount }),
+    ...optionalProperty(readString(value, 'textQuote'), 'textQuote'),
+    ...optionalProperty(readString(value, 'route'), 'route'),
+  };
+}
+
+function isJsonObject(value: Prisma.JsonValue): value is Prisma.JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readString(value: Prisma.JsonObject, key: string): string | undefined {
+  const field = value[key];
+  return typeof field === 'string' ? field : undefined;
+}
+
+function readNullableString(
+  value: Prisma.JsonObject,
+  key: string,
+): string | null | undefined {
+  const field = value[key];
+  return field === null || typeof field === 'string' ? field : undefined;
+}
+
+function readFiniteNumber(
+  value: Prisma.JsonObject,
+  key: string,
+): number | undefined {
+  const field = value[key];
+  return typeof field === 'number' && Number.isFinite(field)
+    ? field
+    : undefined;
+}
+
+function optionalProperty(
+  value: string | undefined,
+  key: string,
+): Record<string, string> {
+  return value ? { [key]: value } : {};
 }
 
 function parseActions(value: unknown): ChatAction[] {

@@ -302,16 +302,16 @@ function parseResponse(value: string): {
   try {
     parsed = JSON.parse(value);
   } catch {
-    const match = value.match(/\{[\s\S]*\}/);
-    parsed = match ? JSON.parse(match[0]) : null;
+    const jsonObject = findJsonObject(value);
+    parsed = jsonObject ? JSON.parse(jsonObject) : null;
   }
 
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Gemini API returned an invalid chat response');
+    throw new TypeError('Gemini API returned an invalid chat response');
   }
   const rawClaims = toRecord(parsed)?.['claims'];
   if (!Array.isArray(rawClaims)) {
-    throw new Error('Gemini API returned invalid grounded claims');
+    throw new TypeError('Gemini API returned invalid grounded claims');
   }
   const claims = rawClaims.flatMap((rawClaim: unknown) => {
     if (!rawClaim || typeof rawClaim !== 'object') {
@@ -343,10 +343,45 @@ function parseResponse(value: string): {
     ];
   });
   if (claims.length === 0) {
-    throw new Error('Gemini API returned an empty chat answer');
+    throw new TypeError('Gemini API returned an empty chat answer');
   }
 
   return { claims };
+}
+
+function findJsonObject(value: string): string | null {
+  const start = value.indexOf('{');
+  if (start < 0) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(start, index + 1);
+      }
+    }
+  }
+  return null;
 }
 
 function toRecord(value: unknown): Record<string, unknown> | null {

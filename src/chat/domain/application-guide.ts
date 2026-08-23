@@ -17,14 +17,105 @@ export interface ApplicationHistoryEntry {
   content: string;
 }
 
-const NAVIGATION_INTENT =
-  /\b(?:donde\s+(?:puedo|puede|se|esta|estan|veo|ver|consulto|consultar|encuentro|encontrar|queda|quedan|miro|mirar)|como\s+(?:puedo\s+)?(?:ver|abr(?:ir|o)|acceder|ir|usar|revis(?:ar|o)|consult(?:ar|o)|encontrar)|quiero\s+(?:ir|ver|abrir|consultar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
-const APPLICATION_HELP_INTENT =
-  /\b(?:ayuda|manual|documentacion|guia|funcionalidades?|modos?\s+de\s+escritura|para\s+que\s+sirve|que\s+(?:puedo|se\s+puede)\s+hacer)\b/i;
-const APPLICATION_HOW_TO_INTENT =
-  /\bcomo\s+(?:se\s+)?(?:usa|uso|usar|funciona(?:n)?)\b/i;
-const APPLICATION_UI_CONTEXT =
-  /\b(?:aplicacion|plumia|editor|wiki|storyboard|tablero|linea\s+(?:de\s+tiempo|temporal)|resumenes?|historial|estadisticas?|chat|asistente|pestanas?|panel|seccion|pantalla|boton|menu|barra|interfaz|modo(?:s)?\s+de\s+escritura)\b/i;
+const NAVIGATION_PHRASES = [
+  'donde puedo',
+  'donde puede',
+  'donde se',
+  'donde esta',
+  'donde estan',
+  'donde veo',
+  'donde ver',
+  'donde consulto',
+  'donde consultar',
+  'donde encuentro',
+  'donde encontrar',
+  'donde queda',
+  'donde quedan',
+  'donde miro',
+  'donde mirar',
+  'en que lugar',
+  'en que seccion',
+  'en que pantalla',
+  'como ver',
+  'como puedo ver',
+  'como abrir',
+  'como puedo abrir',
+  'como abro',
+  'como acceder',
+  'como puedo acceder',
+  'como ir',
+  'como puedo ir',
+  'como usar',
+  'como puedo usar',
+  'como revisar',
+  'como puedo revisar',
+  'como reviso',
+  'como consultar',
+  'como puedo consultar',
+  'como consulto',
+  'como encontrar',
+  'como puedo encontrar',
+  'quiero ir',
+  'quiero ver',
+  'quiero abrir',
+  'quiero consultar',
+  'llevame',
+  'llevar',
+  'llevarme',
+  'mostrame',
+  'mandame',
+  'abrime',
+] as const;
+const APPLICATION_HELP_TERMS = [
+  'ayuda',
+  'manual',
+  'documentacion',
+  'guia',
+  'funcionalidad',
+  'funcionalidades',
+  'modo de escritura',
+  'modos de escritura',
+  'para que sirve',
+  'que puedo hacer',
+  'que se puede hacer',
+] as const;
+const APPLICATION_HOW_TO_TERMS = [
+  'como usa',
+  'como uso',
+  'como usar',
+  'como funciona',
+  'como funcionan',
+  'como se usa',
+  'como se usar',
+] as const;
+const APPLICATION_UI_TERMS = [
+  'aplicacion',
+  'plumia',
+  'editor',
+  'wiki',
+  'storyboard',
+  'tablero',
+  'linea de tiempo',
+  'linea temporal',
+  'resumen',
+  'resumenes',
+  'historial',
+  'estadistica',
+  'estadisticas',
+  'chat',
+  'asistente',
+  'pestana',
+  'pestanas',
+  'panel',
+  'seccion',
+  'pantalla',
+  'boton',
+  'menu',
+  'barra',
+  'interfaz',
+  'modo de escritura',
+  'modos de escritura',
+] as const;
 const FOLLOW_UP_INTENT = /^(?:[¿?¡!.,\s]*(?:y|tambien|ademas)\b)/i;
 
 const GUIDES: ApplicationGuide[] = [
@@ -173,7 +264,7 @@ export function getApplicationGuidance(
   context: { history?: readonly ApplicationHistoryEntry[] } = {},
 ): { answer: string; action: ChatAction } | null {
   const normalizedQuestion = normalizeQuestion(question);
-  const isNavigationQuestion = NAVIGATION_INTENT.test(normalizedQuestion);
+  const isNavigationQuestion = isNavigationIntent(normalizedQuestion);
   const isApplicationHelpQuestion = isApplicationHelp(normalizedQuestion);
   const guide = findBestGuide(normalizedQuestion);
   const lastUserQuestion = [...(context.history ?? [])]
@@ -233,17 +324,46 @@ function findBestGuide(question: string): ApplicationGuide | null {
 function isApplicationQuestion(question: string): boolean {
   const normalizedQuestion = normalizeQuestion(question);
   return (
-    NAVIGATION_INTENT.test(normalizedQuestion) ||
+    isNavigationIntent(normalizedQuestion) ||
     isApplicationHelp(normalizedQuestion)
   );
 }
 
 function isApplicationHelp(question: string): boolean {
   return (
-    APPLICATION_UI_CONTEXT.test(question) &&
-    (APPLICATION_HELP_INTENT.test(question) ||
-      APPLICATION_HOW_TO_INTENT.test(question))
+    hasAnyTerm(question, APPLICATION_UI_TERMS) &&
+    (hasAnyTerm(question, APPLICATION_HELP_TERMS) ||
+      hasAnyTerm(question, APPLICATION_HOW_TO_TERMS))
   );
+}
+
+function isNavigationIntent(question: string): boolean {
+  return hasAnyTerm(question, NAVIGATION_PHRASES);
+}
+
+function hasAnyTerm(value: string, terms: readonly string[]): boolean {
+  return terms.some((term) => hasWholePhrase(value, term));
+}
+
+function hasWholePhrase(value: string, phrase: string): boolean {
+  let start = value.indexOf(phrase);
+  while (start >= 0) {
+    const before = value[start - 1];
+    const after = value[start + phrase.length];
+    if (!isWordCharacter(before) && !isWordCharacter(after)) {
+      return true;
+    }
+    start = value.indexOf(phrase, start + phrase.length);
+  }
+  return false;
+}
+
+function isWordCharacter(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
 }
 
 function normalizeQuestion(question: string): string {

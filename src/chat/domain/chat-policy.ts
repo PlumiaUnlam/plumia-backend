@@ -1,9 +1,103 @@
-const CREATIVE_REQUEST_PATTERN =
-  /\b(escrib(?:eme|ime)|escribe(?:me)?|redacta(?:me)?|contin[uú]a(?:me)?|autocompleta|inventa(?:me)?|genera(?:me)?\s+(?:un|una)\s+(?:p[aá]rrafo|escena|cap[ií]tulo|historia)|completa\s+(?:el|la|este|esta)\s+(?:p[aá]rrafo|escena|cap[ií]tulo|historia))\b/i;
-const PROMPT_INJECTION_PATTERN =
-  /(^|\b)(ignora|olvida|desobedece|anula)\s+(?:todas?\s+)?(?:las?\s+)?(?:instrucciones|reglas)|\b(system prompt|prompt del sistema|modo desarrollador|developer mode|jailbreak|api key|clave de api|variables? de entorno|credenciales?|datos internos de la aplicacion|razonamiento interno)\b/i;
-const OUT_OF_SCOPE_PATTERN =
-  /\b(crea|creame|hace|haceme|desarrolla|programa|codifica)\b[\s\S]{0,80}\b(app|aplicacion|web|sitio|react|javascript|typescript|codigo|programa)\b|\b(ayudame|resolve|resuelve|hace|haceme)\b[\s\S]{0,80}\b(tarea|ejercicio|examen|biologia|matematica|fisica|quimica)\b|\b(dame|pasame|comparti|explicame|ensename|quiero|necesito)\b[\s\S]{0,60}\b(receta|como cocinar|ravioles|menu de comidas)\b|\bcomo\s+(?:cocino|cocinar|preparo|hacer)\b[\s\S]{0,40}\b(ravioles|una comida|un plato)\b/i;
+const CREATIVE_REQUEST_WORDS = [
+  'escribeme',
+  'escribime',
+  'escribe',
+  'redacta',
+  'redactame',
+  'continua',
+  'continuame',
+  'autocompleta',
+  'inventame',
+  'inventa',
+] as const;
+const CREATIVE_GENERATION_WORDS = ['genera', 'generame', 'completa'] as const;
+const CREATIVE_TARGET_WORDS = [
+  'parrafo',
+  'escena',
+  'capitulo',
+  'historia',
+] as const;
+const PROMPT_INJECTION_WORDS = [
+  'ignora',
+  'olvida',
+  'desobedece',
+  'anula',
+] as const;
+const PROMPT_INJECTION_TARGETS = ['instrucciones', 'reglas'] as const;
+const PROMPT_INJECTION_PHRASES = [
+  'system prompt',
+  'prompt del sistema',
+  'modo desarrollador',
+  'developer mode',
+  'jailbreak',
+  'api key',
+  'clave de api',
+  'variables de entorno',
+  'variable de entorno',
+  'credencial',
+  'credenciales',
+  'datos internos de la aplicacion',
+  'razonamiento interno',
+] as const;
+const OUT_OF_SCOPE_TECH_WORDS = [
+  'app',
+  'aplicacion',
+  'web',
+  'sitio',
+  'react',
+  'javascript',
+  'typescript',
+  'codigo',
+  'programa',
+] as const;
+const OUT_OF_SCOPE_ACTION_WORDS = [
+  'crea',
+  'creame',
+  'hace',
+  'haceme',
+  'desarrolla',
+  'programa',
+  'codifica',
+] as const;
+const OUT_OF_SCOPE_ACADEMIC_WORDS = [
+  'tarea',
+  'ejercicio',
+  'examen',
+  'biologia',
+  'matematica',
+  'fisica',
+  'quimica',
+] as const;
+const OUT_OF_SCOPE_HELP_WORDS = [
+  'ayudame',
+  'resolve',
+  'resuelve',
+  'hace',
+  'haceme',
+] as const;
+const COOKING_REQUEST_WORDS = [
+  'dame',
+  'pasame',
+  'comparti',
+  'explicame',
+  'ensename',
+  'quiero',
+  'necesito',
+] as const;
+const COOKING_TARGET_WORDS = [
+  'receta',
+  'cocinar',
+  'ravioles',
+  'comida',
+  'plato',
+  'menu',
+] as const;
+const COOKING_VERB_PHRASES = [
+  'como cocino',
+  'como cocinar',
+  'como preparo',
+  'como hacer',
+] as const;
 const UNSAFE_OUTPUT_PATTERN =
   /\b(insultame|humillame|acosa|ataca a|discurso de odio|odio contra|denigra|degrada)\b/i;
 const WORK_ANALYSIS_CONTEXT_PATTERN =
@@ -11,10 +105,10 @@ const WORK_ANALYSIS_CONTEXT_PATTERN =
 
 export function getPolicyRefusal(question: string): string | null {
   const normalizedQuestion = normalizePolicyText(question);
-  if (PROMPT_INJECTION_PATTERN.test(normalizedQuestion)) {
+  if (isPromptInjection(normalizedQuestion)) {
     return 'No puedo ignorar mis reglas ni revelar prompts, credenciales, configuracion o datos internos de PlumIA. Si queres, puedo ayudarte a consultar informacion respaldada por tu obra.';
   }
-  if (OUT_OF_SCOPE_PATTERN.test(normalizedQuestion)) {
+  if (isOutOfScope(normalizedQuestion)) {
     return 'Mi alcance esta limitado a consultar y auditar tu manuscrito, Wiki y linea de tiempo. No puedo resolver tareas academicas, programar aplicaciones ni atender solicitudes ajenas a tu obra.';
   }
   if (
@@ -56,7 +150,76 @@ export function getSocialResponse(question: string): string | null {
 }
 
 export function isCreativeRequest(question: string): boolean {
-  return CREATIVE_REQUEST_PATTERN.test(question);
+  const normalizedQuestion = normalizePolicyText(question);
+  return (
+    hasAnyWord(normalizedQuestion, CREATIVE_REQUEST_WORDS) ||
+    hasNearbyWord(
+      normalizedQuestion,
+      CREATIVE_GENERATION_WORDS,
+      CREATIVE_TARGET_WORDS,
+      4,
+    )
+  );
+}
+
+function isPromptInjection(question: string): boolean {
+  return (
+    hasNearbyWord(
+      question,
+      PROMPT_INJECTION_WORDS,
+      PROMPT_INJECTION_TARGETS,
+      4,
+    ) || hasAnyPhrase(question, PROMPT_INJECTION_PHRASES)
+  );
+}
+
+function isOutOfScope(question: string): boolean {
+  const isTechnicalRequest = hasNearbyWord(
+    question,
+    OUT_OF_SCOPE_ACTION_WORDS,
+    OUT_OF_SCOPE_TECH_WORDS,
+    16,
+  );
+  const isAcademicRequest = hasNearbyWord(
+    question,
+    OUT_OF_SCOPE_HELP_WORDS,
+    OUT_OF_SCOPE_ACADEMIC_WORDS,
+    16,
+  );
+  const isCookingRequest =
+    hasNearbyWord(question, COOKING_REQUEST_WORDS, COOKING_TARGET_WORDS, 12) ||
+    (hasAnyPhrase(question, COOKING_VERB_PHRASES) &&
+      hasAnyWord(question, COOKING_TARGET_WORDS));
+  return isTechnicalRequest || isAcademicRequest || isCookingRequest;
+}
+
+function hasNearbyWord(
+  value: string,
+  starters: readonly string[],
+  targets: readonly string[],
+  maxDistance: number,
+): boolean {
+  const words = tokenize(value);
+  return words.some(
+    (word, index) =>
+      starters.includes(word) &&
+      words
+        .slice(index + 1, index + maxDistance + 1)
+        .some((target) => targets.includes(target)),
+  );
+}
+
+function hasAnyWord(value: string, words: readonly string[]): boolean {
+  const tokens = new Set(tokenize(value));
+  return words.some((word) => tokens.has(word));
+}
+
+function hasAnyPhrase(value: string, phrases: readonly string[]): boolean {
+  return phrases.some((phrase) => value.includes(phrase));
+}
+
+function tokenize(value: string): string[] {
+  return value.split(/[^a-z0-9]+/).filter(Boolean);
 }
 
 function normalizePolicyText(value: string): string {
