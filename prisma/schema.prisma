@@ -676,6 +676,7 @@ model ChatMessage {
   role         String   @db.VarChar(20)
   content      String
   sources      Json?    @db.JsonB
+  actions      Json?    @db.JsonB
   inputTokens  Int?     @map("input_tokens")
   outputTokens Int?     @map("output_tokens")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

@@ -5,6 +5,10 @@ describe('application guide', () => {
 
   it.each([
     ['¿Dónde veo la línea de tiempo?', 'worldbuilding?tab=timeline'],
+    [
+      '¿Cómo puedo ver los hechos que pasaron en mi obra?',
+      'worldbuilding?tab=timeline',
+    ],
     ['¿Cómo abro la Wiki?', 'worldbuilding?tab=wiki'],
     ['¿Dónde están las relaciones?', 'worldbuilding?tab=relationships'],
     ['Quiero ir a los resúmenes', 'worldbuilding?tab=summaries'],
@@ -14,8 +18,8 @@ describe('application guide', () => {
   ])('creates a direct navigation artifact for %s', (question, routePart) => {
     const guidance = getApplicationGuidance(question, projectId);
 
-    expect(guidance?.source.kind).toBe('application');
-    expect(guidance?.source.route).toContain(
+    expect(guidance?.action.kind).toBe('navigation');
+    expect(guidance?.action.route).toContain(
       `/projects/${projectId}/${routePart}`,
     );
   });
@@ -24,6 +28,12 @@ describe('application guide', () => {
     expect(
       getApplicationGuidance(
         '¿Qué pasó con Maren en el manuscrito?',
+        projectId,
+      ),
+    ).toBeNull();
+    expect(
+      getApplicationGuidance(
+        '¿Qué hechos importantes registra la línea de tiempo?',
         projectId,
       ),
     ).toBeNull();

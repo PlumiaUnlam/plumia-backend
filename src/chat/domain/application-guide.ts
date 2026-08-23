@@ -1,4 +1,4 @@
-import type { ChatSource } from './chat.types';
+import type { ChatAction } from './chat.types';
 
 interface ApplicationGuide {
   matches: RegExp;
@@ -15,10 +15,10 @@ const APPLICATION_HELP_INTENT =
 const GUIDES: ApplicationGuide[] = [
   {
     matches:
-      /\b(linea (?:de tiempo|temporal)|cronologia|eventos temporales)\b/i,
+      /\b(linea (?:de tiempo|temporal)|cronologia|eventos temporales|hechos(?: que pasaron| narrativos)?|acontecimientos)\b/i,
     label: 'PlumIA · Línea temporal',
     answer:
-      'La Línea Temporal está dentro de Worldbuilding. Abrí Worldbuilding desde la barra inferior izquierda y elegí la pestaña “Línea Temporal”. También podés abrirla desde la referencia de abajo.',
+      'La Línea Temporal está dentro de Worldbuilding. Abrí Worldbuilding desde la barra inferior izquierda y elegí la pestaña “Línea Temporal”. Te dejo un acceso directo debajo de la respuesta.',
     path: (projectId) =>
       `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=timeline`,
   },
@@ -90,14 +90,14 @@ const GENERAL_APPLICATION_GUIDE: ApplicationGuide = {
   matches: /$^/,
   label: 'PlumIA · Guía de uso',
   answer:
-    'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, entidades y relaciones de la Wiki y hechos de la Línea Temporal.\n\nTambién puedo indicarte dónde está cada función y llevarte a cualquier sección de la aplicación: el manuscrito y el chat están en el Editor; la Wiki, las Relaciones, la Línea Temporal y los Resúmenes están en Worldbuilding; y las notas e ideas están en el Storyboard. Las referencias de mis respuestas se pueden abrir desde el ícono de enlace.',
+    'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, entidades y relaciones de la Wiki y hechos de la Línea Temporal.\n\nTambién puedo indicarte dónde está cada función y llevarte a cualquier sección de la aplicación: el manuscrito y el chat están en el Editor; la Wiki, las Relaciones, la Línea Temporal y los Resúmenes están en Worldbuilding; y las notas e ideas están en el Storyboard. Te voy a mostrar un acceso directo separado de las fuentes de la obra.',
   path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
 };
 
 export function getApplicationGuidance(
   question: string,
   projectId: string,
-): { answer: string; source: ChatSource } | null {
+): { answer: string; action: ChatAction } | null {
   const normalizedQuestion = question
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -115,14 +115,15 @@ export function getApplicationGuidance(
     return null;
   }
   const route = guide.path(projectId);
+  const action: ChatAction = {
+    id: `navigation:${route}`,
+    kind: 'navigation',
+    label: guide.label,
+    description: 'Abrir esta sección de PlumIA',
+    route,
+  };
   return {
     answer: guide.answer,
-    source: {
-      id: `application:${guide.label}`,
-      kind: 'application',
-      label: guide.label,
-      excerpt: guide.answer,
-      route,
-    },
+    action,
   };
 }

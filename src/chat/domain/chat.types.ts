@@ -1,4 +1,4 @@
-export type ChatSourceKind = 'manuscript' | 'wiki' | 'timeline' | 'application';
+export type ChatSourceKind = 'manuscript' | 'wiki' | 'timeline';
 
 export interface ChatSource {
   id: string;
@@ -16,6 +16,14 @@ export interface ChatSource {
   occurrenceCount?: number;
   textQuote?: string;
   route?: string;
+}
+
+export interface ChatAction {
+  id: string;
+  kind: 'navigation';
+  label: string;
+  description: string;
+  route: string;
 }
 
 export interface ChatThreadRecord {
@@ -41,6 +49,7 @@ export interface ChatMessageRecord {
   role: 'user' | 'assistant' | 'system';
   content: string;
   sources: ChatSource[];
+  actions: ChatAction[];
   inputTokens: number | null;
   outputTokens: number | null;
   createdAt: Date;

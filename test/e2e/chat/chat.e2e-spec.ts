@@ -20,6 +20,12 @@ interface ChatMessageResponse {
   role: string;
   content: string;
   sources: ChatSourceResponse[];
+  actions: Array<{
+    kind: string;
+    label: string;
+    description: string;
+    route: string;
+  }>;
 }
 
 interface ChatThreadResponse {
@@ -323,21 +329,37 @@ describe('Chat endpoints e2e', () => {
       });
   });
 
-  it('answers PlumIA navigation questions with direct application links', async () => {
+  it('answers PlumIA navigation questions with a separate navigation action', async () => {
     const project = await ctx.createProject();
     const thread = await createThread(project.id);
 
     await request(ctx.server)
       .post(`/chat/threads/${thread.id}/messages`)
       .set(ctx.auth())
-      .send({ content: '¿Dónde puedo ver las notas que agregué?' })
+      .send({ content: '¿Cómo puedo ver los hechos que pasaron en mi obra?' })
       .expect(201)
       .expect((response) => {
         const exchange = responseBody<ChatExchangeResponse>(response);
-        expect(exchange.assistantMessage.sources).toEqual([
+        expect(exchange.assistantMessage.sources).toEqual([]);
+        expect(exchange.assistantMessage.actions).toEqual([
           expect.objectContaining({
-            kind: 'application',
-            route: `/projects/${project.id}/storyboard`,
+            kind: 'navigation',
+            route: `/projects/${project.id}/worldbuilding?tab=timeline`,
+          }),
+        ]);
+      });
+
+    await request(ctx.server)
+      .get(`/chat/threads/${thread.id}/messages`)
+      .set(ctx.auth())
+      .expect(200)
+      .expect((response) => {
+        const messages = responseBody<ChatMessageResponse[]>(response);
+        expect(messages.at(-1)?.sources).toEqual([]);
+        expect(messages.at(-1)?.actions).toEqual([
+          expect.objectContaining({
+            kind: 'navigation',
+            route: `/projects/${project.id}/worldbuilding?tab=timeline`,
           }),
         ]);
       });

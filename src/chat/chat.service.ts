@@ -18,6 +18,7 @@ import {
 import { buildGroundedResponse } from './domain/grounded-response';
 import type {
   ChatExchange,
+  ChatAction,
   ChatMessageRecord,
   ChatSource,
   ChatThreadPageRecord,
@@ -271,7 +272,8 @@ export class ChatService {
     if (applicationGuidance) {
       return this.persistExchange(thread, question, {
         answer: applicationGuidance.answer,
-        sources: [applicationGuidance.source],
+        sources: [],
+        actions: [applicationGuidance.action],
         inputTokens: 0,
         outputTokens: 0,
       });
@@ -346,6 +348,7 @@ export class ChatService {
     response: {
       answer: string;
       sources: ChatSource[];
+      actions?: ChatAction[];
       inputTokens: number;
       outputTokens: number;
     },
@@ -371,6 +374,8 @@ export class ChatService {
             role: 'assistant',
             content: response.answer,
             sources: response.sources as unknown as Prisma.InputJsonValue,
+            actions: (response.actions ??
+              []) as unknown as Prisma.InputJsonValue,
             inputTokens: response.inputTokens,
             outputTokens: response.outputTokens,
             createdAt: assistantCreatedAt,
@@ -734,6 +739,7 @@ export class ChatService {
     role: string;
     content: string;
     sources: Prisma.JsonValue | null;
+    actions: Prisma.JsonValue | null;
     inputTokens: number | null;
     outputTokens: number | null;
     createdAt: Date;
@@ -742,6 +748,7 @@ export class ChatService {
       ...message,
       role: message.role as ChatMessageRecord['role'],
       sources: parseSources(message.sources),
+      actions: parseActions(message.actions ?? null),
     };
   }
 }
@@ -1221,9 +1228,25 @@ function parseSources(value: Prisma.JsonValue | null): ChatSource[] {
   return sources;
 }
 
-const CHAT_SOURCE_KINDS = new Set<string>([
-  'manuscript',
-  'wiki',
-  'timeline',
-  'application',
-]);
+function parseActions(value: unknown): ChatAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isChatAction);
+}
+
+function isChatAction(value: unknown): value is ChatAction {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, Prisma.JsonValue>;
+  return (
+    candidate['kind'] === 'navigation' &&
+    typeof candidate['id'] === 'string' &&
+    typeof candidate['label'] === 'string' &&
+    typeof candidate['description'] === 'string' &&
+    typeof candidate['route'] === 'string'
+  );
+}
+
+const CHAT_SOURCE_KINDS = new Set<string>(['manuscript', 'wiki', 'timeline']);

@@ -255,9 +255,10 @@ describe('ChatService', () => {
     });
 
     expect(result.assistantMessage.content).toContain('Worldbuilding');
-    expect(result.assistantMessage.sources).toEqual([
+    expect(result.assistantMessage.sources).toEqual([]);
+    expect(result.assistantMessage.actions).toEqual([
       expect.objectContaining({
-        kind: 'application',
+        kind: 'navigation',
         route: '/projects/project-1/worldbuilding?tab=timeline',
       }),
     ]);
@@ -883,6 +884,7 @@ describe('ChatService', () => {
     expect(result[0]?.sources).toEqual([
       { id: 'wiki:1', kind: 'wiki', label: 'Maren', excerpt: 'Personaje' },
     ]);
+    expect(result[0]?.actions).toEqual([]);
   });
 });
 
@@ -1030,6 +1032,7 @@ function createTransactionClient(now: Date) {
             role: string;
             content: string;
             sources?: unknown;
+            actions?: unknown;
             inputTokens?: number;
             outputTokens?: number;
             createdAt?: Date;
@@ -1042,6 +1045,7 @@ function createTransactionClient(now: Date) {
             role: input.data.role,
             content: input.data.content,
             sources: input.data.sources ?? null,
+            actions: input.data.actions ?? null,
             inputTokens: input.data.inputTokens ?? null,
             outputTokens: input.data.outputTokens ?? null,
             createdAt: input.data.createdAt ?? now,
@@ -1060,6 +1064,7 @@ function message(id: string, role: string, content: string, createdAt: Date) {
     role,
     content,
     sources: null,
+    actions: null,
     inputTokens: null,
     outputTokens: null,
     createdAt,
