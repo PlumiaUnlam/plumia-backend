@@ -75,7 +75,7 @@ const GENERAL_APPLICATION_GUIDE: ApplicationGuide = {
   matches: /$^/,
   label: 'PlumIA · Guía de uso',
   answer:
-    'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, entidades y relaciones de la Wiki, hechos de la Línea Temporal, notas del Storyboard, resúmenes y alertas de auditoría.\n\nTambién puedo indicarte dónde está cada función: el manuscrito y el chat están en el Editor; la Wiki, las Relaciones, la Línea Temporal y los Resúmenes están en Worldbuilding; y las notas e ideas están en el Storyboard. Las referencias de mis respuestas se pueden abrir desde el ícono de enlace.',
+    'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, entidades y relaciones de la Wiki y hechos de la Línea Temporal.\n\nTambién puedo indicarte dónde está cada función y llevarte a cualquier sección de la aplicación: el manuscrito y el chat están en el Editor; la Wiki, las Relaciones, la Línea Temporal y los Resúmenes están en Worldbuilding; y las notas e ideas están en el Storyboard. Las referencias de mis respuestas se pueden abrir desde el ícono de enlace.',
   path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
 };
 

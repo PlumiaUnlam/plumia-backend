@@ -20,6 +20,7 @@ import type {
   ChatExchange,
   ChatMessageRecord,
   ChatSource,
+  ChatThreadPageRecord,
   ChatThreadRecord,
 } from './domain/chat.types';
 import {
@@ -37,9 +38,6 @@ const MAX_HISTORY_MESSAGES = 10;
 const MAX_MANUSCRIPT_SOURCES = 14;
 const MAX_WIKI_SOURCES = 10;
 const MAX_TIMELINE_SOURCES = 20;
-const MAX_STORYBOARD_SOURCES = 10;
-const MAX_SUMMARY_SOURCES = 8;
-const MAX_AUDIT_SOURCES = 8;
 const MAX_CHUNK_CANDIDATES = 200;
 const MAX_CONTEXT_CHARS = 48_000;
 
@@ -57,16 +55,6 @@ const TIMELINE_GENERIC_TERMS = new Set([
   'temporal',
   'tiempo',
 ]);
-const STORYBOARD_GENERIC_TERMS = new Set([
-  'agregue',
-  'anote',
-  'ideas',
-  'registre',
-  'storyboard',
-  'tablero',
-  'tarjetas',
-]);
-
 const STOP_WORDS = new Set([
   'a',
   'al',
@@ -127,12 +115,6 @@ const STOP_WORDS = new Set([
   'ya',
 ]);
 
-interface ChapterPosition {
-  id: string;
-  sortKey: string;
-  book: { id: string; title: string; sortKey: string };
-}
-
 @Injectable()
 export class ChatService {
   constructor(
@@ -154,15 +136,9 @@ export class ChatService {
   async createThread(
     userId: string,
     projectId: string,
-    input: { title?: string; currentChapterId?: string },
+    input: { title?: string },
   ): Promise<ChatThreadRecord> {
     await this.assertProjectAccess(userId, projectId);
-    if (input.currentChapterId) {
-      await this.assertChapterBelongsToProject(
-        projectId,
-        input.currentChapterId,
-      );
-    }
     const normalizedTitle = input.title?.trim();
     return this.prisma.chatThread.create({
       data: {
@@ -171,9 +147,6 @@ export class ChatService {
           normalizedTitle && normalizedTitle.length > 0
             ? normalizedTitle
             : 'Nueva conversacion',
-        ...(input.currentChapterId === undefined
-          ? {}
-          : { currentChapterId: input.currentChapterId }),
       },
     });
   }
@@ -181,12 +154,42 @@ export class ChatService {
   async listThreads(
     userId: string,
     projectId: string,
-  ): Promise<ChatThreadRecord[]> {
+    input: { page: number; pageSize: number; search?: string },
+  ): Promise<ChatThreadPageRecord> {
     await this.assertProjectAccess(userId, projectId);
-    return this.prisma.chatThread.findMany({
-      where: { projectId, isArchived: false },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const search = input.search?.trim();
+    const where: Prisma.ChatThreadWhereInput = {
+      projectId,
+      isArchived: false,
+      ...(search
+        ? {
+            OR: [
+              { title: { contains: search, mode: 'insensitive' } },
+              {
+                messages: {
+                  some: { content: { contains: search, mode: 'insensitive' } },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [total, items] = await Promise.all([
+      this.prisma.chatThread.count({ where }),
+      this.prisma.chatThread.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip: (input.page - 1) * input.pageSize,
+        take: input.pageSize,
+      }),
+    ]);
+    return {
+      items,
+      page: input.page,
+      pageSize: input.pageSize,
+      total,
+      hasMore: input.page * input.pageSize < total,
+    };
   }
 
   async listMessages(
@@ -207,7 +210,6 @@ export class ChatService {
     input: {
       title?: string;
       isArchived?: boolean;
-      antiSpoilerEnabled?: boolean;
     },
   ): Promise<ChatThreadRecord> {
     await this.getThreadForUser(userId, threadId);
@@ -218,9 +220,6 @@ export class ChatService {
         ...(input.isArchived === undefined
           ? {}
           : { isArchived: input.isArchived }),
-        ...(input.antiSpoilerEnabled === undefined
-          ? {}
-          : { antiSpoilerEnabled: input.antiSpoilerEnabled }),
       },
     });
   }
@@ -233,7 +232,7 @@ export class ChatService {
   async sendMessage(
     userId: string,
     threadId: string,
-    input: { content: string; currentChapterId?: string },
+    input: { content: string },
   ): Promise<ChatExchange> {
     const thread = await this.getThreadForUser(userId, threadId);
     if (thread.isArchived) {
@@ -245,14 +244,6 @@ export class ChatService {
     if (!question) {
       throw new BadRequestException('Chat message cannot be empty');
     }
-    const currentChapterId = input.currentChapterId ?? thread.currentChapterId;
-    if (currentChapterId) {
-      await this.assertChapterBelongsToProject(
-        thread.projectId,
-        currentChapterId,
-      );
-    }
-
     const historyRows = await this.prisma.chatMessage.findMany({
       where: { threadId, role: { in: ['user', 'assistant'] } },
       orderBy: { createdAt: 'desc' },
@@ -270,7 +261,6 @@ export class ChatService {
         sources: [],
         inputTokens: 0,
         outputTokens: 0,
-        currentChapterId,
       });
     }
 
@@ -284,7 +274,6 @@ export class ChatService {
         sources: [applicationGuidance.source],
         inputTokens: 0,
         outputTokens: 0,
-        currentChapterId,
       });
     }
 
@@ -295,7 +284,6 @@ export class ChatService {
         sources: [],
         inputTokens: 0,
         outputTokens: 0,
-        currentChapterId,
       });
     }
 
@@ -306,16 +294,13 @@ export class ChatService {
         sources: [],
         inputTokens: 0,
         outputTokens: 0,
-        currentChapterId,
       });
     }
 
     const sources = await this.retrieveSources(
       thread.projectId,
-      currentChapterId,
       question,
       history,
-      thread.antiSpoilerEnabled,
     );
     if (sources.length === 0) {
       return this.persistExchange(thread, question, {
@@ -324,7 +309,6 @@ export class ChatService {
         sources: [],
         inputTokens: 0,
         outputTokens: 0,
-        currentChapterId,
       });
     }
 
@@ -338,7 +322,6 @@ export class ChatService {
         sources: deterministicAnswer.sources,
         inputTokens: 0,
         outputTokens: 0,
-        currentChapterId,
       });
     }
 
@@ -354,7 +337,6 @@ export class ChatService {
       sources: groundedResponse.sources,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      currentChapterId,
     });
   }
 
@@ -366,7 +348,6 @@ export class ChatService {
       sources: ChatSource[];
       inputTokens: number;
       outputTokens: number;
-      currentChapterId: string | null;
     },
   ): Promise<ChatExchange> {
     const userCreatedAt = new Date();
@@ -398,7 +379,6 @@ export class ChatService {
         await tx.chatThread.update({
           where: { id: thread.id },
           data: {
-            currentChapterId: response.currentChapterId,
             ...(existingMessageCount === 0
               ? { title: question.slice(0, 197) }
               : {}),
@@ -415,15 +395,9 @@ export class ChatService {
 
   private async retrieveSources(
     projectId: string,
-    currentChapterId: string | null,
     question: string,
     history: ChatHistoryEntry[],
-    antiSpoilerEnabled: boolean,
   ): Promise<ChatSource[]> {
-    const currentChapter =
-      antiSpoilerEnabled && currentChapterId
-        ? await this.getChapterPosition(projectId, currentChapterId)
-        : null;
     const historyQuery = history
       .filter((message) => message.role === 'user')
       .slice(-2)
@@ -443,21 +417,6 @@ export class ChatService {
       /\b(wiki|ficha|fichas|personaje|personajes|entidad|entidades|relacion|relaciones|imagen|imagenes|protagonista)\b/.test(
         normalizedQuestion,
       );
-    const genericStoryboardIntent =
-      /\b(nota|notas|storyboard|tablero|idea|ideas|tarjeta|tarjetas)\b/.test(
-        normalizedQuestion,
-      );
-    const broadStoryboardIntent =
-      genericStoryboardIntent &&
-      terms.every((term) => STORYBOARD_GENERIC_TERMS.has(term));
-    const genericSummaryIntent = /\b(resumen|resumenes|sinopsis)\b/.test(
-      normalizedQuestion,
-    );
-    const genericAuditIntent =
-      /\b(auditoria|alerta|alertas|inconsistencia|inconsistencias|plot police)\b/.test(
-        normalizedQuestion,
-      );
-
     const semanticMatches = await this.embeddingIndex.search(
       projectId,
       question,
@@ -494,34 +453,11 @@ export class ChatService {
         },
       },
     ]);
-    const noteCandidateFilters = scopedTerms.flatMap((term) => [
-      { title: { contains: term, mode: 'insensitive' as const } },
-      { content: { contains: term, mode: 'insensitive' as const } },
-    ]);
-    const matrixNoteCandidateFilters = scopedTerms.flatMap((term) => [
-      { content: { contains: term, mode: 'insensitive' as const } },
-      {
-        arc: { title: { contains: term, mode: 'insensitive' as const } },
-      },
-    ]);
-    const auditCandidateFilters = scopedTerms.flatMap((term) => [
-      { title: { contains: term, mode: 'insensitive' as const } },
-      { description: { contains: term, mode: 'insensitive' as const } },
-      { explanation: { contains: term, mode: 'insensitive' as const } },
-      { anchorTextQuote: { contains: term, mode: 'insensitive' as const } },
-    ]);
-
     const [
       chunks,
       entities,
       relationships,
       timelineEvents,
-      storyboardNotes,
-      matrixNotes,
-      projectChapters,
-      projectScenes,
-      summaries,
-      auditAlerts,
     ] = await Promise.all([
       this.prisma.chunk.findMany({
         where: {
@@ -588,113 +524,10 @@ export class ChatService {
         },
         orderBy: { position: 'asc' },
       }),
-      this.prisma.storyboardNote.findMany({
-        where: {
-          projectId,
-          deletedAt: null,
-          ...(!broadStoryboardIntent && noteCandidateFilters.length > 0
-            ? { OR: noteCandidateFilters }
-            : {}),
-        },
-        include: { chapter: { include: { book: true } } },
-        orderBy: { sortKey: 'asc' },
-      }),
-      this.prisma.storyboardMatrixNote.findMany({
-        where: {
-          deletedAt: null,
-          arc: { projectId, deletedAt: null },
-          ...(!broadStoryboardIntent && matrixNoteCandidateFilters.length > 0
-            ? { OR: matrixNoteCandidateFilters }
-            : {}),
-        },
-        include: { arc: true },
-        orderBy: { sortKey: 'asc' },
-      }),
-      this.prisma.chapter.findMany({
-        where: {
-          deletedAt: null,
-          book: { projectId, deletedAt: null },
-        },
-        select: {
-          id: true,
-          sortKey: true,
-          book: { select: { id: true, title: true, sortKey: true } },
-        },
-      }),
-      this.prisma.scene.findMany({
-        where: {
-          deletedAt: null,
-          chapter: {
-            deletedAt: null,
-            book: { projectId, deletedAt: null },
-          },
-        },
-        select: {
-          id: true,
-          chapter: {
-            select: {
-              id: true,
-              sortKey: true,
-              book: { select: { id: true, title: true, sortKey: true } },
-            },
-          },
-        },
-      }),
-      this.prisma.summary.findMany({
-        where: {
-          projectId,
-          isDirty: false,
-          ...(!genericSummaryIntent && scopedTerms.length > 0
-            ? {
-                OR: scopedTerms.flatMap((term) => [
-                  {
-                    title: {
-                      contains: term,
-                      mode: 'insensitive' as const,
-                    },
-                  },
-                  {
-                    content: {
-                      contains: term,
-                      mode: 'insensitive' as const,
-                    },
-                  },
-                ]),
-              }
-            : {}),
-        },
-        orderBy: { updatedAt: 'desc' },
-        take: 30,
-      }),
-      this.prisma.auditAlert.findMany({
-        where: {
-          projectId,
-          ...(!genericAuditIntent && auditCandidateFilters.length > 0
-            ? { OR: auditCandidateFilters }
-            : {}),
-        },
-        include: {
-          scene: { include: { chapter: { include: { book: true } } } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        take: 30,
-      }),
     ]);
 
-    const allowedChunks = chunks.filter(
-      (chunk) =>
-        !currentChapter ||
-        isAtOrBefore(
-          {
-            id: chunk.scene.chapter.id,
-            sortKey: chunk.scene.chapter.sortKey,
-            book: chunk.scene.chapter.book,
-          },
-          currentChapter,
-        ),
-    );
     const manuscriptSources = rankManuscriptSources(
-      allowedChunks,
+      chunks,
       terms,
       countTerm,
       question,
@@ -702,19 +535,7 @@ export class ChatService {
     );
 
     const relationshipByEntity = new Map<string, string[]>();
-    for (const relationship of relationships.filter(
-      (candidate) =>
-        !currentChapter ||
-        !candidate.validFromScene ||
-        isAtOrBefore(
-          {
-            id: candidate.validFromScene.chapter.id,
-            sortKey: candidate.validFromScene.chapter.sortKey,
-            book: candidate.validFromScene.chapter.book,
-          },
-          currentChapter,
-        ),
-    )) {
+    for (const relationship of relationships) {
       const description = `${relationship.sourceEntity.canonicalName} ${humanizeEnum(
         relationship.relationType,
       )} ${relationship.targetEntity.canonicalName}${
@@ -732,33 +553,8 @@ export class ChatService {
 
     const rankedWikiSources = entities
       .map((entity) => {
-        const facts = entity.facts
-          .filter(
-            (fact) =>
-              !currentChapter ||
-              isAtOrBefore(
-                {
-                  id: fact.sourceScene.chapter.id,
-                  sortKey: fact.sourceScene.chapter.sortKey,
-                  book: fact.sourceScene.chapter.book,
-                },
-                currentChapter,
-              ),
-          )
-          .map((fact) => fact.content);
+        const facts = entity.facts.map((fact) => fact.content);
         const states = entity.states
-          .filter(
-            (state) =>
-              !currentChapter ||
-              isAtOrBefore(
-                {
-                  id: state.validFromScene.chapter.id,
-                  sortKey: state.validFromScene.chapter.sortKey,
-                  book: state.validFromScene.chapter.book,
-                },
-                currentChapter,
-              ),
-          )
           .map(
             (state) =>
               `${state.attributeKey}: ${state.toValue ?? state.fromValue ?? 'sin valor'}`,
@@ -821,19 +617,6 @@ export class ChatService {
       .map((entry) => entry.source);
 
     const timelineSourceEntries = timelineEvents
-      .filter(
-        (event) =>
-          !currentChapter ||
-          !event.sourceScene ||
-          isAtOrBefore(
-            {
-              id: event.sourceScene.chapter.id,
-              sortKey: event.sourceScene.chapter.sortKey,
-              book: event.sourceScene.chapter.book,
-            },
-            currentChapter,
-          ),
-      )
       .map((event, index) => {
         const searchable = [
           event.title,
@@ -912,190 +695,6 @@ export class ChatService {
       } satisfies ChatSource;
     });
 
-    const chapterPositionById = new Map(
-      projectChapters.map((chapter) => [chapter.id, chapter]),
-    );
-    const storyboardSources = [
-      ...storyboardNotes
-        .filter(
-          (note) =>
-            !currentChapter ||
-            !note.chapter ||
-            isAtOrBefore(
-              {
-                id: note.chapter.id,
-                sortKey: note.chapter.sortKey,
-                book: note.chapter.book,
-              },
-              currentChapter,
-            ),
-        )
-        .map((note) => {
-          const searchable = [
-            note.title,
-            note.content,
-            note.tags.join(' '),
-            note.characters.join(' '),
-          ].join(' ');
-          return {
-            score: scoreText(searchable, terms, question),
-            source: {
-              id: `storyboard:${note.id}`,
-              kind: 'storyboard' as const,
-              label: `Nota · ${note.title}`,
-              excerpt: compactText(note.content, 900),
-              route: `/projects/${encodeURIComponent(projectId)}/storyboard`,
-              ...(note.chapter
-                ? {
-                    bookId: note.chapter.book.id,
-                    bookTitle: note.chapter.book.title,
-                    chapterId: note.chapter.id,
-                    chapterTitle: note.chapter.title,
-                  }
-                : {}),
-            } satisfies ChatSource,
-          };
-        }),
-      ...matrixNotes
-        .filter((note) => {
-          const chapter = chapterPositionById.get(note.chapterId);
-          return (
-            !currentChapter || !chapter || isAtOrBefore(chapter, currentChapter)
-          );
-        })
-        .map((note) => ({
-          score: scoreText(
-            `${note.arc.title} ${note.content}`,
-            terms,
-            question,
-          ),
-          source: {
-            id: `storyboard-matrix:${note.id}`,
-            kind: 'storyboard' as const,
-            label: `Nota de arco · ${note.arc.title}`,
-            excerpt: compactText(note.content, 900),
-            chapterId: note.chapterId,
-            route: `/projects/${encodeURIComponent(projectId)}/storyboard`,
-          } satisfies ChatSource,
-        })),
-    ]
-      .filter(
-        (entry, index) =>
-          entry.score > 0 ||
-          (broadStoryboardIntent &&
-            index < Math.min(6, storyboardNotes.length + matrixNotes.length)),
-      )
-      .sort((left, right) => right.score - left.score)
-      .slice(0, MAX_STORYBOARD_SOURCES)
-      .map((entry) => entry.source);
-
-    const sceneChapterById = new Map(
-      projectScenes.map((scene) => [scene.id, scene.chapter]),
-    );
-    const summarySources = summaries
-      .filter((summary) => {
-        if (!currentChapter) {
-          return true;
-        }
-        if (summary.scopeType === 'chapter') {
-          const chapter = chapterPositionById.get(summary.scopeId);
-          return Boolean(chapter && isAtOrBefore(chapter, currentChapter));
-        }
-        if (summary.scopeType === 'scene') {
-          const chapter = sceneChapterById.get(summary.scopeId);
-          return Boolean(chapter && isAtOrBefore(chapter, currentChapter));
-        }
-        return false;
-      })
-      .map((summary) => ({
-        score: scoreText(
-          `${summary.title ?? ''} ${summary.content}`,
-          terms,
-          question,
-        ),
-        source: {
-          id: `summary:${summary.id}`,
-          kind: 'summary' as const,
-          label: `Resumen ${humanizeEnum(summary.scopeType)}${
-            summary.title ? ` · ${summary.title}` : ''
-          }`,
-          excerpt: compactText(summary.content, 1_200),
-          route: `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=summaries`,
-          ...(summary.scopeType === 'scene'
-            ? { sceneId: summary.scopeId }
-            : summary.scopeType === 'chapter'
-              ? { chapterId: summary.scopeId }
-              : {}),
-        } satisfies ChatSource,
-      }))
-      .filter(
-        (entry, index) =>
-          entry.score > 0 || (genericSummaryIntent && index < 4),
-      )
-      .sort((left, right) => right.score - left.score)
-      .slice(0, MAX_SUMMARY_SOURCES)
-      .map((entry) => entry.source);
-
-    const auditSources = auditAlerts
-      .filter(
-        (alert) =>
-          !currentChapter ||
-          isAtOrBefore(
-            {
-              id: alert.scene.chapter.id,
-              sortKey: alert.scene.chapter.sortKey,
-              book: alert.scene.chapter.book,
-            },
-            currentChapter,
-          ),
-      )
-      .map((alert) => {
-        const searchable = [
-          alert.title,
-          alert.description ?? '',
-          alert.explanation ?? '',
-          alert.anchorTextQuote ?? '',
-          alert.category,
-          alert.status,
-        ].join(' ');
-        return {
-          score: scoreText(searchable, terms, question),
-          source: {
-            id: `audit:${alert.id}`,
-            kind: 'audit' as const,
-            label: `Alerta ${humanizeEnum(alert.category)} · ${alert.title}`,
-            excerpt: compactText(
-              [
-                `Estado: ${humanizeEnum(alert.status)}`,
-                alert.description,
-                alert.explanation,
-                alert.anchorTextQuote
-                  ? `Texto señalado: ${alert.anchorTextQuote}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · '),
-              1_200,
-            ),
-            bookId: alert.scene.chapter.book.id,
-            bookTitle: alert.scene.chapter.book.title,
-            chapterId: alert.scene.chapter.id,
-            chapterTitle: alert.scene.chapter.title,
-            sceneId: alert.scene.id,
-            sceneTitle: alert.scene.title,
-            ...(alert.anchorTextQuote
-              ? { textQuote: alert.anchorTextQuote }
-              : {}),
-          } satisfies ChatSource,
-        };
-      })
-      .filter(
-        (entry, index) => entry.score > 0 || (genericAuditIntent && index < 4),
-      )
-      .sort((left, right) => right.score - left.score)
-      .slice(0, MAX_AUDIT_SOURCES)
-      .map((entry) => entry.source);
-
     if (countTerm) {
       return aggregateCountSources(manuscriptSources);
     }
@@ -1104,9 +703,6 @@ export class ChatService {
       ...manuscriptSources,
       ...timelineSources,
       ...wikiSources,
-      ...storyboardSources,
-      ...summarySources,
-      ...auditSources,
     ]);
   }
 
@@ -1134,33 +730,6 @@ export class ChatService {
     if (!project) {
       throw new NotFoundException('Project not found');
     }
-  }
-
-  private async assertChapterBelongsToProject(
-    projectId: string,
-    chapterId: string,
-  ): Promise<void> {
-    if (!(await this.getChapterPosition(projectId, chapterId))) {
-      throw new NotFoundException('Chapter not found');
-    }
-  }
-
-  private getChapterPosition(
-    projectId: string,
-    chapterId: string,
-  ): Promise<ChapterPosition | null> {
-    return this.prisma.chapter.findFirst({
-      where: {
-        id: chapterId,
-        deletedAt: null,
-        book: { projectId, deletedAt: null },
-      },
-      select: {
-        id: true,
-        sortKey: true,
-        book: { select: { id: true, title: true, sortKey: true } },
-      },
-    });
   }
 
   private toMessageRecord(message: {
@@ -1530,25 +1099,6 @@ function compactText(value: string, maxLength: number): string {
     : compact;
 }
 
-function isAtOrBefore(
-  candidate: ChapterPosition,
-  ceiling: ChapterPosition,
-): boolean {
-  const bookComparison = candidate.book.sortKey.localeCompare(
-    ceiling.book.sortKey,
-    undefined,
-    { numeric: true },
-  );
-  if (bookComparison !== 0) {
-    return bookComparison < 0;
-  }
-  return (
-    candidate.sortKey.localeCompare(ceiling.sortKey, undefined, {
-      numeric: true,
-    }) <= 0
-  );
-}
-
 function compareChunkOrder<
   T extends {
     scene: {
@@ -1679,8 +1229,5 @@ const CHAT_SOURCE_KINDS = new Set<string>([
   'manuscript',
   'wiki',
   'timeline',
-  'storyboard',
-  'summary',
-  'audit',
   'application',
 ]);

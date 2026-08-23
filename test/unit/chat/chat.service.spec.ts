@@ -13,8 +13,6 @@ describe('ChatService', () => {
     projectId: 'project-1',
     title: 'Nueva conversacion',
     isArchived: false,
-    antiSpoilerEnabled: true,
-    currentChapterId: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -515,9 +513,7 @@ describe('ChatService', () => {
     expect(chunkCalls.at(-1)?.[0]).not.toHaveProperty('take');
   });
 
-  it('excludes manuscript chunks after the active chapter when anti-spoiler is enabled', async () => {
-    const currentChapter = chapterPosition('chapter-1', '001');
-    prismaMock.chapter.findFirst.mockResolvedValue(currentChapter);
+  it('does not use an editor chapter as a retrieval ceiling', async () => {
     prismaMock.chunk.findMany.mockResolvedValue([
       manuscriptChunk(
         'chunk-future',
@@ -526,17 +522,35 @@ describe('ChatService', () => {
         '002',
       ),
     ]);
+    generator.generate.mockResolvedValue({
+      answer: 'El secreto se revela en el manuscrito.',
+      sourceIds: ['manuscript:chunk-future'],
+      claims: [
+        {
+          text: 'El secreto se revela en el manuscrito.',
+          evidence: [
+            {
+              sourceId: 'manuscript:chunk-future',
+              quote: 'El secreto de Xytherion se revela.',
+            },
+          ],
+        },
+      ],
+      inputTokens: 10,
+      outputTokens: 5,
+    });
 
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Cuál es el secreto de Xytherion?',
-      currentChapterId: currentChapter.id,
     });
 
-    expect(result.assistantMessage.sources).toEqual([]);
-    expect(generator.generate).not.toHaveBeenCalled();
+    expect(result.assistantMessage.sources).toEqual([
+      expect.objectContaining({ id: 'manuscript:chunk-future' }),
+    ]);
+    expect(prismaMock.chapter.findFirst).not.toHaveBeenCalled();
   });
 
-  it('retrieves matching storyboard notes as grounded context', async () => {
+  it('does not treat storyboard notes as evidence for work questions', async () => {
     prismaMock.storyboardNote.findMany.mockResolvedValue([
       {
         id: 'note-1',
@@ -559,34 +573,14 @@ describe('ChatService', () => {
         chapter: null,
       },
     ]);
-    generator.generate.mockImplementation((input) =>
-      Promise.resolve({
-        answer: 'La nota indica que Maren pierde el medallón.',
-        sourceIds: input.sources.map((source) => source.id),
-        claims: [
-          {
-            text: 'La nota indica que Maren pierde el medallón.',
-            evidence: input.sources.map((source) => ({
-              sourceId: source.id,
-              quote: source.excerpt,
-            })),
-          },
-        ],
-        inputTokens: 20,
-        outputTokens: 8,
-      }),
-    );
-
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Qué anoté sobre el eclipse y el medallón?',
     });
 
-    expect(result.assistantMessage.sources).toEqual([
-      expect.objectContaining({
-        id: 'storyboard:note-1',
-        route: '/projects/project-1/storyboard',
-      }),
-    ]);
+    expect(result.assistantMessage.content).toContain('No encontre');
+    expect(result.assistantMessage.sources).toEqual([]);
+    expect(generator.generate).not.toHaveBeenCalled();
+    expect(prismaMock.storyboardNote.findMany).not.toHaveBeenCalled();
   });
 
   it('adds entity fichas, images, and relationships to structured context', async () => {
@@ -649,7 +643,7 @@ describe('ChatService', () => {
     );
   });
 
-  it('includes clean saved summaries and excludes dirty summaries', async () => {
+  it('does not treat summaries as evidence for work questions', async () => {
     prismaMock.summary.findMany.mockResolvedValue([
       {
         id: 'summary-1',
@@ -669,42 +663,17 @@ describe('ChatService', () => {
         updatedAt: now,
       },
     ]);
-    generator.generate.mockImplementation((input) =>
-      Promise.resolve({
-        answer: 'El resumen indica que Maren investiga a Tomás.',
-        sourceIds: input.sources.map((source) => source.id),
-        claims: [
-          {
-            text: 'El resumen indica que Maren investiga a Tomás.',
-            evidence: input.sources.map((source) => ({
-              sourceId: source.id,
-              quote: source.excerpt,
-            })),
-          },
-        ],
-        inputTokens: 20,
-        outputTokens: 8,
-      }),
-    );
-
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Qué dice la sinopsis general?',
     });
 
-    expect(result.assistantMessage.sources).toEqual([
-      expect.objectContaining({
-        id: 'summary:summary-1',
-        kind: 'summary',
-      }),
-    ]);
-    expect(prismaMock.summary.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { projectId: thread.projectId, isDirty: false },
-      }),
-    );
+    expect(result.assistantMessage.content).toContain('No encontre');
+    expect(result.assistantMessage.sources).toEqual([]);
+    expect(generator.generate).not.toHaveBeenCalled();
+    expect(prismaMock.summary.findMany).not.toHaveBeenCalled();
   });
 
-  it('includes audit alerts and their exact editor anchor as grounded context', async () => {
+  it('does not treat audit alerts as evidence for work questions', async () => {
     const scene = manuscriptChunk(
       'chunk-alert',
       'Maren dejó la llave sobre la mesa.',
@@ -735,35 +704,14 @@ describe('ChatService', () => {
         scene,
       },
     ]);
-    generator.generate.mockImplementation((input) =>
-      Promise.resolve({
-        answer: 'La alerta señala un posible cambio de lugar de la llave.',
-        sourceIds: input.sources.map((source) => source.id),
-        claims: [
-          {
-            text: 'La alerta señala un posible cambio de lugar de la llave.',
-            evidence: input.sources.map((source) => ({
-              sourceId: source.id,
-              quote: source.excerpt,
-            })),
-          },
-        ],
-        inputTokens: 25,
-        outputTokens: 9,
-      }),
-    );
-
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Por qué hay una alerta de continuidad sobre la llave?',
     });
 
-    expect(result.assistantMessage.sources).toEqual([
-      expect.objectContaining({
-        id: 'audit:alert-1',
-        sceneId: scene.id,
-        textQuote: 'Maren dejó la llave sobre la mesa.',
-      }),
-    ]);
+    expect(result.assistantMessage.content).toContain('No encontre');
+    expect(result.assistantMessage.sources).toEqual([]);
+    expect(generator.generate).not.toHaveBeenCalled();
+    expect(prismaMock.auditAlert.findMany).not.toHaveBeenCalled();
   });
 
   it('uses semantic candidates even when there is no lexical match', async () => {
@@ -822,14 +770,13 @@ describe('ChatService', () => {
     });
   });
 
-  it('updates only explicitly provided thread preferences after ownership validation', async () => {
+  it('updates only explicitly provided thread fields after ownership validation', async () => {
     prismaMock.chatThread.update.mockResolvedValue({
       ...thread,
-      antiSpoilerEnabled: false,
     });
 
     await service.updateThread('user-1', thread.id, {
-      antiSpoilerEnabled: false,
+      title: 'Nueva etiqueta',
     });
 
     expect(prismaMock.chatThread.findFirst).toHaveBeenCalledWith({
@@ -840,7 +787,7 @@ describe('ChatService', () => {
     });
     expect(prismaMock.chatThread.update).toHaveBeenCalledWith({
       where: { id: thread.id },
-      data: { antiSpoilerEnabled: false },
+      data: { title: 'Nueva etiqueta' },
     });
   });
 
@@ -997,14 +944,6 @@ function timelineEvent(
     deletedAt: null,
     entities: [],
     sourceScene: null,
-  };
-}
-
-function chapterPosition(id: string, sortKey: string) {
-  return {
-    id,
-    sortKey,
-    book: { id: 'book-1', title: 'Libro I', sortKey: '001' },
   };
 }
 

@@ -2,9 +2,6 @@ export type ChatSourceKind =
   | 'manuscript'
   | 'wiki'
   | 'timeline'
-  | 'storyboard'
-  | 'summary'
-  | 'audit'
   | 'application';
 
 export interface ChatSource {
@@ -30,10 +27,16 @@ export interface ChatThreadRecord {
   projectId: string;
   title: string;
   isArchived: boolean;
-  antiSpoilerEnabled: boolean;
-  currentChapterId: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ChatThreadPageRecord {
+  items: ChatThreadRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
 }
 
 export interface ChatMessageRecord {

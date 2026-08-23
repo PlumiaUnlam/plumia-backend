@@ -37,7 +37,7 @@ export function getSocialResponse(question: string): string | null {
     ) ||
     /^(como andas|como estas|que tal|todo bien)$/.test(normalizedQuestion)
   ) {
-    return '¡Hola! Todo bien por acá y listo para ayudarte con tu obra. Podés preguntarme por el manuscrito, personajes, relaciones, notas, resúmenes o la línea de tiempo.';
+    return '¡Hola! Todo bien por acá y listo para ayudarte con tu obra. Podés preguntarme por el manuscrito, personajes, relaciones o la línea de tiempo. También puedo orientarte para usar cualquier sección de PlumIA.';
   }
   if (/^(gracias|muchas gracias|genial gracias)$/.test(normalizedQuestion)) {
     return '¡De nada! Cuando quieras, seguimos consultando tu obra.';
@@ -50,7 +50,7 @@ export function getSocialResponse(question: string): string | null {
       normalizedQuestion,
     )
   ) {
-    return 'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, Wiki, relaciones, imágenes, línea de tiempo, notas y resúmenes, además de indicarte dónde encontrar esas funciones.';
+    return 'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, Wiki, relaciones, imágenes y línea de tiempo, además de indicarte dónde encontrar y cómo usar cualquier función de la aplicación.';
   }
   return null;
 }

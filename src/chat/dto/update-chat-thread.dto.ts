@@ -16,8 +16,4 @@ export class UpdateChatThreadDto {
   @IsOptional()
   @IsBoolean()
   isArchived?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  antiSpoilerEnabled?: boolean;
 }

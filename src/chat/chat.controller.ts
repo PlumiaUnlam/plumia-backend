@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Request,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
@@ -17,11 +18,13 @@ import { ChatService } from './chat.service';
 import type {
   ChatExchange,
   ChatMessageRecord,
+  ChatThreadPageRecord,
   ChatThreadRecord,
 } from './domain/chat.types';
 import { CreateChatThreadDto } from './dto/create-chat-thread.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
 import { UpdateChatThreadDto } from './dto/update-chat-thread.dto';
+import { ListChatThreadsQueryDto } from './dto/list-chat-threads-query.dto';
 
 @Controller()
 export class ChatController {
@@ -40,8 +43,13 @@ export class ChatController {
   listThreads(
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
-  ): Promise<ChatThreadRecord[]> {
-    return this.chatService.listThreads(req.user.id, projectId);
+    @Query() query: ListChatThreadsQueryDto,
+  ): Promise<ChatThreadPageRecord> {
+    return this.chatService.listThreads(req.user.id, projectId, {
+      page: parsePositiveInteger(query.page, 1),
+      pageSize: Math.min(parsePositiveInteger(query.pageSize, 20), 50),
+      ...(query.search ? { search: query.search } : {}),
+    });
   }
 
   @Get('chat/threads/:threadId/messages')
@@ -94,4 +102,9 @@ function getAuthenticatedTracker(request: Record<string, unknown>): string {
   }
   const ip = request['ip'];
   return typeof ip === 'string' && ip ? `ip:${ip}` : 'anonymous';
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }

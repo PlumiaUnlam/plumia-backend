@@ -2,7 +2,6 @@ import { Prisma } from '@prisma/client';
 import request from 'supertest';
 import {
   createEndpointTestContext,
-  missingUuid,
   responseBody,
 } from '../endpoint-test-context';
 import { e2eChatGenerationMock } from '../e2e-test-utils';
@@ -26,7 +25,14 @@ interface ChatMessageResponse {
 interface ChatThreadResponse {
   id: string;
   projectId: string;
-  currentChapterId: string | null;
+}
+
+interface ChatThreadPageResponse {
+  items: ChatThreadResponse[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
 }
 
 interface ChatExchangeResponse {
@@ -38,21 +44,25 @@ describe('Chat endpoints e2e', () => {
   const ctx = createEndpointTestContext();
 
   it('creates a thread, refuses creative writing, and preserves ordered history without changing the manuscript', async () => {
-    const { project, chapter, scene } = await ctx.createProjectTree();
+    const { project, scene } = await ctx.createProjectTree();
     const sceneBefore = await ctx.prisma.scene.findUniqueOrThrow({
       where: { id: scene.id },
       select: { content: true, contentHash: true },
     });
-    const thread = await createThread(project.id, chapter.id);
+    const thread = await createThread(project.id);
 
     await request(ctx.server)
       .get(`/projects/${project.id}/chat/threads`)
       .set(ctx.auth())
       .expect(200)
       .expect((response) => {
-        expect(responseBody<ChatThreadResponse[]>(response)).toEqual([
-          expect.objectContaining({ id: thread.id, projectId: project.id }),
-        ]);
+        expect(responseBody<ChatThreadPageResponse>(response)).toMatchObject({
+          items: [expect.objectContaining({ id: thread.id, projectId: project.id })],
+          page: 1,
+          pageSize: 20,
+          total: 1,
+          hasMore: false,
+        });
       });
 
     await request(ctx.server)
@@ -60,7 +70,6 @@ describe('Chat endpoints e2e', () => {
       .set(ctx.auth())
       .send({
         content: 'Escribime el próximo párrafo de la novela',
-        currentChapterId: chapter.id,
       })
       .expect(201)
       .expect((response) => {
@@ -99,7 +108,7 @@ describe('Chat endpoints e2e', () => {
         contentHash: 'first-mention-hash',
       },
     });
-    const thread = await createThread(project.id, chapter.id);
+    const thread = await createThread(project.id);
 
     await request(ctx.server)
       .post(`/chat/threads/${thread.id}/messages`)
@@ -107,7 +116,6 @@ describe('Chat endpoints e2e', () => {
       .send({
         content:
           '¿En qué capítulo mencioné por primera vez la cicatriz del protagonista?',
-        currentChapterId: chapter.id,
       })
       .expect(201)
       .expect((response) => {
@@ -124,7 +132,7 @@ describe('Chat endpoints e2e', () => {
   });
 
   it('keeps conversational context across consecutive grounded questions', async () => {
-    const { project, chapter, scene } = await ctx.createProjectTree();
+    const { project, scene } = await ctx.createProjectTree();
     await ctx.prisma.chunk.updateMany({
       where: { sceneId: scene.id },
       data: {
@@ -132,7 +140,7 @@ describe('Chat endpoints e2e', () => {
         contentHash: 'context-hash',
       },
     });
-    const thread = await createThread(project.id, chapter.id);
+    const thread = await createThread(project.id);
 
     await request(ctx.server)
       .post(`/chat/threads/${thread.id}/messages`)
@@ -224,7 +232,7 @@ describe('Chat endpoints e2e', () => {
     expect(e2eChatGenerationMock.generate).not.toHaveBeenCalled();
   });
 
-  it('grounds answers in Storyboard notes and links back to the board', async () => {
+  it('does not ground work answers in Storyboard notes', async () => {
     const { project } = await ctx.createProjectTree();
     await ctx.prisma.storyboardNote.create({
       data: {
@@ -244,19 +252,14 @@ describe('Chat endpoints e2e', () => {
       .expect((response) => {
         const assistant =
           responseBody<ChatExchangeResponse>(response).assistantMessage;
-        const sources = assistant.sources;
-        expect(assistant.content).toContain('[1]');
-        expect(sources).toEqual([
-          expect.objectContaining({
-            kind: 'storyboard',
-            route: `/projects/${project.id}/storyboard`,
-          }),
-        ]);
+        expect(assistant.content).toContain('No encontre');
+        expect(assistant.sources).toEqual([]);
       });
+    expect(e2eChatGenerationMock.generate).not.toHaveBeenCalled();
   });
 
-  it('grounds audit questions and returns an editor-highlightable alert anchor', async () => {
-    const { project, chapter, scene } = await ctx.createProjectTree();
+  it('does not ground work answers in audit alerts', async () => {
+    const { project, scene } = await ctx.createProjectTree();
     await ctx.prisma.auditAlert.create({
       data: {
         projectId: project.id,
@@ -271,7 +274,7 @@ describe('Chat endpoints e2e', () => {
         anchorTextQuote: 'Maren dejó la llave sobre la mesa.',
       },
     });
-    const thread = await createThread(project.id, chapter.id);
+    const thread = await createThread(project.id);
 
     await request(ctx.server)
       .post(`/chat/threads/${thread.id}/messages`)
@@ -281,18 +284,14 @@ describe('Chat endpoints e2e', () => {
       .expect((response) => {
         const assistant =
           responseBody<ChatExchangeResponse>(response).assistantMessage;
-        expect(assistant.sources).toEqual([
-          expect.objectContaining({
-            kind: 'audit',
-            sceneId: scene.id,
-            textQuote: 'Maren dejó la llave sobre la mesa.',
-          }),
-        ]);
+        expect(assistant.content).toContain('No encontre');
+        expect(assistant.sources).toEqual([]);
       });
+    expect(e2eChatGenerationMock.generate).not.toHaveBeenCalled();
   });
 
-  it('uses the active chapter as an anti-spoiler ceiling', async () => {
-    const { project, book, chapter } = await ctx.createProjectTree();
+  it('does not link retrieval to the chapter open in the editor', async () => {
+    const { project, book } = await ctx.createProjectTree();
     const futureChapter = await ctx.createChapter(book.id, '002');
     const futureScene = await ctx.createScene(futureChapter.id, '001');
     await ctx.prisma.chunk.updateMany({
@@ -302,22 +301,24 @@ describe('Chat endpoints e2e', () => {
         contentHash: 'future-secret-hash',
       },
     });
-    const thread = await createThread(project.id, chapter.id);
+    const thread = await createThread(project.id);
 
     await request(ctx.server)
       .post(`/chat/threads/${thread.id}/messages`)
       .set(ctx.auth())
       .send({
         content: '¿Qué revela Xytherion sobre la heredera perdida?',
-        currentChapterId: chapter.id,
       })
       .expect(201)
       .expect((response) => {
         const exchange = responseBody<ChatExchangeResponse>(response);
-        expect(exchange.assistantMessage.content).toContain('No encontre');
-        expect(exchange.assistantMessage.sources).toEqual([]);
+        expect(exchange.assistantMessage.sources).toEqual([
+          expect.objectContaining({
+            kind: 'manuscript',
+            chapterId: futureChapter.id,
+          }),
+        ]);
       });
-    expect(e2eChatGenerationMock.generate).not.toHaveBeenCalled();
   });
 
   it('answers PlumIA navigation questions with direct application links', async () => {
@@ -350,13 +351,11 @@ describe('Chat endpoints e2e', () => {
       .set(ctx.auth())
       .send({
         title: 'Investigación de Maren',
-        antiSpoilerEnabled: false,
       })
       .expect(200)
       .expect((response) => {
         expect(responseBody<Record<string, unknown>>(response)).toMatchObject({
           title: 'Investigación de Maren',
-          antiSpoilerEnabled: false,
         });
       });
 
@@ -370,7 +369,11 @@ describe('Chat endpoints e2e', () => {
       .set(ctx.auth())
       .expect(200)
       .expect((response) => {
-        expect(responseBody<ChatThreadResponse[]>(response)).toEqual([]);
+        expect(responseBody<ChatThreadPageResponse>(response)).toMatchObject({
+          items: [],
+          total: 0,
+          hasMore: false,
+        });
       });
 
     await request(ctx.server)
@@ -485,21 +488,13 @@ describe('Chat endpoints e2e', () => {
       .set(ctx.auth())
       .send({ content: 'x'.repeat(4_001) })
       .expect(400);
-    await request(ctx.server)
-      .post(`/chat/threads/${thread.id}/messages`)
-      .set(ctx.auth())
-      .send({ content: 'Consulta', currentChapterId: missingUuid })
-      .expect(404);
   });
 
-  async function createThread(
-    projectId: string,
-    currentChapterId?: string,
-  ): Promise<ChatThreadResponse> {
+  async function createThread(projectId: string): Promise<ChatThreadResponse> {
     const response = await request(ctx.server)
       .post(`/projects/${projectId}/chat/threads`)
       .set(ctx.auth())
-      .send(currentChapterId ? { currentChapterId } : {})
+      .send({})
       .expect(201);
     return responseBody<ChatThreadResponse>(response);
   }
