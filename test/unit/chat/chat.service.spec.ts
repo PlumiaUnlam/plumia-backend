@@ -770,6 +770,46 @@ describe('ChatService', () => {
     });
   });
 
+  it('paginates and searches conversations by title or message content', async () => {
+    prismaMock.project.findFirst.mockResolvedValue({ id: thread.projectId });
+    prismaMock.chatThread.count.mockResolvedValue(2);
+    prismaMock.chatThread.findMany.mockResolvedValue([thread]);
+
+    const result = await service.listThreads('user-1', thread.projectId, {
+      page: 2,
+      pageSize: 1,
+      search: 'Maren',
+    });
+
+    expect(prismaMock.chatThread.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        projectId: thread.projectId,
+        isArchived: false,
+        OR: [
+          { title: { contains: 'Maren', mode: 'insensitive' } },
+          {
+            messages: {
+              some: { content: { contains: 'Maren', mode: 'insensitive' } },
+            },
+          },
+        ],
+      }),
+    });
+    expect(prismaMock.chatThread.findMany).toHaveBeenCalledWith({
+      where: expect.any(Object),
+      orderBy: { updatedAt: 'desc' },
+      skip: 1,
+      take: 1,
+    });
+    expect(result).toEqual({
+      items: [thread],
+      page: 2,
+      pageSize: 1,
+      total: 2,
+      hasMore: false,
+    });
+  });
+
   it('updates only explicitly provided thread fields after ownership validation', async () => {
     prismaMock.chatThread.update.mockResolvedValue({
       ...thread,
@@ -840,6 +880,7 @@ function createPrismaClient(tx: ReturnType<typeof createTransactionClient>) {
     chatThread: {
       findFirst: jest.fn(),
       findMany: jest.fn(),
+      count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),

@@ -8,7 +8,7 @@ interface ApplicationGuide {
 }
 
 const NAVIGATION_INTENT =
-  /\b(?:donde|como\s+(?:puedo\s+)?(?:ver|abrir|acceder|ir|usar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
+  /\b(?:donde|como\s+(?:puedo\s+)?(?:ver|abr(?:ir|o)|acceder|ir|usar|revis(?:ar|o)|consult(?:ar|o)|encontrar)|quiero\s+(?:ir|ver|abrir|consultar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
 const APPLICATION_HELP_INTENT =
   /\b(?:ayuda|manual|documentacion|guia|funcionalidades?|como\s+(?:se\s+)?(?:usa|uso|usar|funciona)|para\s+que\s+sirve|que\s+(?:puedo|se\s+puede)\s+hacer)\b/i;
 
@@ -67,6 +67,21 @@ const GUIDES: ApplicationGuide[] = [
     label: 'PlumIA · Historial de versiones',
     answer:
       'El historial está dentro del editor. Elegí una escena y abrí “Hist.” en la barra inferior izquierda para ver, nombrar, restaurar o eliminar versiones.',
+    path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+  },
+  {
+    matches:
+      /\b(auditoria|auditoría|alertas?|inconsistencias?|continuidad|plot police)\b/i,
+    label: 'PlumIA · Auditoría de continuidad',
+    answer:
+      'Las alertas de continuidad aparecen en el panel Wiki del Editor, donde podés revisar la evidencia y resolver o descartar cada inconsistencia detectada.',
+    path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+  },
+  {
+    matches: /\b(estadisticas?|estadísticas?|stats|metricas?|métricas?)\b/i,
+    label: 'PlumIA · Estadísticas del editor',
+    answer:
+      'Las estadísticas están en el panel derecho del Editor, en la pestaña “Stats”, junto a la Wiki y el chat.',
     path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
   },
 ];
