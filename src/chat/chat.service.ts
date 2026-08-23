@@ -268,6 +268,7 @@ export class ChatService {
     const applicationGuidance = getApplicationGuidance(
       question,
       thread.projectId,
+      { history },
     );
     if (applicationGuidance) {
       return this.persistExchange(thread, question, {

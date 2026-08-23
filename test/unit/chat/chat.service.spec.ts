@@ -266,6 +266,28 @@ describe('ChatService', () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
+  it('routes a short application follow-up using recent chat context', async () => {
+    prismaMock.chatMessage.findMany.mockResolvedValue([
+      message(
+        'user-previous',
+        'user',
+        '¿Dónde veo los resúmenes de cada capítulo?',
+        now,
+      ),
+    ]);
+
+    const result = await service.sendMessage('user-1', thread.id, {
+      content: '¿Y la línea de tiempo?',
+    });
+
+    expect(result.assistantMessage.sources).toEqual([]);
+    expect(result.assistantMessage.actions[0]?.route).toBe(
+      '/projects/project-1/worldbuilding?tab=timeline',
+    );
+    expect(embeddingIndex.search).not.toHaveBeenCalled();
+    expect(generator.generate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['Hola, ¿cómo andás?', '¡Hola!'],
     ['Muchas gracias', '¡De nada!'],

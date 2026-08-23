@@ -12,6 +12,10 @@ describe('application guide', () => {
     ['¿Cómo abro la Wiki?', 'worldbuilding?tab=wiki'],
     ['¿Dónde están las relaciones?', 'worldbuilding?tab=relationships'],
     ['Quiero ir a los resúmenes', 'worldbuilding?tab=summaries'],
+    [
+      '¿Dónde veo los resúmenes de cada capítulo?',
+      'worldbuilding?tab=summaries',
+    ],
     ['¿Dónde está el storyboard?', 'storyboard'],
     ['¿Cómo reviso las estadísticas?', 'editor'],
     ['¿Dónde veo las alertas de continuidad?', 'editor'],
@@ -36,6 +40,31 @@ describe('application guide', () => {
         '¿Qué hechos importantes registra la línea de tiempo?',
         projectId,
       ),
+    ).toBeNull();
+  });
+
+  it('uses the previous application question to route a short follow-up', () => {
+    const guidance = getApplicationGuidance(
+      '¿Y la línea de tiempo?',
+      projectId,
+      {
+        history: [
+          {
+            role: 'user',
+            content: '¿Dónde veo los resúmenes de cada capítulo?',
+          },
+        ],
+      },
+    );
+
+    expect(guidance?.action.route).toContain(
+      `/projects/${projectId}/worldbuilding?tab=timeline`,
+    );
+  });
+
+  it('does not turn an ambiguous short follow-up into navigation without context', () => {
+    expect(
+      getApplicationGuidance('¿Y la línea de tiempo?', projectId),
     ).toBeNull();
   });
 });
