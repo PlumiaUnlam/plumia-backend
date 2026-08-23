@@ -385,7 +385,8 @@ export class ChatService {
         await tx.chatThread.update({
           where: { id: thread.id },
           data: {
-            ...(existingMessageCount === 0
+            ...(existingMessageCount === 0 &&
+            thread.title === 'Nueva conversacion'
               ? { title: question.slice(0, 197) }
               : {}),
           },

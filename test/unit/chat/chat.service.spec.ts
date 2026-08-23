@@ -266,6 +266,22 @@ describe('ChatService', () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
+  it('does not replace a custom conversation title when the first message is sent', async () => {
+    prismaMock.chatThread.findFirst.mockResolvedValue({
+      ...thread,
+      title: 'Investigacion de Maren',
+    });
+
+    await service.sendMessage('user-1', thread.id, {
+      content: '¿Dónde aparece el unicornio violeta?',
+    });
+
+    expect(tx.chatThread.update).toHaveBeenCalledWith({
+      where: { id: thread.id },
+      data: {},
+    });
+  });
+
   it('routes a short application follow-up using recent chat context', async () => {
     prismaMock.chatMessage.findMany.mockResolvedValue([
       message(

@@ -53,6 +53,12 @@ describe('application guide', () => {
         projectId,
       ),
     ).toBeNull();
+    expect(
+      getApplicationGuidance(
+        '¿Dónde aparece el secreto del capítulo futuro?',
+        projectId,
+      ),
+    ).toBeNull();
   });
 
   it('uses the previous application question to route a short follow-up', () => {

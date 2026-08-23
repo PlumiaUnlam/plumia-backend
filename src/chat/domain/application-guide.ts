@@ -18,11 +18,11 @@ export interface ApplicationHistoryEntry {
 }
 
 const NAVIGATION_INTENT =
-  /\b(?:donde|como\s+(?:puedo\s+)?(?:ver|abr(?:ir|o)|acceder|ir|usar|revis(?:ar|o)|consult(?:ar|o)|encontrar)|quiero\s+(?:ir|ver|abrir|consultar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
+  /\b(?:donde\s+(?:puedo|puede|se|esta|estan|veo|ver|consulto|consultar|encuentro|encontrar|queda|quedan|miro|mirar)|como\s+(?:puedo\s+)?(?:ver|abr(?:ir|o)|acceder|ir|usar|revis(?:ar|o)|consult(?:ar|o)|encontrar)|quiero\s+(?:ir|ver|abrir|consultar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
 const APPLICATION_HELP_INTENT =
   /\b(?:ayuda|manual|documentacion|guia|funcionalidades?|modos?\s+de\s+escritura|para\s+que\s+sirve|que\s+(?:puedo|se\s+puede)\s+hacer)\b/i;
 const APPLICATION_HOW_TO_INTENT =
-  /\bcomo\s+(?:se\s+)?(?:usa|uso|usar|funciona?n)\b/i;
+  /\bcomo\s+(?:se\s+)?(?:usa|uso|usar|funciona(?:n)?)\b/i;
 const APPLICATION_UI_CONTEXT =
   /\b(?:aplicacion|plumia|editor|wiki|storyboard|tablero|linea\s+(?:de\s+tiempo|temporal)|resumenes?|historial|estadisticas?|chat|asistente|pestanas?|panel|seccion|pantalla|boton|menu|barra|interfaz|modo(?:s)?\s+de\s+escritura)\b/i;
 const FOLLOW_UP_INTENT = /^(?:[¿?¡!.,\s]*(?:y|tambien|ademas)\b)/i;
