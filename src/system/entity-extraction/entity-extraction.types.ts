@@ -33,6 +33,18 @@ export interface ChunkEvidence {
 export interface ExtractionResponse {
   entities: ExtractionCandidate[];
   relationships: ExtractedRelationship[];
+  inconsistencies: ExtractedInconsistency[];
+}
+
+export interface ExtractedInconsistency {
+  entityName: string;
+  field: string;
+  currentValue: string;
+  observedValue: string;
+  explanation: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  confidenceScore: number;
+  evidence: string[];
 }
 
 export interface ExtractedRelationship {
