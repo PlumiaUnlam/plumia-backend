@@ -782,7 +782,7 @@ describe('ChatService', () => {
     });
 
     expect(prismaMock.chatThread.count).toHaveBeenCalledWith({
-      where: expect.objectContaining({
+      where: {
         projectId: thread.projectId,
         isArchived: false,
         OR: [
@@ -793,10 +793,21 @@ describe('ChatService', () => {
             },
           },
         ],
-      }),
+      },
     });
     expect(prismaMock.chatThread.findMany).toHaveBeenCalledWith({
-      where: expect.any(Object),
+      where: {
+        projectId: thread.projectId,
+        isArchived: false,
+        OR: [
+          { title: { contains: 'Maren', mode: 'insensitive' } },
+          {
+            messages: {
+              some: { content: { contains: 'Maren', mode: 'insensitive' } },
+            },
+          },
+        ],
+      },
       orderBy: { updatedAt: 'desc' },
       skip: 1,
       take: 1,

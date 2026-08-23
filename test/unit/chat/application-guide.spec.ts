@@ -15,12 +15,17 @@ describe('application guide', () => {
     const guidance = getApplicationGuidance(question, projectId);
 
     expect(guidance?.source.kind).toBe('application');
-    expect(guidance?.source.route).toContain(`/projects/${projectId}/${routePart}`);
+    expect(guidance?.source.route).toContain(
+      `/projects/${projectId}/${routePart}`,
+    );
   });
 
   it('does not classify ordinary work questions as application navigation', () => {
     expect(
-      getApplicationGuidance('¿Qué pasó con Maren en el manuscrito?', projectId),
+      getApplicationGuidance(
+        '¿Qué pasó con Maren en el manuscrito?',
+        projectId,
+      ),
     ).toBeNull();
   });
 });

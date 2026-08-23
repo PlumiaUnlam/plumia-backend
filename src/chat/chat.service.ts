@@ -453,78 +453,75 @@ export class ChatService {
         },
       },
     ]);
-    const [
-      chunks,
-      entities,
-      relationships,
-      timelineEvents,
-    ] = await Promise.all([
-      this.prisma.chunk.findMany({
-        where: {
-          projectId,
-          scene: {
+    const [chunks, entities, relationships, timelineEvents] = await Promise.all(
+      [
+        this.prisma.chunk.findMany({
+          where: {
+            projectId,
+            scene: {
+              deletedAt: null,
+              chapter: { deletedAt: null, book: { deletedAt: null } },
+            },
+            ...(chunkCandidateFilters.length > 0
+              ? { OR: chunkCandidateFilters }
+              : {}),
+          },
+          include: {
+            scene: { include: { chapter: { include: { book: true } } } },
+          },
+          ...(countTerm || firstMentionIntent
+            ? {}
+            : { take: MAX_CHUNK_CANDIDATES }),
+        }),
+        this.prisma.entity.findMany({
+          where: { projectId, deletedAt: null, isActive: true },
+          include: {
+            facts: {
+              where: { isRetconned: false },
+              include: {
+                sourceScene: {
+                  include: { chapter: { include: { book: true } } },
+                },
+              },
+            },
+            states: {
+              include: {
+                validFromScene: {
+                  include: { chapter: { include: { book: true } } },
+                },
+              },
+            },
+          },
+          take: 200,
+        }),
+        this.prisma.relationship.findMany({
+          where: { projectId },
+          include: {
+            sourceEntity: true,
+            targetEntity: true,
+            validFromScene: {
+              include: { chapter: { include: { book: true } } },
+            },
+          },
+        }),
+        this.prisma.timelineEvent.findMany({
+          where: {
+            projectId,
             deletedAt: null,
-            chapter: { deletedAt: null, book: { deletedAt: null } },
+            ...(!broadTimelineIntent && timelineCandidateFilters.length > 0
+              ? { OR: timelineCandidateFilters }
+              : {}),
           },
-          ...(chunkCandidateFilters.length > 0
-            ? { OR: chunkCandidateFilters }
-            : {}),
-        },
-        include: {
-          scene: { include: { chapter: { include: { book: true } } } },
-        },
-        ...(countTerm || firstMentionIntent
-          ? {}
-          : { take: MAX_CHUNK_CANDIDATES }),
-      }),
-      this.prisma.entity.findMany({
-        where: { projectId, deletedAt: null, isActive: true },
-        include: {
-          facts: {
-            where: { isRetconned: false },
-            include: {
-              sourceScene: {
-                include: { chapter: { include: { book: true } } },
-              },
+          include: {
+            entities: { include: { entity: true } },
+            sourceScene: {
+              include: { chapter: { include: { book: true } } },
             },
           },
-          states: {
-            include: {
-              validFromScene: {
-                include: { chapter: { include: { book: true } } },
-              },
-            },
-          },
-        },
-        take: 200,
-      }),
-      this.prisma.relationship.findMany({
-        where: { projectId },
-        include: {
-          sourceEntity: true,
-          targetEntity: true,
-          validFromScene: {
-            include: { chapter: { include: { book: true } } },
-          },
-        },
-      }),
-      this.prisma.timelineEvent.findMany({
-        where: {
-          projectId,
-          deletedAt: null,
-          ...(!broadTimelineIntent && timelineCandidateFilters.length > 0
-            ? { OR: timelineCandidateFilters }
-            : {}),
-        },
-        include: {
-          entities: { include: { entity: true } },
-          sourceScene: {
-            include: { chapter: { include: { book: true } } },
-          },
-        },
-        orderBy: { position: 'asc' },
-      }),
-    ]);
+          orderBy: { position: 'asc' },
+        }),
+      ],
+    );
 
     const manuscriptSources = rankManuscriptSources(
       chunks,
@@ -554,11 +551,10 @@ export class ChatService {
     const rankedWikiSources = entities
       .map((entity) => {
         const facts = entity.facts.map((fact) => fact.content);
-        const states = entity.states
-          .map(
-            (state) =>
-              `${state.attributeKey}: ${state.toValue ?? state.fromValue ?? 'sin valor'}`,
-          );
+        const states = entity.states.map(
+          (state) =>
+            `${state.attributeKey}: ${state.toValue ?? state.fromValue ?? 'sin valor'}`,
+        );
         const relationshipsForEntity =
           relationshipByEntity.get(entity.id) ?? [];
         const searchable = [

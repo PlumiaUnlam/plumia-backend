@@ -57,7 +57,9 @@ describe('Chat endpoints e2e', () => {
       .expect(200)
       .expect((response) => {
         expect(responseBody<ChatThreadPageResponse>(response)).toMatchObject({
-          items: [expect.objectContaining({ id: thread.id, projectId: project.id })],
+          items: [
+            expect.objectContaining({ id: thread.id, projectId: project.id }),
+          ],
           page: 1,
           pageSize: 20,
           total: 1,
@@ -402,12 +404,19 @@ describe('Chat endpoints e2e', () => {
       .expect(200);
 
     await request(ctx.server)
-      .get(`/projects/${project.id}/chat/threads?page=1&pageSize=1&search=Maren`)
+      .get(
+        `/projects/${project.id}/chat/threads?page=1&pageSize=1&search=Maren`,
+      )
       .set(ctx.auth())
       .expect(200)
       .expect((response) => {
         expect(responseBody<ChatThreadPageResponse>(response)).toMatchObject({
-          items: [expect.objectContaining({ id: first.id, title: 'Maren y la llave' })],
+          items: [
+            expect.objectContaining({
+              id: first.id,
+              title: 'Maren y la llave',
+            }),
+          ],
           page: 1,
           pageSize: 1,
           total: 1,
