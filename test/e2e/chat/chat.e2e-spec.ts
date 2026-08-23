@@ -5,46 +5,12 @@ import {
   responseBody,
 } from '../endpoint-test-context';
 import { e2eChatGenerationMock } from '../e2e-test-utils';
-
-interface ChatSourceResponse {
-  id: string;
-  kind: string;
-  chapterId?: string;
-  sceneId?: string;
-  textQuote?: string;
-  route?: string;
-}
-
-interface ChatMessageResponse {
-  id: string;
-  role: string;
-  content: string;
-  sources: ChatSourceResponse[];
-  actions: Array<{
-    kind: string;
-    label: string;
-    description: string;
-    route: string;
-  }>;
-}
-
-interface ChatThreadResponse {
-  id: string;
-  projectId: string;
-}
-
-interface ChatThreadPageResponse {
-  items: ChatThreadResponse[];
-  page: number;
-  pageSize: number;
-  total: number;
-  hasMore: boolean;
-}
-
-interface ChatExchangeResponse {
-  userMessage: ChatMessageResponse;
-  assistantMessage: ChatMessageResponse;
-}
+import type {
+  ChatExchangeResponse,
+  ChatMessageResponse,
+  ChatThreadPageResponse,
+  ChatThreadResponse,
+} from './chat-test.types';
 
 describe('Chat endpoints e2e', () => {
   const ctx = createEndpointTestContext();
