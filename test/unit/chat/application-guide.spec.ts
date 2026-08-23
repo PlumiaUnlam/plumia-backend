@@ -11,12 +11,18 @@ describe('application guide', () => {
     ],
     ['¿Cómo abro la Wiki?', 'worldbuilding?tab=wiki'],
     ['¿Dónde están las relaciones?', 'worldbuilding?tab=relationships'],
+    [
+      '¿Dónde veo las relaciones entre los personajes?',
+      'worldbuilding?tab=relationships',
+    ],
+    ['¿Dónde veo los personajes?', 'worldbuilding?tab=wiki'],
     ['Quiero ir a los resúmenes', 'worldbuilding?tab=summaries'],
     [
       '¿Dónde veo los resúmenes de cada capítulo?',
       'worldbuilding?tab=summaries',
     ],
     ['¿Dónde está el storyboard?', 'storyboard'],
+    ['¿Cómo funcionan los modos de escritura?', 'editor'],
     ['¿Cómo reviso las estadísticas?', 'editor'],
     ['¿Dónde veo las alertas de continuidad?', 'editor'],
   ])('creates a direct navigation artifact for %s', (question, routePart) => {
@@ -38,6 +44,12 @@ describe('application guide', () => {
     expect(
       getApplicationGuidance(
         '¿Qué hechos importantes registra la línea de tiempo?',
+        projectId,
+      ),
+    ).toBeNull();
+    expect(
+      getApplicationGuidance(
+        '¿Cómo funcionan las relaciones entre los personajes?',
         projectId,
       ),
     ).toBeNull();

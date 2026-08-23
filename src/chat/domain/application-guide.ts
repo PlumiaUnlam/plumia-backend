@@ -20,7 +20,11 @@ export interface ApplicationHistoryEntry {
 const NAVIGATION_INTENT =
   /\b(?:donde|como\s+(?:puedo\s+)?(?:ver|abr(?:ir|o)|acceder|ir|usar|revis(?:ar|o)|consult(?:ar|o)|encontrar)|quiero\s+(?:ir|ver|abrir|consultar)|en que (?:lugar|seccion|pantalla)|llev(?:ame|ar(?:me)?)|mostrame|mandame|abrime)\b/i;
 const APPLICATION_HELP_INTENT =
-  /\b(?:ayuda|manual|documentacion|guia|funcionalidades?|como\s+(?:se\s+)?(?:usa|uso|usar|funciona)|para\s+que\s+sirve|que\s+(?:puedo|se\s+puede)\s+hacer)\b/i;
+  /\b(?:ayuda|manual|documentacion|guia|funcionalidades?|modos?\s+de\s+escritura|para\s+que\s+sirve|que\s+(?:puedo|se\s+puede)\s+hacer)\b/i;
+const APPLICATION_HOW_TO_INTENT =
+  /\bcomo\s+(?:se\s+)?(?:usa|uso|usar|funciona?n)\b/i;
+const APPLICATION_UI_CONTEXT =
+  /\b(?:aplicacion|plumia|editor|wiki|storyboard|tablero|linea\s+(?:de\s+tiempo|temporal)|resumenes?|historial|estadisticas?|chat|asistente|pestanas?|panel|seccion|pantalla|boton|menu|barra|interfaz|modo(?:s)?\s+de\s+escritura)\b/i;
 const FOLLOW_UP_INTENT = /^(?:[¿?¡!.,\s]*(?:y|tambien|ademas)\b)/i;
 
 const GUIDES: ApplicationGuide[] = [
@@ -56,10 +60,10 @@ const GUIDES: ApplicationGuide[] = [
   {
     patterns: [
       {
-        pattern:
-          /\b(?:wiki|fichas?|entidades?|personajes?|lugares?|objetos?)\b/i,
+        pattern: /\b(?:wiki|fichas?|entidades?|lugares?|objetos?)\b/i,
         weight: 10,
       },
+      { pattern: /\bpersonajes?\b/i, weight: 7 },
     ],
     label: 'PlumIA · Wiki del universo',
     answer:
@@ -82,7 +86,13 @@ const GUIDES: ApplicationGuide[] = [
     path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
   },
   {
-    patterns: [{ pattern: /\b(?:relaciones?|vinculos?|grafo)\b/i, weight: 10 }],
+    patterns: [
+      {
+        pattern: /\b(?:relaciones?|vinculos?)\s+(?:entre|de|con)\b/i,
+        weight: 16,
+      },
+      { pattern: /\b(?:relaciones?|vinculos?|grafo)\b/i, weight: 10 },
+    ],
     label: 'PlumIA · Relaciones',
     answer:
       'Las relaciones entre entidades están en Worldbuilding, pestaña “Relaciones”. Desde allí podés ver y mantener los vínculos registrados.',
@@ -96,6 +106,19 @@ const GUIDES: ApplicationGuide[] = [
       'Los resúmenes están en Worldbuilding, pestaña “Resúmenes”. Allí podés consultar o generar resúmenes por escena, capítulo, libro o proyecto.',
     path: (projectId) =>
       `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=summaries`,
+  },
+  {
+    patterns: [
+      { pattern: /\bmodos?\s+de\s+escritura\b/i, weight: 16 },
+      {
+        pattern: /\bmodo(?:s)?\s+(?:de\s+)?(?:creacion|revision|zen)\b/i,
+        weight: 14,
+      },
+    ],
+    label: 'PlumIA · Modos de escritura',
+    answer:
+      'Los modos de escritura se seleccionan arriba del Editor. “Creación” mantiene el editor y sus paneles de consulta, pero oculta las secciones de revisión. “Revisión” muestra las inconsistencias, relaciones y propuestas detectadas dentro de la Wiki para que puedas revisarlas. “Zen” oculta las barras laterales y el panel derecho para concentrarte en el manuscrito; la barra de formato aparece al pasar el cursor por la parte superior. Cambiar de modo solo modifica la vista actual y no cambia el contenido de tu obra.',
+    path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
   },
   {
     patterns: [
@@ -151,8 +174,7 @@ export function getApplicationGuidance(
 ): { answer: string; action: ChatAction } | null {
   const normalizedQuestion = normalizeQuestion(question);
   const isNavigationQuestion = NAVIGATION_INTENT.test(normalizedQuestion);
-  const isApplicationHelpQuestion =
-    APPLICATION_HELP_INTENT.test(normalizedQuestion);
+  const isApplicationHelpQuestion = isApplicationHelp(normalizedQuestion);
   const guide = findBestGuide(normalizedQuestion);
   const isFollowUpNavigation =
     FOLLOW_UP_INTENT.test(normalizedQuestion) &&
@@ -209,7 +231,15 @@ function isApplicationQuestion(question: string): boolean {
   const normalizedQuestion = normalizeQuestion(question);
   return (
     NAVIGATION_INTENT.test(normalizedQuestion) ||
-    APPLICATION_HELP_INTENT.test(normalizedQuestion)
+    isApplicationHelp(normalizedQuestion)
+  );
+}
+
+function isApplicationHelp(question: string): boolean {
+  return (
+    APPLICATION_HELP_INTENT.test(question) ||
+    (APPLICATION_HOW_TO_INTENT.test(question) &&
+      APPLICATION_UI_CONTEXT.test(question))
   );
 }
 

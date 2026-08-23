@@ -288,6 +288,25 @@ describe('ChatService', () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
+  it('answers known application help without treating it as work evidence', async () => {
+    const result = await service.sendMessage('user-1', thread.id, {
+      content: '¿Me explicás cómo funcionan los modos de escritura?',
+    });
+
+    expect(result.assistantMessage.content).toContain('Creación');
+    expect(result.assistantMessage.content).toContain('Revisión');
+    expect(result.assistantMessage.content).toContain('Zen');
+    expect(result.assistantMessage.sources).toEqual([]);
+    expect(result.assistantMessage.actions).toEqual([
+      expect.objectContaining({
+        kind: 'navigation',
+        route: '/projects/project-1/editor',
+      }),
+    ]);
+    expect(embeddingIndex.search).not.toHaveBeenCalled();
+    expect(generator.generate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['Hola, ¿cómo andás?', '¡Hola!'],
     ['Muchas gracias', '¡De nada!'],
