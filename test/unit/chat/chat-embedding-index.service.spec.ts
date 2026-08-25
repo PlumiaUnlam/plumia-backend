@@ -1,16 +1,16 @@
 import { ChatEmbeddingIndexService } from '../../../src/chat/chat-embedding-index.service';
 import type { EmbeddingProvider } from '../../../src/chat/ports/embedding-provider.port';
+import type { StaleChunkStore } from '../../../src/chat/ports/stale-chunk-store.port';
 import type { VectorStore } from '../../../src/chat/ports/vector-store.port';
-import type { PrismaService } from '../../../src/prisma/prisma.service';
 
 describe('ChatEmbeddingIndexService', () => {
-  let prisma: { $queryRaw: jest.Mock };
+  let staleChunkStore: jest.Mocked<StaleChunkStore>;
   let embeddingProvider: jest.Mocked<EmbeddingProvider>;
   let vectorStore: jest.Mocked<VectorStore>;
   let service: ChatEmbeddingIndexService;
 
   beforeEach(() => {
-    prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
+    staleChunkStore = { findStaleChunks: jest.fn().mockResolvedValue([]) };
     embeddingProvider = {
       model: 'gemini-embedding-2',
       isConfigured: jest.fn().mockReturnValue(true),
@@ -23,9 +23,9 @@ describe('ChatEmbeddingIndexService', () => {
       search: jest.fn().mockResolvedValue([]),
     };
     service = new ChatEmbeddingIndexService(
-      prisma as unknown as PrismaService,
       embeddingProvider,
       vectorStore,
+      staleChunkStore,
     );
   });
 
@@ -34,13 +34,13 @@ describe('ChatEmbeddingIndexService', () => {
 
     await expect(service.search('project-1', 'question')).resolves.toEqual([]);
 
-    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(staleChunkStore.findStaleChunks).not.toHaveBeenCalled();
     expect(embeddingProvider.embedQuery).not.toHaveBeenCalled();
     expect(vectorStore.search).not.toHaveBeenCalled();
   });
 
   it('indexes stale chunks by content hash before semantic search', async () => {
-    prisma.$queryRaw.mockResolvedValue([
+    staleChunkStore.findStaleChunks.mockResolvedValue([
       { id: 'chunk-1', content: 'Primer fragmento', contentHash: 'hash-1' },
       { id: 'chunk-2', content: 'Segundo fragmento', contentHash: 'hash-2' },
     ]);
@@ -79,6 +79,7 @@ describe('ChatEmbeddingIndexService', () => {
     expect(vectorStore.search).toHaveBeenCalledWith({
       projectId: 'project-1',
       embedding: [0.5, 0.6],
+      model: 'gemini-embedding-2',
       limit: 24,
     });
     expect(result[0]?.chunkId).toBe('chunk-2');
@@ -116,7 +117,7 @@ describe('ChatEmbeddingIndexService', () => {
     [
       'document embedding failure',
       () => {
-        prisma.$queryRaw.mockResolvedValue([
+        staleChunkStore.findStaleChunks.mockResolvedValue([
           { id: 'chunk-1', content: 'Texto', contentHash: 'hash-1' },
         ]);
         embeddingProvider.embedDocuments.mockRejectedValue(
@@ -146,7 +147,7 @@ describe('ChatEmbeddingIndexService', () => {
   });
 
   it('does not write partial batches when the embedding provider response is incomplete', async () => {
-    prisma.$queryRaw.mockResolvedValue([
+    staleChunkStore.findStaleChunks.mockResolvedValue([
       { id: 'chunk-1', content: 'Uno', contentHash: 'hash-1' },
       { id: 'chunk-2', content: 'Dos', contentHash: 'hash-2' },
     ]);
@@ -159,7 +160,7 @@ describe('ChatEmbeddingIndexService', () => {
   });
 
   it('coalesces concurrent indexing for the same project', async () => {
-    prisma.$queryRaw.mockResolvedValue([
+    staleChunkStore.findStaleChunks.mockResolvedValue([
       { id: 'chunk-1', content: 'Texto', contentHash: 'hash-1' },
     ]);
     let releaseEmbedding: ((value: number[][]) => void) | undefined;
@@ -177,9 +178,33 @@ describe('ChatEmbeddingIndexService', () => {
     releaseEmbedding?.([[0.1]]);
     await Promise.all([first, second]);
 
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(staleChunkStore.findStaleChunks).toHaveBeenCalledTimes(1);
     expect(embeddingProvider.embedDocuments).toHaveBeenCalledTimes(1);
     expect(vectorStore.updateChunkEmbedding).toHaveBeenCalledTimes(1);
     expect(embeddingProvider.embedQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops waiting for a shared indexing batch when the request is aborted', async () => {
+    staleChunkStore.findStaleChunks.mockResolvedValue([
+      { id: 'chunk-1', content: 'Texto', contentHash: 'hash-1' },
+    ]);
+    let releaseEmbedding: ((value: number[][]) => void) | undefined;
+    embeddingProvider.embedDocuments.mockImplementation(
+      () =>
+        new Promise<number[][]>((resolve) => {
+          releaseEmbedding = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const pending = service.search('project-1', 'consulta', controller.signal);
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(vectorStore.updateChunkEmbedding).not.toHaveBeenCalled();
+
+    releaseEmbedding?.([[0.1]]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(vectorStore.updateChunkEmbedding).toHaveBeenCalledTimes(1);
   });
 });

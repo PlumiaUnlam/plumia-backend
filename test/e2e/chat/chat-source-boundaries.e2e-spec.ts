@@ -113,15 +113,15 @@ describe('Chat source boundaries e2e', () => {
     expect(e2eChatGenerationMock.generate).not.toHaveBeenCalled();
   });
 
-  it('keeps the open editor chapter out of retrieval scope', async () => {
+  it('retrieves manuscript sources without an editor chapter scope', async () => {
     const { project, book } = await ctx.createProjectTree();
-    const futureChapter = await ctx.createChapter(book.id, '002');
-    const futureScene = await ctx.createScene(futureChapter.id, '001');
+    const otherChapter = await ctx.createChapter(book.id, '002');
+    const otherScene = await ctx.createScene(otherChapter.id, '001');
     await ctx.prisma.chunk.updateMany({
-      where: { sceneId: futureScene.id },
+      where: { sceneId: otherScene.id },
       data: {
-        content: 'El secreto solo aparece en el capítulo futuro.',
-        contentHash: 'future-chapter-hash',
+        content: 'El secreto solo aparece en el segundo capítulo.',
+        contentHash: 'other-chapter-hash',
       },
     });
     const thread = await createThread(project.id);
@@ -129,7 +129,7 @@ describe('Chat source boundaries e2e', () => {
     const response = await request(ctx.server)
       .post(`/chat/threads/${thread.id}/messages`)
       .set(ctx.auth())
-      .send({ content: '¿Qué revela el secreto del capítulo futuro?' })
+      .send({ content: '¿Qué revela el secreto del segundo capítulo?' })
       .expect(201);
     const assistant =
       responseBody<ChatExchangeResponse>(response).assistantMessage;
@@ -137,7 +137,7 @@ describe('Chat source boundaries e2e', () => {
     expect(assistant.sources).toEqual([
       expect.objectContaining({
         kind: 'manuscript',
-        chapterId: futureChapter.id,
+        chapterId: otherChapter.id,
       }),
     ]);
     expect(assistant.sources[0]?.textQuote).toContain(

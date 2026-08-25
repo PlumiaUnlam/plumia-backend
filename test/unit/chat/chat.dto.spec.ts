@@ -35,6 +35,8 @@ describe('Chat DTOs', () => {
     [{ title: '   ' }, 'title'],
     [{ title: 'x'.repeat(201) }, 'title'],
     [{ isArchived: 'true' }, 'isArchived'],
+    [{ title: null }, 'title'],
+    [{ isArchived: null }, 'isArchived'],
   ])('rejects invalid thread update %o', async (value, field) => {
     const errors = await validate(plainToInstance(UpdateChatThreadDto, value));
 

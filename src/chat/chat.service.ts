@@ -29,6 +29,10 @@ import {
   type ChatGenerationProvider,
   type ChatHistoryEntry,
 } from './ports/chat-generation-provider.port';
+import {
+  EMBEDDING_PROVIDER,
+  type EmbeddingProvider,
+} from './ports/embedding-provider.port';
 import { VECTOR_STORE } from './ports/vector-store.port';
 import type {
   VectorSearchResult,
@@ -114,6 +118,7 @@ const MAX_MANUSCRIPT_SOURCES = 14;
 const MAX_WIKI_SOURCES = 10;
 const MAX_TIMELINE_SOURCES = 20;
 const MAX_CHUNK_CANDIDATES = 80;
+const MAX_ORDERED_CHUNK_CANDIDATES = 5_000;
 const MAX_ENTITY_CANDIDATES = 40;
 const MAX_RELATIONSHIP_CANDIDATES = 80;
 const MAX_TIMELINE_CANDIDATES = 80;
@@ -217,6 +222,8 @@ export class ChatService {
     @Inject(CHAT_GENERATION_PROVIDER)
     private readonly generator: ChatGenerationProvider,
     @Inject(VECTOR_STORE) private readonly vectorStore: VectorStore,
+    @Inject(EMBEDDING_PROVIDER)
+    private readonly embeddingProvider: Pick<EmbeddingProvider, 'model'>,
     private readonly embeddingIndex: ChatEmbeddingIndexService,
   ) {}
 
@@ -225,7 +232,12 @@ export class ChatService {
     embedding: number[],
     limit = 8,
   ): Promise<VectorSearchResult[]> {
-    return this.vectorStore.search({ projectId, embedding, limit });
+    return this.vectorStore.search({
+      projectId,
+      embedding,
+      model: this.embeddingProvider.model,
+      limit,
+    });
   }
 
   async createThread(
@@ -611,9 +623,10 @@ export class ChatService {
       include: {
         scene: { include: { chapter: { include: { book: true } } } },
       },
-      ...(!plan.countTerm && !plan.firstMentionIntent
-        ? { take: MAX_CHUNK_CANDIDATES }
-        : {}),
+      take:
+        plan.countTerm || plan.firstMentionIntent
+          ? MAX_ORDERED_CHUNK_CANDIDATES
+          : MAX_CHUNK_CANDIDATES,
     };
 
     const [chunks, entities, relationships, timelineEvents] = await Promise.all(

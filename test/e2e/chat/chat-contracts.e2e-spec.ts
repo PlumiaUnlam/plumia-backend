@@ -82,16 +82,30 @@ describe('Chat conversation contracts e2e', () => {
       await request(ctx.server)
         .post(`/chat/threads/${thread.id}/messages`)
         .set(ctx.auth())
-        .send({ content: '¿Qué encontró Maren en el archivo?' })
+        .send({ content: `¿Qué encontró Maren en el archivo ${index}?` })
         .expect(201);
     }
 
+    await request(ctx.server)
+      .post(`/chat/threads/${thread.id}/messages`)
+      .set(ctx.auth())
+      .send({ content: '¿Qué cambia en el archivo?' })
+      .expect(201);
+
     const lastInput = e2eChatGenerationMock.generate.mock.calls.at(-1)?.[0];
     expect(lastInput?.history).toHaveLength(10);
-    expect(lastInput?.history[0]).toEqual(
-      expect.objectContaining({ role: 'user' }),
+    expect(lastInput?.history[0]).toEqual({
+      role: 'user',
+      content: '¿Qué encontró Maren en el archivo 1?',
+    });
+    expect(lastInput?.history).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: '¿Qué encontró Maren en el archivo 0?',
+        }),
+      ]),
     );
-    expect(e2eChatGenerationMock.generate).toHaveBeenCalledTimes(6);
+    expect(e2eChatGenerationMock.generate).toHaveBeenCalledTimes(7);
   });
 
   it('rejects invalid chat payloads and unknown fields', async () => {

@@ -1,5 +1,4 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
@@ -9,16 +8,14 @@ import {
   type VectorSearchResult,
   type VectorStore,
 } from './ports/vector-store.port';
+import {
+  STALE_CHUNK_STORE,
+  type StaleChunkStore,
+} from './ports/stale-chunk-store.port';
 
 const INDEX_BATCH_SIZE = 24;
 const SEMANTIC_RESULT_LIMIT = 24;
 const MAX_COSINE_DISTANCE = 0.55;
-
-interface StaleChunkRow {
-  id: string;
-  content: string;
-  contentHash: string;
-}
 
 @Injectable()
 export class ChatEmbeddingIndexService {
@@ -26,10 +23,11 @@ export class ChatEmbeddingIndexService {
   private readonly indexingByProject = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly prisma: PrismaService,
     @Inject(EMBEDDING_PROVIDER)
     private readonly embeddingProvider: EmbeddingProvider,
     @Inject(VECTOR_STORE) private readonly vectorStore: VectorStore,
+    @Inject(STALE_CHUNK_STORE)
+    private readonly staleChunkStore: StaleChunkStore,
   ) {}
 
   async search(
@@ -42,7 +40,7 @@ export class ChatEmbeddingIndexService {
       return [];
     }
     try {
-      await this.ensureIndexBatch(projectId);
+      await this.ensureIndexBatch(projectId, signal);
       throwIfAborted(signal);
       const queryEmbedding = signal
         ? await this.embeddingProvider.embedQuery(question, signal)
@@ -51,6 +49,7 @@ export class ChatEmbeddingIndexService {
       const matches = await this.vectorStore.search({
         projectId,
         embedding: queryEmbedding,
+        model: this.embeddingProvider.model,
         limit: SEMANTIC_RESULT_LIMIT,
       });
       throwIfAborted(signal);
@@ -72,41 +71,32 @@ export class ChatEmbeddingIndexService {
     }
   }
 
-  private async ensureIndexBatch(projectId: string): Promise<void> {
-    const running = this.indexingByProject.get(projectId);
-    if (running) {
-      await running;
-      return;
+  private async ensureIndexBatch(
+    projectId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    let indexing = this.indexingByProject.get(projectId);
+    if (!indexing) {
+      indexing = this.indexNextBatch(projectId);
+      this.indexingByProject.set(projectId, indexing);
+      void indexing
+        .finally(() => {
+          if (this.indexingByProject.get(projectId) === indexing) {
+            this.indexingByProject.delete(projectId);
+          }
+        })
+        .catch(() => undefined);
     }
-    const indexing = this.indexNextBatch(projectId);
-    this.indexingByProject.set(projectId, indexing);
-    try {
-      await indexing;
-    } finally {
-      if (this.indexingByProject.get(projectId) === indexing) {
-        this.indexingByProject.delete(projectId);
-      }
-    }
+    await waitForAbort(indexing, signal);
   }
 
   private async indexNextBatch(projectId: string): Promise<void> {
     const model = this.embeddingProvider.model;
-    const chunks = await this.prisma.$queryRaw<StaleChunkRow[]>`
-      SELECT
-        "id",
-        "content",
-        "content_hash" AS "contentHash"
-      FROM "chunk"
-      WHERE "project_id" = ${projectId}::uuid
-        AND "content_hash" IS NOT NULL
-        AND (
-          "embedding" IS NULL
-          OR "embedding_content_hash" IS DISTINCT FROM "content_hash"
-          OR "embedding_model" IS DISTINCT FROM ${model}
-        )
-      ORDER BY "updated_at" DESC
-      LIMIT ${INDEX_BATCH_SIZE}
-    `;
+    const chunks = await this.staleChunkStore.findStaleChunks(
+      projectId,
+      model,
+      INDEX_BATCH_SIZE,
+    );
     if (chunks.length === 0) {
       return;
     }
@@ -132,6 +122,38 @@ export class ChatEmbeddingIndexService {
       }),
     );
   }
+}
+
+async function waitForAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    throw createAbortError();
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => {
+      cleanup();
+      reject(createAbortError());
+    };
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', abort);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

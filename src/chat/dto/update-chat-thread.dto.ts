@@ -1,19 +1,19 @@
 import {
   IsBoolean,
-  IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 export class UpdateChatThreadDto {
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
   @IsString()
   @MaxLength(200)
   @Matches(/\S/, { message: 'title must include visible text' })
   title?: string;
 
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
   @IsBoolean()
   isArchived?: boolean;
 }

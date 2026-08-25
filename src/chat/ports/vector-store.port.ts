@@ -8,6 +8,7 @@ export interface ChunkUpsertInput {
   sceneId: string;
   content: string;
   embedding: number[];
+  model: string;
   tokenCount: number;
   chunkIndex: number;
   contentHash?: string | null;
@@ -16,6 +17,7 @@ export interface ChunkUpsertInput {
 export interface VectorSearchInput {
   projectId: string;
   embedding: number[];
+  model: string;
   limit: number;
 }
 

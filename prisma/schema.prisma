@@ -711,6 +711,7 @@ model Chunk {
   @@unique([sceneId, chunkIndex])
   @@index([sceneId], map: "idx_chunk_scene")
   @@index([isDirty], map: "idx_chunk_dirty")
+  @@index([projectId, updatedAt], map: "idx_chunk_project_updated")
   @@index([projectId, embeddingContentHash, embeddingModel], map: "idx_chunk_embedding_freshness")
   @@map("chunk")
 }

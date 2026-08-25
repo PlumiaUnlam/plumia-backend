@@ -264,15 +264,15 @@ describe('Chat endpoints e2e', () => {
     expect(e2eChatGenerationMock.generate).not.toHaveBeenCalled();
   });
 
-  it('does not link retrieval to the chapter open in the editor', async () => {
+  it('retrieves from the full manuscript independently of the editor context', async () => {
     const { project, book } = await ctx.createProjectTree();
-    const futureChapter = await ctx.createChapter(book.id, '002');
-    const futureScene = await ctx.createScene(futureChapter.id, '001');
+    const otherChapter = await ctx.createChapter(book.id, '002');
+    const otherScene = await ctx.createScene(otherChapter.id, '001');
     await ctx.prisma.chunk.updateMany({
-      where: { sceneId: futureScene.id },
+      where: { sceneId: otherScene.id },
       data: {
         content: 'Xytherion revela que Maren es la heredera perdida.',
-        contentHash: 'future-secret-hash',
+        contentHash: 'other-chapter-secret-hash',
       },
     });
     const thread = await createThread(project.id);
@@ -289,7 +289,7 @@ describe('Chat endpoints e2e', () => {
         expect(exchange.assistantMessage.sources).toEqual([
           expect.objectContaining({
             kind: 'manuscript',
-            chapterId: futureChapter.id,
+            chapterId: otherChapter.id,
           }),
         ]);
       });

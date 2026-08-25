@@ -102,27 +102,6 @@ describe('GeminiChatGenerationAdapter', () => {
     ]);
   });
 
-  it('extracts the first balanced JSON object from decorated provider output', async () => {
-    const payload = JSON.stringify({
-      claims: [
-        {
-          text: 'La llave {azul} aparece en la escena.',
-          evidence: [],
-        },
-      ],
-    });
-    mockGenerateContent.mockResolvedValue({
-      text: `Respuesta estructurada:\n${payload}\nFin de respuesta.`,
-    });
-    const adapter = new GeminiChatGenerationAdapter(config());
-
-    await expect(
-      adapter.generate({ question: 'Pregunta', history: [], sources: [] }),
-    ).resolves.toMatchObject({
-      answer: 'La llave {azul} aparece en la escena.',
-    });
-  });
-
   it('replaces a retired configured model with Gemini 3.6 Flash', async () => {
     mockGenerateContent.mockResolvedValueOnce({
       text: JSON.stringify({

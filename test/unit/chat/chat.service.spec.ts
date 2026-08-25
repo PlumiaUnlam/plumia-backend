@@ -4,6 +4,7 @@ import type { PrismaService } from '../../../src/prisma/prisma.service';
 import type { ChatEmbeddingIndexService } from '../../../src/chat/chat-embedding-index.service';
 import { ChatService } from '../../../src/chat/chat.service';
 import type { ChatGenerationProvider } from '../../../src/chat/ports/chat-generation-provider.port';
+import type { EmbeddingProvider } from '../../../src/chat/ports/embedding-provider.port';
 import type { VectorStore } from '../../../src/chat/ports/vector-store.port';
 
 describe('ChatService', () => {
@@ -19,6 +20,7 @@ describe('ChatService', () => {
 
   let prisma: PrismaService;
   let generator: jest.Mocked<ChatGenerationProvider>;
+  let embeddingProvider: Pick<EmbeddingProvider, 'model'>;
   let vectorStore: jest.Mocked<VectorStore>;
   let embeddingIndex: jest.Mocked<Pick<ChatEmbeddingIndexService, 'search'>>;
   let service: ChatService;
@@ -30,6 +32,7 @@ describe('ChatService', () => {
     prismaMock = createPrismaClient(tx);
     prisma = prismaMock as unknown as PrismaService;
     generator = { generate: jest.fn() };
+    embeddingProvider = { model: 'gemini-embedding-2' };
     vectorStore = {
       upsertChunk: jest.fn(),
       updateChunkEmbedding: jest.fn(),
@@ -40,6 +43,7 @@ describe('ChatService', () => {
       prisma,
       generator,
       vectorStore,
+      embeddingProvider,
       embeddingIndex as unknown as ChatEmbeddingIndexService,
     );
 
@@ -320,7 +324,7 @@ describe('ChatService', () => {
     const chunkCalls = prismaMock.chunk.findMany.mock.calls as Array<
       [{ take?: unknown }]
     >;
-    expect(chunkCalls.at(-1)?.[0]).not.toHaveProperty('take');
+    expect(chunkCalls.at(-1)?.[0]).toHaveProperty('take', 5_000);
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
@@ -643,7 +647,7 @@ describe('ChatService', () => {
     const chunkCalls = prismaMock.chunk.findMany.mock.calls as Array<
       [{ take?: unknown }]
     >;
-    expect(chunkCalls.at(-1)?.[0]).not.toHaveProperty('take');
+    expect(chunkCalls.at(-1)?.[0]).toHaveProperty('take', 5_000);
   });
 
   it('does not use an editor chapter as a retrieval ceiling', async () => {
