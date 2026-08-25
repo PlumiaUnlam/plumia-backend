@@ -362,7 +362,10 @@ function isWordCharacter(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
-  const code = value.charCodeAt(0);
+  const code = value.codePointAt(0);
+  if (code === undefined) {
+    return false;
+  }
   return (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
 }
 
