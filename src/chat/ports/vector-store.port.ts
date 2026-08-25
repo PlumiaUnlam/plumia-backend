@@ -8,6 +8,7 @@ export interface ChunkUpsertInput {
   sceneId: string;
   content: string;
   embedding: number[];
+  model: string;
   tokenCount: number;
   chunkIndex: number;
   contentHash?: string | null;
@@ -16,6 +17,7 @@ export interface ChunkUpsertInput {
 export interface VectorSearchInput {
   projectId: string;
   embedding: number[];
+  model: string;
   limit: number;
 }
 
@@ -27,7 +29,15 @@ export interface VectorSearchResult {
   distance: number;
 }
 
+export interface ChunkEmbeddingUpdateInput {
+  chunkId: string;
+  embedding: number[];
+  contentHash: string;
+  model: string;
+}
+
 export interface VectorStore {
   upsertChunk(input: ChunkUpsertInput): Promise<void>;
+  updateChunkEmbedding(input: ChunkEmbeddingUpdateInput): Promise<void>;
   search(input: VectorSearchInput): Promise<VectorSearchResult[]>;
 }

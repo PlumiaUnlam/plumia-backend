@@ -2,6 +2,7 @@ generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
 }
+
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
@@ -143,30 +144,30 @@ enum ImageGenerationJobStatus {
 // ============================================================
 
 model User {
-  id           String    @id                               // Firebase uid
-  name         String
-  lastname     String
-  email        String    @unique
-  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt    DateTime  @updatedAt @db.Timestamptz(6)
+  id          String    @id // Firebase uid
+  name        String
+  lastname    String
+  email       String    @unique
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
   // --- campos agregados desde la doc ---
-  displayName  String?   @map("display_name") @db.VarChar(100)
-  avatarUrl    String?   @map("avatar_url") @db.VarChar(500)
-  role         UserRole  @default(AUTHOR)
-  plan         PlanType  @default(FREE)
-  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  displayName String?   @map("display_name") @db.VarChar(100)
+  avatarUrl   String?   @map("avatar_url") @db.VarChar(500)
+  role        UserRole  @default(AUTHOR)
+  plan        PlanType  @default(FREE)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  apiKeys           UserApiKey[]
-  tokenLedgers      TokenLedger[]
-  subscription      Subscription?
-  projects          Project[]
-  reviewedProposals EntityProposal[] @relation("ProposalReviewer")
+  apiKeys                       UserApiKey[]
+  tokenLedgers                  TokenLedger[]
+  subscription                  Subscription?
+  projects                      Project[]
+  reviewedProposals             EntityProposal[]       @relation("ProposalReviewer")
   reviewedRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalReviewer")
-  resolvedAlerts    AuditAlert[]     @relation("AlertResolver")
-  exportJobs        ExportJob[]
-  writingSessions   WritingSession[]
-  writingGoals      WritingGoal[]
-  imageGenerationJobs ImageGenerationJob[]
+  resolvedAlerts                AuditAlert[]           @relation("AlertResolver")
+  exportJobs                    ExportJob[]
+  writingSessions               WritingSession[]
+  writingGoals                  WritingGoal[]
+  imageGenerationJobs           ImageGenerationJob[]
 }
 
 model UserApiKey {
@@ -242,27 +243,27 @@ model Project {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  books               Book[]
-  entities            Entity[]
-  relationships       Relationship[]
-  entityProposals     EntityProposal[]
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  books                 Book[]
+  entities              Entity[]
+  relationships         Relationship[]
+  entityProposals       EntityProposal[]
   relationshipProposals RelationshipProposal[]
-  auditAlerts         AuditAlert[]
-  auditFalsePositives AuditFalsePositive[]
-  chatThreads         ChatThread[]
-  chunks              Chunk[]
-  summaries           Summary[]
+  auditAlerts           AuditAlert[]
+  auditFalsePositives   AuditFalsePositive[]
+  chatThreads           ChatThread[]
+  chunks                Chunk[]
+  summaries             Summary[]
   summaryGenerationJobs SummaryGenerationJob[]
-  versions            Version[]
-  exportJobs          ExportJob[]
-  storyboardNotes     StoryboardNote[]
-  storyboardArcs      StoryboardArc[]
-  shareLinks          ShareLink[]
-  writingSessions     WritingSession[]
-  writingGoals        WritingGoal[]
-  tokenLedgers        TokenLedger[]
-  timelineEvents      TimelineEvent[]
+  versions              Version[]
+  exportJobs            ExportJob[]
+  storyboardNotes       StoryboardNote[]
+  storyboardArcs        StoryboardArc[]
+  shareLinks            ShareLink[]
+  writingSessions       WritingSession[]
+  writingGoals          WritingGoal[]
+  tokenLedgers          TokenLedger[]
+  timelineEvents        TimelineEvent[]
 
   @@index([userId], map: "idx_project_user")
   @@index([status], map: "idx_project_status")
@@ -300,7 +301,6 @@ model Chapter {
 
   book            Book             @relation(fields: [bookId], references: [id], onDelete: Cascade)
   scenes          Scene[]
-  chatThreads     ChatThread[]
   storyboardNotes StoryboardNote[]
   readerComments  ReaderComment[]
 
@@ -325,21 +325,21 @@ model Scene {
   updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt      DateTime?   @map("deleted_at") @db.Timestamptz(6)
 
-  chapter         Chapter          @relation(fields: [chapterId], references: [id], onDelete: Cascade)
-  povCharacter    Entity?          @relation("ScenePov", fields: [povCharacterId], references: [id])
-  chunks          Chunk[]
-  statesValidFrom EntityState[]    @relation("EntityStateValidFrom")
-  statesValidTo   EntityState[]    @relation("EntityStateValidTo")
-  facts           Fact[]
-  relsValidFrom   Relationship[]   @relation("RelationshipValidFrom")
-  relsValidTo     Relationship[]   @relation("RelationshipValidTo")
-  auditAlerts     AuditAlert[]
-  entityProposals EntityProposal[]
+  chapter               Chapter                @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  povCharacter          Entity?                @relation("ScenePov", fields: [povCharacterId], references: [id])
+  chunks                Chunk[]
+  statesValidFrom       EntityState[]          @relation("EntityStateValidFrom")
+  statesValidTo         EntityState[]          @relation("EntityStateValidTo")
+  facts                 Fact[]
+  relsValidFrom         Relationship[]         @relation("RelationshipValidFrom")
+  relsValidTo           Relationship[]         @relation("RelationshipValidTo")
+  auditAlerts           AuditAlert[]
+  entityProposals       EntityProposal[]
   relationshipProposals RelationshipProposal[]
-  readerComments  ReaderComment[]
-  writingSessions WritingSession[]
-  versions         SceneVersion[]
-  sourceTimelineEvents TimelineEvent[] @relation("TimelineEventSourceScene")
+  readerComments        ReaderComment[]
+  writingSessions       WritingSession[]
+  versions              SceneVersion[]
+  sourceTimelineEvents  TimelineEvent[]        @relation("TimelineEventSourceScene")
 
   @@unique([chapterId, sortKey])
   @@index([chapterId], map: "idx_scene_chapter")
@@ -389,19 +389,19 @@ model Entity {
   updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt        DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
-  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  povScenes       Scene[]          @relation("ScenePov")
-  states          EntityState[]
-  facts           Fact[]           @relation("FactEntity")
-  narratedFacts   Fact[]           @relation("FactNarrator")
-  relsAsSource    Relationship[]   @relation("RelationshipSource")
-  relsAsTarget    Relationship[]   @relation("RelationshipTarget")
-  proposals       EntityProposal[]
+  project                     Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  povScenes                   Scene[]                @relation("ScenePov")
+  states                      EntityState[]
+  facts                       Fact[]                 @relation("FactEntity")
+  narratedFacts               Fact[]                 @relation("FactNarrator")
+  relsAsSource                Relationship[]         @relation("RelationshipSource")
+  relsAsTarget                Relationship[]         @relation("RelationshipTarget")
+  proposals                   EntityProposal[]
   sourceRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalSourceEntity")
   targetRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalTargetEntity")
-  generatedImages GeneratedImage[]
-  imageGenerationJobs ImageGenerationJob[]
-  timelineEvents  TimelineEventEntity[]
+  generatedImages             GeneratedImage[]
+  imageGenerationJobs         ImageGenerationJob[]
+  timelineEvents              TimelineEventEntity[]
 
   @@index([projectId], map: "idx_entity_project")
   @@index([type], map: "idx_entity_type")
@@ -469,11 +469,11 @@ model Relationship {
   createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  project        Project @relation(fields: [projectId], references: [id])
-  sourceEntity   Entity  @relation("RelationshipSource", fields: [sourceEntityId], references: [id])
-  targetEntity   Entity  @relation("RelationshipTarget", fields: [targetEntityId], references: [id])
-  validFromScene Scene?  @relation("RelationshipValidFrom", fields: [validFromSceneId], references: [id])
-  validToScene   Scene?  @relation("RelationshipValidTo", fields: [validToSceneId], references: [id])
+  project        Project                @relation(fields: [projectId], references: [id])
+  sourceEntity   Entity                 @relation("RelationshipSource", fields: [sourceEntityId], references: [id])
+  targetEntity   Entity                 @relation("RelationshipTarget", fields: [targetEntityId], references: [id])
+  validFromScene Scene?                 @relation("RelationshipValidFrom", fields: [validFromSceneId], references: [id])
+  validToScene   Scene?                 @relation("RelationshipValidTo", fields: [validToSceneId], references: [id])
   proposals      RelationshipProposal[]
 
   @@unique([sourceEntityId, targetEntityId, relationType, validFromSceneId])
@@ -501,10 +501,10 @@ model TimelineEvent {
   updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt       DateTime?      @map("deleted_at") @db.Timestamptz(6)
 
-  project      Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  storyboardArc StoryboardArc?      @relation(fields: [storyboardArcId], references: [id], onDelete: SetNull)
-  sourceScene  Scene?               @relation("TimelineEventSourceScene", fields: [sourceSceneId], references: [id], onDelete: SetNull)
-  entities     TimelineEventEntity[]
+  project       Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  storyboardArc StoryboardArc?        @relation(fields: [storyboardArcId], references: [id], onDelete: SetNull)
+  sourceScene   Scene?                @relation("TimelineEventSourceScene", fields: [sourceSceneId], references: [id], onDelete: SetNull)
+  entities      TimelineEventEntity[]
 
   @@index([projectId, position], map: "idx_timeline_event_project_position")
   @@index([projectId, impact], map: "idx_timeline_event_project_impact")
@@ -541,11 +541,11 @@ model EntityProposal {
   reviewedAt       DateTime?      @map("reviewed_at") @db.Timestamptz(6)
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  project    Project @relation(fields: [projectId], references: [id])
-  scene      Scene   @relation(fields: [sceneId], references: [id])
-  sourceChunk Chunk?  @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
-  entity     Entity? @relation(fields: [entityId], references: [id])
-  reviewedBy User?   @relation("ProposalReviewer", fields: [reviewedById], references: [id])
+  project                     Project                @relation(fields: [projectId], references: [id])
+  scene                       Scene                  @relation(fields: [sceneId], references: [id])
+  sourceChunk                 Chunk?                 @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
+  entity                      Entity?                @relation(fields: [entityId], references: [id])
+  reviewedBy                  User?                  @relation("ProposalReviewer", fields: [reviewedById], references: [id])
   sourceRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalSourceEntityProposal")
   targetRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalTargetEntityProposal")
 
@@ -557,35 +557,35 @@ model EntityProposal {
 }
 
 model RelationshipProposal {
-  id                 String         @id @default(uuid()) @db.Uuid
-  projectId          String         @map("project_id") @db.Uuid
-  sceneId            String         @map("scene_id") @db.Uuid
-  sourceChunkId      String?        @map("source_chunk_id") @db.Uuid
-  relationshipId     String?        @map("relationship_id") @db.Uuid
-  sourceEntityId     String?        @map("source_entity_id") @db.Uuid
-  targetEntityId     String?        @map("target_entity_id") @db.Uuid
-  sourceEntityProposalId String?    @map("source_entity_proposal_id") @db.Uuid
-  targetEntityProposalId String?    @map("target_entity_proposal_id") @db.Uuid
-  relationType       RelationType   @map("relation_type")
-  description        String?
-  intensity          Decimal        @default(0.0) @db.Decimal(3, 2)
-  evidence           Json           @default("[]") @db.JsonB
-  status             ProposalStatus @default(PENDING)
-  resolutionReason   String?        @map("resolution_reason")
-  reviewedById       String?        @map("reviewed_by_id")
-  reviewedAt         DateTime?      @map("reviewed_at") @db.Timestamptz(6)
-  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                     String         @id @default(uuid()) @db.Uuid
+  projectId              String         @map("project_id") @db.Uuid
+  sceneId                String         @map("scene_id") @db.Uuid
+  sourceChunkId          String?        @map("source_chunk_id") @db.Uuid
+  relationshipId         String?        @map("relationship_id") @db.Uuid
+  sourceEntityId         String?        @map("source_entity_id") @db.Uuid
+  targetEntityId         String?        @map("target_entity_id") @db.Uuid
+  sourceEntityProposalId String?        @map("source_entity_proposal_id") @db.Uuid
+  targetEntityProposalId String?        @map("target_entity_proposal_id") @db.Uuid
+  relationType           RelationType   @map("relation_type")
+  description            String?
+  intensity              Decimal        @default(0.0) @db.Decimal(3, 2)
+  evidence               Json           @default("[]") @db.JsonB
+  status                 ProposalStatus @default(PENDING)
+  resolutionReason       String?        @map("resolution_reason")
+  reviewedById           String?        @map("reviewed_by_id")
+  reviewedAt             DateTime?      @map("reviewed_at") @db.Timestamptz(6)
+  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  project             Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  scene               Scene             @relation(fields: [sceneId], references: [id], onDelete: Cascade)
-  sourceChunk         Chunk?            @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
-  relationship        Relationship?     @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
-  sourceEntity        Entity?           @relation("RelationshipProposalSourceEntity", fields: [sourceEntityId], references: [id], onDelete: SetNull)
-  targetEntity        Entity?           @relation("RelationshipProposalTargetEntity", fields: [targetEntityId], references: [id], onDelete: SetNull)
-  sourceEntityProposal EntityProposal?  @relation("RelationshipProposalSourceEntityProposal", fields: [sourceEntityProposalId], references: [id], onDelete: SetNull)
-  targetEntityProposal EntityProposal?  @relation("RelationshipProposalTargetEntityProposal", fields: [targetEntityProposalId], references: [id], onDelete: SetNull)
-  reviewedBy          User?             @relation("RelationshipProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  project              Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene                Scene           @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  sourceChunk          Chunk?          @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
+  relationship         Relationship?   @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
+  sourceEntity         Entity?         @relation("RelationshipProposalSourceEntity", fields: [sourceEntityId], references: [id], onDelete: SetNull)
+  targetEntity         Entity?         @relation("RelationshipProposalTargetEntity", fields: [targetEntityId], references: [id], onDelete: SetNull)
+  sourceEntityProposal EntityProposal? @relation("RelationshipProposalSourceEntityProposal", fields: [sourceEntityProposalId], references: [id], onDelete: SetNull)
+  targetEntityProposal EntityProposal? @relation("RelationshipProposalTargetEntityProposal", fields: [targetEntityProposalId], references: [id], onDelete: SetNull)
+  reviewedBy           User?           @relation("RelationshipProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   @@index([projectId, status], map: "idx_relationship_proposal_project_status")
   @@index([relationshipId], map: "idx_relationship_proposal_relationship")
@@ -655,18 +655,15 @@ model AuditFalsePositive {
 // ============================================================
 
 model ChatThread {
-  id                 String   @id @default(uuid()) @db.Uuid
-  projectId          String   @map("project_id") @db.Uuid
-  title              String   @default("Nueva conversacion") @db.VarChar(200)
-  isArchived         Boolean  @default(false) @map("is_archived")
-  antiSpoilerEnabled Boolean  @default(true) @map("anti_spoiler_enabled")
-  currentChapterId   String?  @map("current_chapter_id") @db.Uuid
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id         String   @id @default(uuid()) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  title      String   @default("Nueva conversacion") @db.VarChar(200)
+  isArchived Boolean  @default(false) @map("is_archived")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  currentChapter Chapter?      @relation(fields: [currentChapterId], references: [id])
-  messages       ChatMessage[]
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
 
   @@index([projectId], map: "idx_thread_project")
   @@index([isArchived], map: "idx_thread_archived")
@@ -679,6 +676,7 @@ model ChatMessage {
   role         String   @db.VarChar(20)
   content      String
   sources      Json?    @db.JsonB
+  actions      Json?    @db.JsonB
   inputTokens  Int?     @map("input_tokens")
   outputTokens Int?     @map("output_tokens")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -691,70 +689,74 @@ model ChatMessage {
 }
 
 model Chunk {
-  id          String                       @id @default(uuid()) @db.Uuid
-  projectId   String                       @map("project_id") @db.Uuid
-  sceneId     String                       @map("scene_id") @db.Uuid
-  content     String
-  embedding   Unsupported("vector(1536)")?
-  tokenCount  Int                          @map("token_count")
-  chunkIndex  Int                          @map("chunk_index")
-  isDirty     Boolean                      @default(false) @map("is_dirty")
-  contentHash String?                      @map("content_hash") @db.VarChar(64)
-  createdAt   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                   String                       @id @default(uuid()) @db.Uuid
+  projectId            String                       @map("project_id") @db.Uuid
+  sceneId              String                       @map("scene_id") @db.Uuid
+  content              String
+  embedding            Unsupported("vector(1536)")?
+  tokenCount           Int                          @map("token_count")
+  chunkIndex           Int                          @map("chunk_index")
+  isDirty              Boolean                      @default(false) @map("is_dirty")
+  contentHash          String?                      @map("content_hash") @db.VarChar(64)
+  embeddingContentHash String?                      @map("embedding_content_hash") @db.VarChar(64)
+  embeddingModel       String?                      @map("embedding_model") @db.VarChar(100)
+  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  project Project @relation(fields: [projectId], references: [id])
-  scene   Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
-  proposals EntityProposal[]
+  project               Project                @relation(fields: [projectId], references: [id])
+  scene                 Scene                  @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  proposals             EntityProposal[]
   relationshipProposals RelationshipProposal[]
 
   @@unique([sceneId, chunkIndex])
   @@index([sceneId], map: "idx_chunk_scene")
   @@index([isDirty], map: "idx_chunk_dirty")
+  @@index([projectId, updatedAt], map: "idx_chunk_project_updated")
+  @@index([projectId, embeddingContentHash, embeddingModel], map: "idx_chunk_embedding_freshness")
   @@map("chunk")
 }
 
 model Summary {
-  id              String   @id @default(uuid()) @db.Uuid
-  projectId       String   @map("project_id") @db.Uuid
-  parentSummaryId String?  @map("parent_summary_id") @db.Uuid
-  scopeType       String   @map("scope_type") @db.VarChar(20)
-  scopeId         String   @map("scope_id") @db.Uuid
-  title           String?  @db.VarChar(300)
-  content         String
-  source          String   @default("ai_generated") @db.VarChar(20)
-  sourceContentHash String? @map("source_content_hash") @db.VarChar(64)
-  provider        String?  @db.VarChar(50)
-  model           String?  @db.VarChar(100)
-  isDirty         Boolean  @default(false) @map("is_dirty")
-  tokenCount      Int?     @map("token_count")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                String   @id @default(uuid()) @db.Uuid
+  projectId         String   @map("project_id") @db.Uuid
+  parentSummaryId   String?  @map("parent_summary_id") @db.Uuid
+  scopeType         String   @map("scope_type") @db.VarChar(20)
+  scopeId           String   @map("scope_id") @db.Uuid
+  title             String?  @db.VarChar(300)
+  content           String
+  source            String   @default("ai_generated") @db.VarChar(20)
+  sourceContentHash String?  @map("source_content_hash") @db.VarChar(64)
+  provider          String?  @db.VarChar(50)
+  model             String?  @db.VarChar(100)
+  isDirty           Boolean  @default(false) @map("is_dirty")
+  tokenCount        Int?     @map("token_count")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   project  Project   @relation(fields: [projectId], references: [id])
   parent   Summary?  @relation("SummaryParent", fields: [parentSummaryId], references: [id])
   children Summary[] @relation("SummaryParent")
 
-  @@index([projectId], map: "idx_summary_project")
   @@unique([scopeType, scopeId], map: "uq_summary_scope")
+  @@index([projectId], map: "idx_summary_project")
   @@index([isDirty], map: "idx_summary_dirty")
   @@map("summary")
 }
 
 model SummaryGenerationJob {
-  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  projectId       String           @map("project_id") @db.Uuid
-  scopeType       String           @map("scope_type") @db.VarChar(20)
-  scopeId         String           @map("scope_id") @db.Uuid
-  inputHash       String           @map("input_hash") @db.VarChar(64)
-  status          SummaryJobStatus @default(QUEUED)
-  progress        Int              @default(0)
-  force           Boolean          @default(false)
-  bullJobId       String?          @map("bull_job_id") @db.VarChar(150)
-  errorMessage    String?          @map("error_message")
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  startedAt       DateTime?        @map("started_at") @db.Timestamptz(6)
-  completedAt     DateTime?        @map("completed_at") @db.Timestamptz(6)
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String           @map("project_id") @db.Uuid
+  scopeType    String           @map("scope_type") @db.VarChar(20)
+  scopeId      String           @map("scope_id") @db.Uuid
+  inputHash    String           @map("input_hash") @db.VarChar(64)
+  status       SummaryJobStatus @default(QUEUED)
+  progress     Int              @default(0)
+  force        Boolean          @default(false)
+  bullJobId    String?          @map("bull_job_id") @db.VarChar(150)
+  errorMessage String?          @map("error_message")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt    DateTime?        @map("started_at") @db.Timestamptz(6)
+  completedAt  DateTime?        @map("completed_at") @db.Timestamptz(6)
 
   project Project @relation(fields: [projectId], references: [id])
 
@@ -822,7 +824,7 @@ model GeneratedImage {
   isPrimary  Boolean  @default(false) @map("is_primary")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  entity        Entity              @relation(fields: [entityId], references: [id], onDelete: Cascade)
   generationJob ImageGenerationJob?
 
   @@index([entityId], map: "idx_image_entity")
@@ -850,8 +852,8 @@ model ImageGenerationJob {
   startedAt         DateTime?                @map("started_at") @db.Timestamptz(6)
   completedAt       DateTime?                @map("completed_at") @db.Timestamptz(6)
 
-  entity         Entity         @relation(fields: [entityId], references: [id], onDelete: Cascade)
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entity         Entity          @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   generatedImage GeneratedImage? @relation(fields: [generatedImageId], references: [id], onDelete: SetNull)
 
   @@index([entityId, createdAt], map: "idx_image_job_entity_created")
@@ -861,22 +863,22 @@ model ImageGenerationJob {
 }
 
 model StoryboardNote {
-  id                String   @id @default(uuid()) @db.Uuid
-  projectId         String   @map("project_id") @db.Uuid
-  chapterId         String?  @map("chapter_id") @db.Uuid
-  title             String   @default("Untitled scene") @db.VarChar(200)
+  id                String    @id @default(uuid()) @db.Uuid
+  projectId         String    @map("project_id") @db.Uuid
+  chapterId         String?   @map("chapter_id") @db.Uuid
+  title             String    @default("Untitled scene") @db.VarChar(200)
   content           String
-  status            String   @default("ideas") @db.VarChar(50)
-  tags              String[] @default([])
-  characters        String[] @default([])
-  color             String   @default("#7c4dff") @db.VarChar(7)
-  entityIds         String[] @default([]) @map("entity_ids") @db.Uuid
-  noteType          String   @default("text") @map("note_type") @db.VarChar(20)
-  audioStorageKey   String?  @map("audio_storage_key") @db.VarChar(500)
-  audioDurationSecs Int?     @map("audio_duration_secs")
-  sortKey           String   @map("sort_key") @db.VarChar(50)
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  status            String    @default("ideas") @db.VarChar(50)
+  tags              String[]  @default([])
+  characters        String[]  @default([])
+  color             String    @default("#7c4dff") @db.VarChar(7)
+  entityIds         String[]  @default([]) @map("entity_ids") @db.Uuid
+  noteType          String    @default("text") @map("note_type") @db.VarChar(20)
+  audioStorageKey   String?   @map("audio_storage_key") @db.VarChar(500)
+  audioDurationSecs Int?      @map("audio_duration_secs")
+  sortKey           String    @map("sort_key") @db.VarChar(50)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   project Project  @relation(fields: [projectId], references: [id])
@@ -901,8 +903,8 @@ model StoryboardArc {
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  notes   StoryboardMatrixNote[]
+  project        Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  notes          StoryboardMatrixNote[]
   timelineEvents TimelineEvent[]
 
   @@index([projectId], map: "idx_storyboard_arc_project")
