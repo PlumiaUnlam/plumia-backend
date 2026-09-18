@@ -8,6 +8,9 @@ import { EntityProposalsController } from './controllers/entity-proposals.contro
 import { RelationshipProposalsController } from './controllers/relationship-proposals.controller';
 import { RelationshipsController } from './controllers/relationships.controller';
 import { TimelineController } from './controllers/timeline.controller';
+import { EntityStatesController } from './controllers/entity-states.controller';
+import { EntityStateProposalsController } from './controllers/entity-state-proposals.controller';
+import { TemporalViewController } from './controllers/temporal-view.controller';
 import { KnowledgeController } from './knowledge.controller';
 import { KnowledgeService } from './knowledge.service';
 import { EntityProposalService } from './services/entity-proposal.service';
@@ -16,8 +19,11 @@ import { ENTITY_REPOSITORY } from './ports/entity-repository.port';
 import { ENTITY_SEARCH } from './ports/entity-search.port';
 import { RELATIONSHIP_REPOSITORY } from './ports/relationship-repository.port';
 import { TIMELINE_EVENT_REPOSITORY } from './ports/timeline-event-repository.port';
+import { TemporalStateService } from './services/temporal-state.service';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
+  imports: [AuditModule],
   controllers: [
     KnowledgeController,
     EntitiesController,
@@ -25,11 +31,15 @@ import { TIMELINE_EVENT_REPOSITORY } from './ports/timeline-event-repository.por
     RelationshipProposalsController,
     RelationshipsController,
     TimelineController,
+    EntityStatesController,
+    EntityStateProposalsController,
+    TemporalViewController,
   ],
   providers: [
     KnowledgeService,
     EntityProposalService,
     RelationshipProposalService,
+    TemporalStateService,
     { provide: ENTITY_SEARCH, useClass: PgEntitySearch },
     { provide: ENTITY_REPOSITORY, useClass: PrismaEntityRepository },
     {
@@ -41,6 +51,6 @@ import { TIMELINE_EVENT_REPOSITORY } from './ports/timeline-event-repository.por
       useClass: PrismaTimelineEventRepository,
     },
   ],
-  exports: [KnowledgeService],
+  exports: [KnowledgeService, TemporalStateService],
 })
 export class KnowledgeModule {}

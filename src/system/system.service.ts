@@ -121,7 +121,7 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
       where: {
         processedAt: null,
         aggregateType: 'Scene',
-        eventType: 'scene_changed',
+        eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
       },
       orderBy: { createdAt: 'asc' },
       take: OUTBOX_BATCH_SIZE,
@@ -130,7 +130,7 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
     for (const row of outboxRows) {
       try {
         await this.queue.add(
-          'process-scene-changed',
+          'process-scene-event',
           { outboxId: row.id },
           {
             jobId: row.id,

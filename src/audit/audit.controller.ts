@@ -5,6 +5,7 @@ import {
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
   Request,
 } from '@nestjs/common';
@@ -34,5 +35,13 @@ export class AuditController {
     @Body() dto: UpdateAuditAlertDto,
   ): Promise<AuditAlertResponseDto> {
     return this.auditService.updateStatus(req.user.id, id, dto.status);
+  }
+
+  @Post('alerts/:id/apply-kb-update')
+  applyKnowledgeUpdate(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AuditAlertResponseDto> {
+    return this.auditService.applyKnowledgeUpdate(req.user.id, id);
   }
 }

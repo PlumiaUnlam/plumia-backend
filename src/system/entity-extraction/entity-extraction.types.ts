@@ -32,12 +32,35 @@ export interface ChunkEvidence {
 
 export interface ExtractionResponse {
   entities: ExtractionCandidate[];
+  stateChanges: ExtractedStateChange[];
   relationships: ExtractedRelationship[];
   inconsistencies: ExtractedInconsistency[];
 }
 
+export type InconsistencyRuleCode =
+  | 'ENTITY_CONTRADICTION'
+  | 'DEAD_CHARACTER_ACTION'
+  | 'WORLDBUILDING_RULE';
+
+export interface TemporalAuditContext {
+  worldRules: unknown;
+  entities: Array<{
+    canonicalName: string;
+    states: Array<{ key: string; value: string }>;
+    facts: string[];
+  }>;
+  relationships: Array<{
+    sourceEntity: string;
+    targetEntity: string;
+    relationType: string;
+    description: string | null;
+  }>;
+  deceasedEntityNames: string[];
+}
+
 export interface ExtractedInconsistency {
   entityName: string;
+  ruleCode: InconsistencyRuleCode;
   field: string;
   currentValue: string;
   observedValue: string;
@@ -48,11 +71,21 @@ export interface ExtractedInconsistency {
 }
 
 export interface ExtractedRelationship {
+  kind: 'CREATE' | 'UPDATE' | 'END';
   sourceEntity: string;
   targetEntity: string;
   relationType: RelationType;
   description: string | null;
   intensity: number;
+  evidence: string[];
+}
+
+export interface ExtractedStateChange {
+  entityName: string;
+  attributeKey: string;
+  fromValue: string | null;
+  toValue: string;
+  confidenceScore: number;
   evidence: string[];
 }
 
@@ -63,6 +96,7 @@ export interface ConfirmedEntityLike {
   type: EntityType;
   description: string | null;
   attributes?: Record<string, unknown>;
+  userLockedFields?: string[];
 }
 
 export interface PendingProposalLike {

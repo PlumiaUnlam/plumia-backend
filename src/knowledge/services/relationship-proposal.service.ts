@@ -3,8 +3,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, ProposalStatus } from '@prisma/client';
+import {
+  Prisma,
+  ProposalStatus,
+  RelationshipProposalKind,
+  type Relationship,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { TemporalStateService } from './temporal-state.service';
 import { toRelationType } from '../domain/relation-type';
 import { RelationshipResponseDto } from '../dto/responses/relationship-response.dto';
 import { RelationshipProposalResponseDto } from '../dto/responses/relationship-proposal-response.dto';
@@ -25,6 +31,8 @@ type RelationshipProposalListRecord = Prisma.RelationshipProposalGetPayload<{
         relationType: true;
         description: true;
         confidenceScore: true;
+        validFromSceneId: true;
+        validToSceneId: true;
       };
     };
   };
@@ -43,7 +51,10 @@ type EntityProposalEndpointRecord = {
 
 @Injectable()
 export class RelationshipProposalService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly temporalStates: TemporalStateService,
+  ) {}
 
   async listPendingByProject(
     userId: string,
@@ -69,6 +80,8 @@ export class RelationshipProposalService {
             relationType: true,
             description: true,
             confidenceScore: true,
+            validFromSceneId: true,
+            validToSceneId: true,
           },
         },
       },
@@ -153,29 +166,32 @@ export class RelationshipProposalService {
         );
       }
 
-      const relationship = proposal.relationshipId
-        ? await tx.relationship.update({
-            where: { id: proposal.relationshipId },
-            data: {
-              description,
-              relationType,
-              confidenceScore,
-              sourceEntityId,
-              targetEntityId,
-            },
-          })
-        : await tx.relationship.create({
-            data: {
-              projectId: proposal.projectId,
-              sourceEntityId,
-              targetEntityId,
-              relationType,
-              description,
-              confidenceScore,
-              source: 'ai_proposed',
-              validFromSceneId: proposal.sceneId,
-            },
-          });
+      const relationship =
+        proposal.kind === RelationshipProposalKind.END
+          ? await this.closeRelationshipProposal(tx, proposal)
+          : proposal.relationshipId
+            ? await tx.relationship.update({
+                where: { id: proposal.relationshipId },
+                data: {
+                  description,
+                  relationType,
+                  confidenceScore,
+                  sourceEntityId,
+                  targetEntityId,
+                },
+              })
+            : await tx.relationship.create({
+                data: {
+                  projectId: proposal.projectId,
+                  sourceEntityId,
+                  targetEntityId,
+                  relationType,
+                  description,
+                  confidenceScore,
+                  source: 'ai_proposed',
+                  validFromSceneId: proposal.sceneId,
+                },
+              });
 
       await tx.relationshipProposal.update({
         where: { id: proposal.id },
@@ -189,25 +205,34 @@ export class RelationshipProposalService {
           resolutionReason: 'accepted_by_author',
         },
       });
-      return relationship;
+      return { relationship, changedAtSceneId: proposal.sceneId };
     });
 
     if (!result) {
       throw new NotFoundException('Relationship proposal not found');
     }
+    await this.temporalStates.scheduleRelationshipAudit(
+      result.relationship.projectId,
+      result.changedAtSceneId,
+    );
     return RelationshipResponseDto.from({
-      id: result.id,
-      projectId: result.projectId,
-      sourceEntityId: result.sourceEntityId,
-      targetEntityId: result.targetEntityId,
-      relationType: toRelationType(result.relationType),
+      id: result.relationship.id,
+      projectId: result.relationship.projectId,
+      sourceEntityId: result.relationship.sourceEntityId,
+      targetEntityId: result.relationship.targetEntityId,
+      relationType: toRelationType(result.relationship.relationType),
       intensity: Math.max(
         1,
-        Math.min(5, Math.round(Number(result.confidenceScore) * 5)),
+        Math.min(
+          5,
+          Math.round(Number(result.relationship.confidenceScore) * 5),
+        ),
       ),
-      description: result.description,
-      createdAt: result.createdAt,
-      updatedAt: result.updatedAt,
+      description: result.relationship.description,
+      validFromSceneId: result.relationship.validFromSceneId,
+      validToSceneId: result.relationship.validToSceneId,
+      createdAt: result.relationship.createdAt,
+      updatedAt: result.relationship.updatedAt,
     });
   }
 
@@ -246,11 +271,14 @@ export class RelationshipProposalService {
       projectId: proposal.projectId,
       sceneId: proposal.sceneId,
       relationshipId: proposal.relationshipId,
+      kind: proposal.kind,
       current: proposal.relationship
         ? {
             relationType: toRelationType(proposal.relationship.relationType),
             description: proposal.relationship.description,
             intensity: Number(proposal.relationship.confidenceScore),
+            validFromSceneId: proposal.relationship.validFromSceneId,
+            validToSceneId: proposal.relationship.validToSceneId,
           }
         : null,
       source,
@@ -312,5 +340,23 @@ export class RelationshipProposalService {
     }
 
     return `${currentValue}\n\n${suggestedValue}`;
+  }
+
+  private async closeRelationshipProposal(
+    tx: Prisma.TransactionClient,
+    proposal: {
+      relationshipId: string | null;
+      sceneId: string;
+    },
+  ): Promise<Relationship> {
+    if (!proposal.relationshipId) {
+      throw new BadRequestException(
+        'Solo una relacion existente puede finalizarse',
+      );
+    }
+    return tx.relationship.update({
+      where: { id: proposal.relationshipId },
+      data: { validToSceneId: proposal.sceneId },
+    });
   }
 }

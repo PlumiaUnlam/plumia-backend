@@ -2,10 +2,22 @@
 
 import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { AuditSeverity, Prisma, ProposalStatus } from '@prisma/client';
+import {
+  AuditCategory,
+  AuditSeverity,
+  Prisma,
+  ProposalStatus,
+  RelationshipProposalKind,
+} from '@prisma/client';
 import { AuditService } from '../../audit/audit.service';
+import { TemporalConsistencyRuleService } from '../../audit/temporal-consistency-rule.service';
+import {
+  TemporalKnowledgeSnapshotService,
+  type TemporalKnowledgeSnapshot,
+} from '../../audit/temporal-knowledge-snapshot.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toEntityType } from '../../knowledge/domain/entity-type';
+import { TemporalStateService } from '../../knowledge/services/temporal-state.service';
 import { EntityExtractionClient } from './entity-extraction.client';
 import { EntityResolutionService } from './entity-resolution.service';
 import type {
@@ -14,6 +26,8 @@ import type {
   ExtractionCandidate,
   ExtractedInconsistency,
   ExtractedRelationship,
+  ExtractedStateChange,
+  InconsistencyRuleCode,
   PendingProposalLike,
   ProposalDataLike,
   SceneChangedOutboxPayload,
@@ -40,6 +54,7 @@ type ProposalRecord = PendingProposalLike & {
   status: ProposalStatus;
   sourceChunkId: string | null;
   sourceChunkHash: string | null;
+  conflictsWithLocked: boolean;
   proposedData: ProposalDataLike;
 };
 
@@ -50,10 +65,13 @@ interface RelationshipProposalRecord {
   targetEntityId: string | null;
   sourceEntityProposalId: string | null;
   targetEntityProposalId: string | null;
+  kind: RelationshipProposalKind;
   relationType: string;
   description: string | null;
   intensity: number;
   evidence: string[];
+  sourceChunkId: string | null;
+  sourceChunkHash: string | null;
   status: ProposalStatus;
 }
 
@@ -66,6 +84,7 @@ interface ProposalRow {
   status: ProposalStatus;
   sourceChunkId?: string | null;
   sourceChunkHash?: string | null;
+  conflictsWithLocked?: boolean;
 }
 
 const confirmedEntitySelect = {
@@ -75,6 +94,7 @@ const confirmedEntitySelect = {
   type: true,
   description: true,
   attributes: true,
+  userLockedFields: true,
 } satisfies Prisma.EntitySelect;
 
 const proposalSelect = {
@@ -86,6 +106,7 @@ const proposalSelect = {
   status: true,
   sourceChunkId: true,
   sourceChunkHash: true,
+  conflictsWithLocked: true,
 } satisfies Prisma.EntityProposalSelect;
 
 const relationshipProposalSelect = {
@@ -95,6 +116,9 @@ const relationshipProposalSelect = {
   targetEntityId: true,
   sourceEntityProposalId: true,
   targetEntityProposalId: true,
+  sourceChunkId: true,
+  sourceChunkHash: true,
+  kind: true,
   relationType: true,
   description: true,
   intensity: true,
@@ -112,28 +136,116 @@ export class EntityExtractionPipelineService {
     private readonly extractionClient: EntityExtractionClient,
     private readonly resolution: EntityResolutionService,
     private readonly auditService: AuditService,
+    private readonly temporalSnapshotService: TemporalKnowledgeSnapshotService,
+    private readonly temporalRules: TemporalConsistencyRuleService,
+    private readonly temporalStates: TemporalStateService,
   ) {}
 
   async processOutboxEvent(outboxId: string): Promise<void> {
     const outbox = await this.prisma.outbox.findFirst({
-      where: { id: outboxId, processedAt: null },
+      // The dispatcher marks an event as enqueued before BullMQ runs it.
+      where: { id: outboxId },
     });
 
     if (!outbox) {
       return;
     }
 
-    if (
-      outbox.aggregateType !== 'Scene' ||
-      outbox.eventType !== 'scene_changed'
-    ) {
+    if (outbox.aggregateType !== 'Scene') {
       await this.markProcessed(outbox.id);
       return;
     }
 
-    const payload = this.parseSceneChangedPayload(outbox.payload);
-    await this.processSceneChanged(payload);
+    if (outbox.eventType === 'scene_changed') {
+      const payload = this.parseSceneChangedPayload(outbox.payload);
+      await this.processSceneChanged(payload);
+    } else if (outbox.eventType === 'scene_temporal_audit') {
+      const sceneId = this.parseTemporalAuditPayload(outbox.payload);
+      await this.processTemporalAudit(sceneId);
+    }
     await this.markProcessed(outbox.id);
+  }
+
+  async processTemporalAudit(sceneId: string): Promise<void> {
+    const scene = await this.prisma.scene.findFirst({
+      where: { id: sceneId, deletedAt: null },
+      select: {
+        id: true,
+        title: true,
+        chapter: { select: { book: { select: { projectId: true } } } },
+      },
+    });
+    if (!scene) {
+      return;
+    }
+
+    const projectId = scene.chapter.book.projectId;
+    const [chunks, entities, snapshot] = await Promise.all([
+      this.prisma.chunk.findMany({
+        where: { sceneId },
+        select: {
+          id: true,
+          chunkIndex: true,
+          content: true,
+          contentHash: true,
+          isDirty: true,
+        },
+        orderBy: { chunkIndex: 'asc' },
+      }),
+      this.prisma.entity.findMany({
+        where: { projectId, deletedAt: null },
+        select: confirmedEntitySelect,
+      }),
+      this.temporalSnapshotService.getSnapshot(sceneId),
+    ]);
+    if (snapshot) {
+      await this.temporalRules.auditSnapshot(snapshot);
+    }
+    await this.auditService.obsoleteAlertsWithoutCurrentChunkSupport({
+      sceneId,
+      chunks: new Map(chunks.map((chunk) => [chunk.id, chunk] as const)),
+    });
+    const confirmedEntities = entities.map((entity) => ({
+      ...entity,
+      type: toEntityType(entity.type),
+      attributes: this.normalizeAttributesRecord(entity.attributes),
+    }));
+    for (const chunk of chunks) {
+      const text = chunk.content.trim();
+      if (!text) {
+        await this.auditService.obsoleteAlertsForChunk({
+          sceneId,
+          sourceChunkId: chunk.id,
+          activeFingerprints: new Set<string>(),
+        });
+        continue;
+      }
+      const extracted = await this.extractionClient.extractEntities({
+        sceneText: text,
+        knownEntities: confirmedEntities.map((entity) => ({
+          canonicalName: entity.canonicalName,
+          aliases: entity.aliases,
+          type: entity.type,
+          description: entity.description,
+          attributes: entity.attributes ?? {},
+        })),
+        ...(snapshot
+          ? {
+              temporalContext: this.temporalSnapshotService.toExtractionContext(
+                snapshot,
+                text,
+              ),
+            }
+          : {}),
+      });
+      await this.processInconsistencyCandidates({
+        projectId,
+        sceneId,
+        chunk,
+        inconsistencies: extracted.inconsistencies,
+        confirmedEntities,
+      });
+    }
   }
 
   async processSceneChanged(payload: SceneChangedOutboxPayload): Promise<void> {
@@ -196,6 +308,24 @@ export class EntityExtractionPipelineService {
     });
 
     if (chunks.length === 0) {
+      await this.auditService.obsoleteAlertsWithoutCurrentChunkSupport({
+        sceneId: scene.id,
+        chunks: new Map<string, ChunkRow>(),
+      });
+      await this.temporalStates.obsoleteProposalsWithoutCurrentChunkSupport({
+        sceneId: scene.id,
+        chunks: new Map<string, ChunkRow>(),
+      });
+      await this.obsoleteRelationshipProposalsWithoutCurrentChunkSupport({
+        sceneId: scene.id,
+        chunks: new Map<string, ChunkRow>(),
+      });
+      const temporalSnapshot = await this.temporalSnapshotService.getSnapshot(
+        scene.id,
+      );
+      if (temporalSnapshot) {
+        await this.temporalRules.auditSnapshot(temporalSnapshot);
+      }
       await this.pruneProposalsWithoutActiveSupport(
         new Map(
           (
@@ -221,6 +351,7 @@ export class EntityExtractionPipelineService {
                   status: proposal.status,
                   sourceChunkId: proposal.sourceChunkId ?? null,
                   sourceChunkHash: proposal.sourceChunkHash ?? null,
+                  conflictsWithLocked: proposal.conflictsWithLocked ?? false,
                 },
               ] as const,
           ),
@@ -235,6 +366,24 @@ export class EntityExtractionPipelineService {
     const chunksById = new Map(
       chunks.map((chunk) => [chunk.id, chunk] as const),
     );
+    await this.auditService.obsoleteAlertsWithoutCurrentChunkSupport({
+      sceneId: scene.id,
+      chunks: chunksById,
+    });
+    await this.temporalStates.obsoleteProposalsWithoutCurrentChunkSupport({
+      sceneId: scene.id,
+      chunks: chunksById,
+    });
+    await this.obsoleteRelationshipProposalsWithoutCurrentChunkSupport({
+      sceneId: scene.id,
+      chunks: chunksById,
+    });
+    const temporalSnapshot = await this.temporalSnapshotService.getSnapshot(
+      scene.id,
+    );
+    if (temporalSnapshot) {
+      await this.temporalRules.auditSnapshot(temporalSnapshot);
+    }
     const activeChunkIds = new Set(chunks.map((chunk) => chunk.id));
     const dirtyChunks = chunks.filter((chunk) => chunk.isDirty);
 
@@ -279,6 +428,7 @@ export class EntityExtractionPipelineService {
               status: proposal.status,
               sourceChunkId: proposal.sourceChunkId ?? null,
               sourceChunkHash: proposal.sourceChunkHash ?? null,
+              conflictsWithLocked: proposal.conflictsWithLocked ?? false,
             },
           ] as const,
       ),
@@ -306,6 +456,7 @@ export class EntityExtractionPipelineService {
           relationshipProposals: pendingRelationshipProposals,
           rejectedRelationshipProposals,
           compareEmbedding,
+          temporalSnapshot,
         });
       }
     } else {
@@ -327,6 +478,7 @@ export class EntityExtractionPipelineService {
     relationshipProposals: RelationshipProposalRecord[];
     rejectedRelationshipProposals: RelationshipProposalRecord[];
     compareEmbedding: (text: string) => Promise<number[] | null>;
+    temporalSnapshot: TemporalKnowledgeSnapshot | null;
   }): Promise<void> {
     const chunkText = input.chunk.content.trim();
     if (!chunkText) {
@@ -343,6 +495,14 @@ export class EntityExtractionPipelineService {
         description: entity.description,
         attributes: entity.attributes ?? {},
       })),
+      ...(input.temporalSnapshot
+        ? {
+            temporalContext: this.temporalSnapshotService.toExtractionContext(
+              input.temporalSnapshot,
+              chunkText,
+            ),
+          }
+        : {}),
     });
 
     await this.processInconsistencyCandidates({
@@ -351,6 +511,15 @@ export class EntityExtractionPipelineService {
       chunk: input.chunk,
       inconsistencies: extracted.inconsistencies,
       confirmedEntities: input.confirmedEntities,
+    });
+
+    await this.processStateChangeCandidates({
+      projectId: input.projectId,
+      sceneId: input.scene.id,
+      chunk: input.chunk,
+      stateChanges: extracted.stateChanges,
+      confirmedEntities: input.confirmedEntities,
+      temporalSnapshot: input.temporalSnapshot,
     });
 
     const candidates = this.resolution.dedupeCandidates(extracted.entities);
@@ -400,6 +569,7 @@ export class EntityExtractionPipelineService {
           ? await this.updateExistingEntityProposal(
               existingProposal,
               proposedUpdate,
+              this.hasLockedConflict(confirmedEntity, resolution.candidate),
             )
           : await this.createEntityUpdateProposal({
               projectId: input.projectId,
@@ -407,6 +577,10 @@ export class EntityExtractionPipelineService {
               entityId: confirmedEntity.id,
               confidenceScore: resolution.candidate.confidenceScore ?? 0,
               proposedData: proposedUpdate,
+              conflictsWithLocked: this.hasLockedConflict(
+                confirmedEntity,
+                resolution.candidate,
+              ),
             });
 
         input.proposalsById.set(updateProposal.id, updateProposal);
@@ -459,6 +633,7 @@ export class EntityExtractionPipelineService {
           status: updatedProposal.status,
           sourceChunkId: updatedProposal.sourceChunkId ?? null,
           sourceChunkHash: updatedProposal.sourceChunkHash ?? null,
+          conflictsWithLocked: updatedProposal.conflictsWithLocked ?? false,
         });
         this.addResolvedEntityReference(
           resolvedEntityReferences,
@@ -497,6 +672,7 @@ export class EntityExtractionPipelineService {
           status: proposal.status,
           sourceChunkId: proposal.sourceChunkId ?? null,
           sourceChunkHash: proposal.sourceChunkHash ?? null,
+          conflictsWithLocked: proposal.conflictsWithLocked ?? false,
         });
         this.addResolvedEntityReference(
           resolvedEntityReferences,
@@ -516,6 +692,7 @@ export class EntityExtractionPipelineService {
       resolvedEntityReferences,
       relationshipProposals: input.relationshipProposals,
       rejectedRelationshipProposals: input.rejectedRelationshipProposals,
+      temporalSnapshot: input.temporalSnapshot,
     });
 
     await this.clearChunkDirtyFlag(input.chunk.id);
@@ -559,6 +736,7 @@ export class EntityExtractionPipelineService {
         sceneId: input.sceneId,
         chunkHash: input.chunk.contentHash ?? '',
         entityId: entity.id,
+        ruleCode: inconsistency.ruleCode,
         field,
         currentValue,
         observedValue,
@@ -580,14 +758,58 @@ export class EntityExtractionPipelineService {
         evidence,
         confidence: this.normalizeConfidence(inconsistency.confidenceScore),
         severity: this.toAuditSeverity(inconsistency.severity),
+        ruleCode: inconsistency.ruleCode,
+        category: this.toAuditCategory(inconsistency.ruleCode),
       });
     }
 
-    await this.auditService.obsoleteContinuityAlertsForChunk({
+    await this.auditService.obsoleteAlertsForChunk({
       sceneId: input.sceneId,
       sourceChunkId: input.chunk.id,
       activeFingerprints,
     });
+  }
+
+  private async processStateChangeCandidates(input: {
+    projectId: string;
+    sceneId: string;
+    chunk: ChunkRow;
+    stateChanges: ExtractedStateChange[];
+    confirmedEntities: ConfirmedEntityLike[];
+    temporalSnapshot: TemporalKnowledgeSnapshot | null;
+  }): Promise<void> {
+    for (const change of input.stateChanges ?? []) {
+      const entity = this.findConfirmedEntityByName(
+        change.entityName,
+        input.confirmedEntities,
+      );
+      const attributeKey = change.attributeKey?.trim();
+      const toValue = change.toValue?.trim();
+      const evidence = [...new Set(change.evidence ?? [])]
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (!entity || !attributeKey || !toValue || evidence.length === 0) {
+        continue;
+      }
+      const currentState = input.temporalSnapshot?.activeStates.find(
+        (state) =>
+          state.entityId === entity.id &&
+          state.attributeKey.trim().toLowerCase() ===
+            attributeKey.trim().toLowerCase(),
+      );
+      await this.temporalStates.createProposal({
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        sourceChunkId: input.chunk.id,
+        sourceChunkHash: input.chunk.contentHash,
+        entityId: entity.id,
+        attributeKey,
+        fromValue: change.fromValue ?? currentState?.toValue ?? null,
+        toValue,
+        evidence,
+        confidenceScore: this.normalizeConfidence(change.confidenceScore),
+      });
+    }
   }
 
   private findConfirmedEntityByName(
@@ -613,6 +835,7 @@ export class EntityExtractionPipelineService {
     sceneId: string;
     chunkHash: string;
     entityId: string;
+    ruleCode: InconsistencyRuleCode;
     field: string;
     currentValue: string;
     observedValue: string;
@@ -622,6 +845,7 @@ export class EntityExtractionPipelineService {
       input.sceneId,
       input.chunkHash,
       input.entityId,
+      input.ruleCode,
       input.field,
       input.currentValue,
       input.observedValue,
@@ -648,6 +872,12 @@ export class EntityExtractionPipelineService {
       return AuditSeverity.LOW;
     }
     return AuditSeverity.MEDIUM;
+  }
+
+  private toAuditCategory(ruleCode: InconsistencyRuleCode): AuditCategory {
+    return ruleCode === 'WORLDBUILDING_RULE'
+      ? AuditCategory.WORLDBUILDING
+      : AuditCategory.CONTINUITY;
   }
 
   private async pruneProposalsWithoutActiveSupport(
@@ -699,9 +929,40 @@ export class EntityExtractionPipelineService {
           status: updated.status,
           sourceChunkId: updated.sourceChunkId ?? null,
           sourceChunkHash: updated.sourceChunkHash ?? null,
+          conflictsWithLocked: updated.conflictsWithLocked ?? false,
         });
       }
     }
+  }
+
+  private async obsoleteRelationshipProposalsWithoutCurrentChunkSupport(input: {
+    sceneId: string;
+    chunks: ReadonlyMap<string, { contentHash: string | null }>;
+  }): Promise<void> {
+    const proposals = await this.prisma.relationshipProposal.findMany({
+      where: { sceneId: input.sceneId, status: ProposalStatus.PENDING },
+      select: { id: true, sourceChunkId: true, sourceChunkHash: true },
+    });
+    const obsoleteIds = proposals
+      .filter((proposal) => {
+        if (!proposal.sourceChunkId) {
+          return false;
+        }
+        const chunk = input.chunks.get(proposal.sourceChunkId);
+        return (
+          !chunk ||
+          (proposal.sourceChunkHash !== null &&
+            chunk.contentHash !== proposal.sourceChunkHash)
+        );
+      })
+      .map((proposal) => proposal.id);
+    if (obsoleteIds.length === 0) {
+      return;
+    }
+    await this.prisma.relationshipProposal.updateMany({
+      where: { id: { in: obsoleteIds } },
+      data: { status: ProposalStatus.OBSOLETE },
+    });
   }
 
   private addResolvedEntityReference(
@@ -736,8 +997,10 @@ export class EntityExtractionPipelineService {
     >;
     relationshipProposals: RelationshipProposalRecord[];
     rejectedRelationshipProposals: RelationshipProposalRecord[];
+    temporalSnapshot: TemporalKnowledgeSnapshot | null;
   }): Promise<void> {
     for (const relationship of input.relationships ?? []) {
+      const kind = relationship.kind ?? 'CREATE';
       const relationType = toRelationType(relationship.relationType);
       const source = this.resolveRelationshipEntity(
         relationship.sourceEntity,
@@ -752,14 +1015,21 @@ export class EntityExtractionPipelineService {
         continue;
       }
 
-      const existingRelationship =
+      const activeRelationship =
         source.entityId && target.entityId
+          ? input.temporalSnapshot?.activeRelationships.find(
+              (candidate) =>
+                candidate.sourceEntityId === source.entityId &&
+                candidate.targetEntityId === target.entityId &&
+                String(candidate.relationType) === String(relationType),
+            )
+          : null;
+      const existingRelationship =
+        activeRelationship && source.entityId && target.entityId
           ? await this.prisma.relationship.findFirst({
               where: {
+                id: activeRelationship.id,
                 projectId: input.projectId,
-                sourceEntityId: source.entityId,
-                targetEntityId: target.entityId,
-                relationType,
               },
               select: { id: true, description: true, confidenceScore: true },
             })
@@ -769,6 +1039,7 @@ export class EntityExtractionPipelineService {
       );
 
       if (
+        kind !== 'END' &&
         existingRelationship &&
         !this.relationshipHasNewInformation(
           existingRelationship,
@@ -786,6 +1057,7 @@ export class EntityExtractionPipelineService {
           source,
           target,
           relationType,
+          kind,
         ),
       );
       const evidence = [...new Set(relationship.evidence ?? [])];
@@ -799,6 +1071,7 @@ export class EntityExtractionPipelineService {
               source,
               target,
               relationType,
+              kind,
             ) && this.hasSharedEvidence(proposal.evidence, evidence),
         );
       if (wasRejectedWithSameEvidence) {
@@ -816,6 +1089,8 @@ export class EntityExtractionPipelineService {
             intensity: Math.max(current.intensity, intensity),
             evidence: [...new Set([...current.evidence, ...evidence])],
             sourceChunkId: input.chunk.id,
+            sourceChunkHash: input.chunk.contentHash,
+            kind,
           },
           select: relationshipProposalSelect,
         });
@@ -828,11 +1103,13 @@ export class EntityExtractionPipelineService {
           projectId: input.projectId,
           sceneId: input.sceneId,
           sourceChunkId: input.chunk.id,
+          sourceChunkHash: input.chunk.contentHash,
           relationshipId: existingRelationship?.id ?? null,
           sourceEntityId: source.entityId,
           targetEntityId: target.entityId,
           sourceEntityProposalId: source.proposalId,
           targetEntityProposalId: target.proposalId,
+          kind,
           relationType,
           description: relationship.description ?? null,
           intensity,
@@ -905,8 +1182,9 @@ export class EntityExtractionPipelineService {
     source: { entityId: string | null; proposalId: string | null },
     target: { entityId: string | null; proposalId: string | null },
     relationType: string,
+    kind: RelationshipProposalKind | 'CREATE' | 'UPDATE' | 'END',
   ): boolean {
-    if (proposal.relationType !== relationType) {
+    if (proposal.relationType !== relationType || proposal.kind !== kind) {
       return false;
     }
     if (relationshipId) {
@@ -983,10 +1261,13 @@ export class EntityExtractionPipelineService {
     targetEntityId: string | null;
     sourceEntityProposalId: string | null;
     targetEntityProposalId: string | null;
+    kind: RelationshipProposalKind;
     relationType: string;
     description: string | null;
     intensity: Prisma.Decimal | number;
     evidence: Prisma.JsonValue;
+    sourceChunkId: string | null;
+    sourceChunkHash: string | null;
     status: ProposalStatus;
   }): RelationshipProposalRecord {
     return {
@@ -1133,6 +1414,17 @@ export class EntityExtractionPipelineService {
     return value as unknown as SceneChangedOutboxPayload;
   }
 
+  private parseTemporalAuditPayload(value: Prisma.JsonValue): string {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Invalid temporal audit payload');
+    }
+    const sceneId = (value as Record<string, unknown>)['sceneId'];
+    if (typeof sceneId !== 'string') {
+      throw new Error('Temporal audit payload is missing sceneId');
+    }
+    return sceneId;
+  }
+
   private toInputJsonValue(value: ProposalDataLike): Prisma.InputJsonValue {
     return value as unknown as Prisma.InputJsonValue;
   }
@@ -1196,6 +1488,7 @@ export class EntityExtractionPipelineService {
     entityId: string;
     confidenceScore: number;
     proposedData: ProposalDataLike;
+    conflictsWithLocked: boolean;
   }): Promise<ProposalRecord> {
     const proposal = (await this.prisma.entityProposal.create({
       data: {
@@ -1205,6 +1498,7 @@ export class EntityExtractionPipelineService {
         sourceChunkId: input.proposedData.sourceChunkId ?? null,
         sourceChunkHash: input.proposedData.sourceChunkHash ?? null,
         proposedData: this.toInputJsonValue(input.proposedData),
+        conflictsWithLocked: input.conflictsWithLocked,
         confidenceScore: new Prisma.Decimal(input.confidenceScore),
       },
       select: proposalSelect,
@@ -1219,12 +1513,14 @@ export class EntityExtractionPipelineService {
       status: proposal.status,
       sourceChunkId: proposal.sourceChunkId ?? null,
       sourceChunkHash: proposal.sourceChunkHash ?? null,
+      conflictsWithLocked: proposal.conflictsWithLocked ?? false,
     };
   }
 
   private async updateExistingEntityProposal(
     proposal: ProposalRecord,
     incoming: ProposalDataLike,
+    conflictsWithLocked = false,
   ): Promise<ProposalRecord> {
     const merged = this.mergeUpdateProposalData(
       proposal.proposedData,
@@ -1240,6 +1536,8 @@ export class EntityExtractionPipelineService {
         ),
         sourceChunkId: merged.sourceChunkId ?? null,
         sourceChunkHash: merged.sourceChunkHash ?? null,
+        conflictsWithLocked:
+          proposal.conflictsWithLocked || conflictsWithLocked,
       },
       select: proposalSelect,
     })) as ProposalRow;
@@ -1253,6 +1551,7 @@ export class EntityExtractionPipelineService {
       status: updated.status,
       sourceChunkId: updated.sourceChunkId ?? null,
       sourceChunkHash: updated.sourceChunkHash ?? null,
+      conflictsWithLocked: updated.conflictsWithLocked ?? false,
     };
   }
 
@@ -1316,6 +1615,33 @@ export class EntityExtractionPipelineService {
     }
 
     return incoming.trim();
+  }
+
+  private hasLockedConflict(
+    entity: ConfirmedEntityLike,
+    candidate: ExtractionCandidate,
+  ): boolean {
+    const locks = new Set(entity.userLockedFields ?? []);
+    if (
+      locks.has('description') &&
+      candidate.description?.trim() &&
+      candidate.description.trim() !== entity.description?.trim()
+    ) {
+      return true;
+    }
+    if (
+      locks.has('aliases') &&
+      (candidate.aliases ?? []).some((alias) => !entity.aliases.includes(alias))
+    ) {
+      return true;
+    }
+    if (
+      locks.has('attributes') &&
+      Object.keys(candidate.attributes ?? {}).length
+    ) {
+      return true;
+    }
+    return locks.has('type') && candidate.type !== entity.type;
   }
 
   private combineDescriptions(

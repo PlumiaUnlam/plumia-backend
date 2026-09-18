@@ -21,6 +21,9 @@ export class AuditAlertResponseDto {
   detectionLevel!: AuditLevel;
   severity!: AuditSeverity;
   category!: AuditCategory;
+  ruleCode!: string | null;
+  sourceChunkId!: string | null;
+  sourceChunkHash!: string | null;
   title!: string;
   description!: string | null;
   explanation!: string | null;

@@ -138,25 +138,43 @@ export class PrismaSceneRepository implements SceneRepository {
     sceneId: string,
     data: UpdateSceneData,
   ): Promise<SceneRecord | null> {
-    let result: { count: number };
     try {
-      result = await this.prisma.scene.updateMany({
-        where: {
-          id: sceneId,
-          deletedAt: null,
-          chapter: { book: { project: { userId } } },
-        },
-        data: this.toSceneUpdateData(data),
+      return await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.scene.findFirst({
+          where: {
+            id: sceneId,
+            deletedAt: null,
+            chapter: { book: { project: { userId } } },
+          },
+          select: {
+            id: true,
+            sortKey: true,
+            order: true,
+            chapter: { select: { book: { select: { projectId: true } } } },
+          },
+        });
+        if (!existing) {
+          return null;
+        }
+
+        const scene = await tx.scene.update({
+          where: { id: existing.id },
+          data: this.toSceneUpdateData(data),
+        });
+        const narrativeOrderChanged =
+          (data.sortKey !== undefined && data.sortKey !== existing.sortKey) ||
+          (data.order !== undefined && data.order !== existing.order);
+        if (narrativeOrderChanged) {
+          await this.enqueueProjectTemporalAudit(
+            tx,
+            existing.chapter.book.projectId,
+          );
+        }
+        return this.toSceneRecord(scene);
       });
     } catch (error: unknown) {
       return translatePrismaConflict(error);
     }
-
-    if (result.count === 0) {
-      return null;
-    }
-
-    return this.findByIdForUser(userId, sceneId);
   }
 
   async updateContentForUser(
@@ -652,6 +670,31 @@ export class PrismaSceneRepository implements SceneRepository {
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.order !== undefined ? { order: data.order } : {}),
     };
+  }
+
+  private async enqueueProjectTemporalAudit(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+  ): Promise<void> {
+    const scenes = await tx.scene.findMany({
+      where: {
+        deletedAt: null,
+        chapter: { book: { projectId, deletedAt: null } },
+      },
+      select: { id: true },
+    });
+    if (scenes.length === 0) {
+      return;
+    }
+    await tx.outbox.createMany({
+      data: scenes.map((scene) => ({
+        aggregateType: 'Scene',
+        aggregateId: scene.id,
+        eventType: 'scene_temporal_audit',
+        payload: { sceneId: scene.id },
+        createdAt: new Date(),
+      })),
+    });
   }
 
   private toSceneRecord(scene: Scene): SceneRecord {

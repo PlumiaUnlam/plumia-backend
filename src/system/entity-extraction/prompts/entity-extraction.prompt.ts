@@ -24,8 +24,19 @@ Formato de salida:
       "normalizedName": "string"
     }
   ],
+  "stateChanges": [
+    {
+      "entityName": "string",
+      "attributeKey": "location | status | health_status | custom_key",
+      "fromValue": "string | null",
+      "toValue": "string",
+      "confidenceScore": 0.0,
+      "evidence": ["string"]
+    }
+  ],
   "relationships": [
     {
+      "kind": "CREATE | UPDATE | END",
       "sourceEntity": "string",
       "targetEntity": "string",
       "relationType": "ALLY | ENEMY | FAMILY | ROMANTIC | MENTOR | RIVAL | MEMBER_OF | LOCATED_IN | OWNS | KNOWS",
@@ -37,6 +48,7 @@ Formato de salida:
   "inconsistencies": [
     {
       "entityName": "string",
+      "ruleCode": "ENTITY_CONTRADICTION | DEAD_CHARACTER_ACTION | WORLDBUILDING_RULE",
       "field": "string",
       "currentValue": "string",
       "observedValue": "string",
@@ -51,16 +63,31 @@ Formato de salida:
 Reglas:
 - Responder estrictamente JSON válido.
 - No incluir markdown ni texto adicional.
-- Si no hay hallazgos, devolver {"entities":[],"relationships":[],"inconsistencies":[]}.
+- Si no hay hallazgos, devolver {"entities":[],"stateChanges":[],"relationships":[],"inconsistencies":[]}.
 - Para una entidad conocida, usar su nombre canonico y devolver solo los datos nuevos
   observables en esta escena. No repetir la ficha completa.
 - Detectar relaciones explicitas o claramente respaldadas entre las entidades de la escena.
+- Usar CREATE cuando nace un vinculo, UPDATE cuando cambia su informacion y END solo cuando el
+  texto afirma que una relacion vigente termina (por ejemplo, una posesion que se pierde).
+- Detectar cambios de estado solo cuando el texto afirme un cambio actual y observable de
+  ubicacion, estado vital, salud/condicion o un atributo dinamico. Usar location, status y
+  health_status como claves normalizadas cuando correspondan. Cada cambio debe tener evidencia
+  textual explicita; no proponer estados por recuerdos, rumores, metaforas o posibilidades.
+- fromValue solo debe informarse si esta expresado en el texto o en temporalContext; no inventarlo.
 - Usar nombres canonicos de las entidades conocidas y nombres extraidos para entidades nuevas.
 - Una relacion puede involucrar dos entidades nuevas, una nueva y una conocida, o dos conocidas.
 - Usar solo los tipos de relacion permitidos en el formato.
 - La intensidad debe ser un numero entre 0 y 1 basado en la evidencia de la escena.
 - Si no hay relaciones respaldadas por el texto, devolver "relationships":[].
 - Revisar tambien contradicciones directas entre entidades conocidas y lo narrado en la escena.
+- El request puede incluir temporalContext. Usalo como el unico estado conocido de la obra
+  para esta escena: no supongas estados, hechos ni relaciones futuros que no aparezcan alli.
+- Si temporalContext.deceasedEntityNames incluye una entidad, devolver DEAD_CHARACTER_ACTION
+  solo cuando el chunk le atribuya una accion presente, explicita y respaldada por evidencia.
+- Si temporalContext.worldRules contradice una accion o hecho del chunk, devolver
+  WORLDBUILDING_RULE. Si no hay una regla concreta y aplicable, no generes la alerta.
+- Usar ENTITY_CONTRADICTION para contradicciones contra la ficha o contexto de una entidad
+  que no sean una accion de una entidad fallecida.
 - Devolver una inconsistencia solo si el texto contradice de forma explicita un dato de la ficha
   de una entidad conocida; usar su nombre canonico en entityName.
 - currentValue debe resumir el dato ya establecido en la ficha y observedValue el dato incompatible

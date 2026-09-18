@@ -83,6 +83,12 @@ enum ProposalStatus {
   OBSOLETE
 }
 
+enum RelationshipProposalKind {
+  CREATE
+  UPDATE
+  END
+}
+
 enum AuditLevel {
   INTRA_SCENE
   INTER_SCENE
@@ -162,6 +168,7 @@ model User {
   subscription                  Subscription?
   projects                      Project[]
   reviewedProposals             EntityProposal[]       @relation("ProposalReviewer")
+  reviewedStateProposals        EntityStateProposal[]  @relation("StateProposalReviewer")
   reviewedRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalReviewer")
   resolvedAlerts                AuditAlert[]           @relation("AlertResolver")
   exportJobs                    ExportJob[]
@@ -248,6 +255,7 @@ model Project {
   entities              Entity[]
   relationships         Relationship[]
   entityProposals       EntityProposal[]
+  entityStateProposals  EntityStateProposal[]
   relationshipProposals RelationshipProposal[]
   auditAlerts           AuditAlert[]
   auditFalsePositives   AuditFalsePositive[]
@@ -335,6 +343,7 @@ model Scene {
   relsValidTo           Relationship[]         @relation("RelationshipValidTo")
   auditAlerts           AuditAlert[]
   entityProposals       EntityProposal[]
+  entityStateProposals  EntityStateProposal[]
   relationshipProposals RelationshipProposal[]
   readerComments        ReaderComment[]
   writingSessions       WritingSession[]
@@ -392,6 +401,7 @@ model Entity {
   project                     Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   povScenes                   Scene[]                @relation("ScenePov")
   states                      EntityState[]
+  stateProposals              EntityStateProposal[]
   facts                       Fact[]                 @relation("FactEntity")
   narratedFacts               Fact[]                 @relation("FactNarrator")
   relsAsSource                Relationship[]         @relation("RelationshipSource")
@@ -534,6 +544,7 @@ model EntityProposal {
   sourceChunkHash  String?        @map("source_chunk_hash") @db.VarChar(64)
   entityId         String?        @map("entity_id") @db.Uuid
   proposedData     Json           @map("proposed_data") @db.JsonB
+  conflictsWithLocked Boolean     @default(false) @map("conflicts_with_locked")
   status           ProposalStatus @default(PENDING)
   confidenceScore  Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
   resolutionReason String?        @map("resolution_reason")
@@ -556,16 +567,50 @@ model EntityProposal {
   @@map("entity_proposal")
 }
 
+model EntityStateProposal {
+  id                  String         @id @default(uuid()) @db.Uuid
+  projectId           String         @map("project_id") @db.Uuid
+  sceneId             String         @map("scene_id") @db.Uuid
+  sourceChunkId       String?        @map("source_chunk_id") @db.Uuid
+  sourceChunkHash     String?        @map("source_chunk_hash") @db.VarChar(64)
+  entityId            String         @map("entity_id") @db.Uuid
+  attributeKey        String         @map("attribute_key") @db.VarChar(100)
+  fromValue           String?        @map("from_value")
+  toValue             String?        @map("to_value")
+  evidence            Json           @default("[]") @db.JsonB
+  confidenceScore     Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  conflictsWithLocked Boolean        @default(false) @map("conflicts_with_locked")
+  status              ProposalStatus @default(PENDING)
+  resolutionReason    String?        @map("resolution_reason")
+  reviewedById        String?        @map("reviewed_by_id")
+  reviewedAt          DateTime?      @map("reviewed_at") @db.Timestamptz(6)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene       Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  sourceChunk Chunk?  @relation(fields: [sourceChunkId], references: [id], onDelete: SetNull)
+  entity      Entity  @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  reviewedBy  User?   @relation("StateProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status], map: "idx_state_proposal_project_status")
+  @@index([entityId, status], map: "idx_state_proposal_entity_status")
+  @@index([sourceChunkId], map: "idx_state_proposal_source_chunk")
+  @@map("entity_state_proposal")
+}
+
 model RelationshipProposal {
   id                     String         @id @default(uuid()) @db.Uuid
   projectId              String         @map("project_id") @db.Uuid
   sceneId                String         @map("scene_id") @db.Uuid
   sourceChunkId          String?        @map("source_chunk_id") @db.Uuid
+  sourceChunkHash        String?        @map("source_chunk_hash") @db.VarChar(64)
   relationshipId         String?        @map("relationship_id") @db.Uuid
   sourceEntityId         String?        @map("source_entity_id") @db.Uuid
   targetEntityId         String?        @map("target_entity_id") @db.Uuid
   sourceEntityProposalId String?        @map("source_entity_proposal_id") @db.Uuid
   targetEntityProposalId String?        @map("target_entity_proposal_id") @db.Uuid
+  kind                   RelationshipProposalKind @default(CREATE)
   relationType           RelationType   @map("relation_type")
   description            String?
   intensity              Decimal        @default(0.0) @db.Decimal(3, 2)
@@ -602,6 +647,9 @@ model AuditAlert {
   fingerprint        String?       @unique @db.VarChar(200)
   projectId          String        @map("project_id") @db.Uuid
   sceneId            String        @map("scene_id") @db.Uuid
+  sourceChunkId      String?       @map("source_chunk_id") @db.Uuid
+  sourceChunkHash    String?       @map("source_chunk_hash") @db.VarChar(64)
+  ruleCode           String?       @map("rule_code") @db.VarChar(100)
   detectionLevel     AuditLevel    @map("detection_level")
   severity           AuditSeverity
   category           AuditCategory
@@ -631,6 +679,8 @@ model AuditAlert {
   @@index([detectionLevel], map: "idx_alert_level")
   @@index([severity], map: "idx_alert_severity")
   @@index([status], map: "idx_alert_status")
+  @@index([sceneId, sourceChunkId, sourceChunkHash], map: "idx_alert_chunk_source")
+  @@index([projectId, sceneId, ruleCode], map: "idx_alert_rule")
   @@map("audit_alert")
 }
 
@@ -706,6 +756,7 @@ model Chunk {
   project               Project                @relation(fields: [projectId], references: [id])
   scene                 Scene                  @relation(fields: [sceneId], references: [id], onDelete: Cascade)
   proposals             EntityProposal[]
+  stateProposals        EntityStateProposal[]
   relationshipProposals RelationshipProposal[]
 
   @@unique([sceneId, chunkIndex])

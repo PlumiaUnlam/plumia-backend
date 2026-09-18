@@ -38,6 +38,7 @@ export interface UpdateEntityData {
   attributes?: Record<string, unknown>;
   imageUrl?: string | null;
   isActive?: boolean;
+  userLockedFields?: string[];
 }
 
 export interface EntityListFilters {
