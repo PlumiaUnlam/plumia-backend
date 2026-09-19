@@ -35,10 +35,16 @@ function textMarks(node: JsonRecord): ExportInline {
   let href: string | undefined;
 
   for (const mark of marks) {
-    if (!isRecord(mark)) continue;
+    if (!isRecord(mark)) {
+      continue;
+    }
     const type = mark['type'];
-    if (type === 'bold' || type === 'strong') bold = true;
-    if (type === 'italic' || type === 'em') italic = true;
+    if (type === 'bold' || type === 'strong') {
+      bold = true;
+    }
+    if (type === 'italic' || type === 'em') {
+      italic = true;
+    }
     if (type === 'link' && isRecord(mark['attrs'])) {
       href = stringValue(mark['attrs']['href']);
     }
@@ -50,7 +56,9 @@ function textMarks(node: JsonRecord): ExportInline {
     bold,
     italic,
   };
-  if (href) inline.href = href;
+  if (href) {
+    inline.href = href;
+  }
   return inline;
 }
 
@@ -62,7 +70,9 @@ async function parseInlines(
   const inlines: ExportInline[] = [];
 
   for (const value of nodes) {
-    if (!isRecord(value)) continue;
+    if (!isRecord(value)) {
+      continue;
+    }
 
     if (value['type'] === 'text') {
       inlines.push(textMarks(value));
@@ -87,7 +97,9 @@ async function parseInlines(
 function imageStorageKey(node: JsonRecord): string | undefined {
   const attrs = nodeAttributes(node);
   const storageKey = stringValue(attrs['storageKey']);
-  if (storageKey) return storageKey;
+  if (storageKey) {
+    return storageKey;
+  }
 
   const src = stringValue(attrs['src']);
   if (src && !/^https?:\/\//i.test(src) && !src.startsWith('data:')) {
@@ -105,7 +117,9 @@ async function parseBlocks(
   const blocks: ExportBlock[] = [];
 
   for (const value of nodes) {
-    if (!isRecord(value)) continue;
+    if (!isRecord(value)) {
+      continue;
+    }
 
     const type = value['type'];
     if (type === 'doc') {
@@ -156,7 +170,9 @@ async function parseBlocks(
     if (type === 'bulletList' || type === 'orderedList') {
       const items: ExportBlock[][] = [];
       for (const item of childNodes(value)) {
-        if (!isRecord(item)) continue;
+        if (!isRecord(item)) {
+          continue;
+        }
         items.push(await parseBlocks(childNodes(item), resolveImage, sceneId));
       }
       blocks.push({ kind: type, items });
@@ -170,7 +186,9 @@ async function parseBlocks(
 
     if (type === 'image') {
       const key = imageStorageKey(value);
-      if (!key) continue;
+      if (!key) {
+        continue;
+      }
       const image = await resolveImage(key, sceneId);
       const attrs = nodeAttributes(value);
       blocks.push({
@@ -237,11 +255,17 @@ function escapeHtml(value: string): string {
 }
 
 function inlineHtml(inline: ExportInline): string {
-  if (inline.kind === 'break') return '<br />';
+  if (inline.kind === 'break') {
+    return '<br />';
+  }
 
   let result = escapeHtml(inline.text);
-  if (inline.bold) result = `<strong>${result}</strong>`;
-  if (inline.italic) result = `<em>${result}</em>`;
+  if (inline.bold) {
+    result = `<strong>${result}</strong>`;
+  }
+  if (inline.italic) {
+    result = `<em>${result}</em>`;
+  }
   if (inline.href) {
     result = `<a href="${escapeHtml(inline.href)}">${result}</a>`;
   }
@@ -292,7 +316,9 @@ function blocksHtml(
           .join('')}</${tag}>`;
       }
 
-      if (block.kind === 'sceneDivider') return '<hr />';
+      if (block.kind === 'sceneDivider') {
+        return '<hr />';
+      }
 
       return `<p class="image"><img src="${escapeHtml(imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
     })

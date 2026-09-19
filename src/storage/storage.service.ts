@@ -41,10 +41,10 @@ export function normalizeContentType(contentType: string): string {
   return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
 }
 
-export type PresignedGetUrlOptions = {
+export interface PresignedGetUrlOptions {
   responseContentType?: string;
   downloadName?: string;
-};
+}
 
 @Injectable()
 export class StorageService {

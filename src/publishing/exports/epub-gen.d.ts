@@ -1,12 +1,12 @@
 declare module 'epub-gen' {
-  type EpubChapter = {
+  interface EpubChapter {
     title?: string;
     data: string;
     filename?: string;
     excludeFromToc?: boolean;
-  };
+  }
 
-  type EpubOptions = {
+  interface EpubOptions {
     title: string;
     author: string | string[];
     publisher?: string;
@@ -16,7 +16,7 @@ declare module 'epub-gen' {
     css?: string;
     tempDir?: string;
     content: EpubChapter[];
-  };
+  }
 
   class Epub {
     readonly promise: Promise<void>;

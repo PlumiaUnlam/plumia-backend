@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client';
 
 export const EXPORT_SOURCE = Symbol('EXPORT_SOURCE');
 
-export type ExportSourceRecord = {
+export interface ExportSourceRecord {
   id: string;
   title: string;
   books: Array<{
@@ -16,7 +16,7 @@ export type ExportSourceRecord = {
       }>;
     }>;
   }>;
-};
+}
 
 export interface ExportSourceRepository {
   findByIdForUser(

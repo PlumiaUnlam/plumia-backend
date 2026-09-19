@@ -24,9 +24,13 @@ function escapeHtml(value: string): string {
 function collectImages(blocks: ExportBlock[], images: ExportImage[]): void {
   for (const block of blocks) {
     if (block.kind === 'image') {
-      if (!images.includes(block.image)) images.push(block.image);
+      if (!images.includes(block.image)) {
+        images.push(block.image);
+      }
     } else if (block.kind === 'bulletList' || block.kind === 'orderedList') {
-      for (const item of block.items) collectImages(item, images);
+      for (const item of block.items) {
+        collectImages(item, images);
+      }
     }
   }
 }

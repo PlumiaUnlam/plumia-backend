@@ -61,11 +61,13 @@ const source = {
 
 describe('export rendering', () => {
   it('normalizes Tiptap content and embeds referenced images', async () => {
-    const document = await prepareExportDocument(source, async () => ({
-      buffer: imageBuffer,
-      mimeType: 'image/png',
-      extension: 'png',
-    }));
+    const document = await prepareExportDocument(source, () =>
+      Promise.resolve({
+        buffer: imageBuffer,
+        mimeType: 'image/png',
+        extension: 'png',
+      }),
+    );
 
     const blocks = document.books[0]?.chapters[0]?.scenes[0]?.content ?? [];
     const html = blocksToHtml(blocks);
@@ -76,11 +78,13 @@ describe('export rendering', () => {
   });
 
   it('generates a DOCX, PDF and EPUB buffer', async () => {
-    const document = await prepareExportDocument(source, async () => ({
-      buffer: imageBuffer,
-      mimeType: 'image/png',
-      extension: 'png',
-    }));
+    const document = await prepareExportDocument(source, () =>
+      Promise.resolve({
+        buffer: imageBuffer,
+        mimeType: 'image/png',
+        extension: 'png',
+      }),
+    );
 
     const [docx, pdf, epub] = await Promise.all([
       new DocxExportRenderer().render(document),

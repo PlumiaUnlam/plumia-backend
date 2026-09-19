@@ -10,7 +10,14 @@ function plainText(inlines: ExportInline[]): string {
     .join('');
 }
 
-function textOptions(block: Extract<ExportBlock, { inlines: ExportInline[] }>) {
+function textOptions(
+  block: Extract<ExportBlock, { inlines: ExportInline[] }>,
+): {
+  align: 'left' | 'center' | 'right' | 'justify';
+  indent: number;
+  paragraphGap: number;
+  lineGap: number;
+} {
   return {
     align:
       block.textAlign === 'center' ||
@@ -73,8 +80,12 @@ function renderBlocks(
             ? 9
             : 11;
       pdf.fontSize(size);
-      if (block.kind === 'codeBlock') pdf.font('Courier');
-      if (block.kind === 'blockquote') pdf.font('Helvetica-Oblique');
+      if (block.kind === 'codeBlock') {
+        pdf.font('Courier');
+      }
+      if (block.kind === 'blockquote') {
+        pdf.font('Helvetica-Oblique');
+      }
       renderInlineRuns(pdf, block.inlines, {
         ...textOptions(block),
         indent:
@@ -138,12 +149,16 @@ export class PdfExportRenderer implements ExportRenderer {
       .text(document.title, { align: 'center' })
       .moveDown(1);
     document.books.forEach((book, bookIndex) => {
-      if (bookIndex > 0) pdf.addPage();
+      if (bookIndex > 0) {
+        pdf.addPage();
+      }
       pdf.fontSize(19).text(book.title, { align: 'center' }).moveDown(0.75);
       for (const chapter of book.chapters) {
         pdf.fontSize(15).text(chapter.title).moveDown(0.4);
         for (const scene of chapter.scenes) {
-          if (scene.title) pdf.fontSize(13).text(scene.title).moveDown(0.25);
+          if (scene.title) {
+            pdf.fontSize(13).text(scene.title).moveDown(0.25);
+          }
           renderBlocks(pdf, scene.content);
         }
       }

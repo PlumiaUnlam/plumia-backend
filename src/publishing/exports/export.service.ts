@@ -30,9 +30,15 @@ function imageDetails(storageKey: string): {
   mimeType: string;
 } {
   const extension = storageKey.split('.').pop()?.toLowerCase() ?? 'jpg';
-  if (extension === 'png') return { extension: 'png', mimeType: 'image/png' };
-  if (extension === 'gif') return { extension: 'gif', mimeType: 'image/gif' };
-  if (extension === 'bmp') return { extension: 'bmp', mimeType: 'image/bmp' };
+  if (extension === 'png') {
+    return { extension: 'png', mimeType: 'image/png' };
+  }
+  if (extension === 'gif') {
+    return { extension: 'gif', mimeType: 'image/gif' };
+  }
+  if (extension === 'bmp') {
+    return { extension: 'bmp', mimeType: 'image/bmp' };
+  }
   if (extension === 'webp' || extension === 'avif') {
     throw new Error(
       'Las exportaciones actualmente requieren imágenes JPG o PNG',
@@ -79,7 +85,7 @@ export class ExportService {
         data: {
           projectId,
           userId,
-          format: format as ExportFormat,
+          format,
           scopeType: 'PROJECT',
           template: 'classic',
           options: { includeImages: true },
@@ -134,7 +140,9 @@ export class ExportService {
       where: { id: exportJobId },
     });
 
-    if (!job || job.status === ExportStatus.COMPLETED) return;
+    if (!job || job.status === ExportStatus.COMPLETED) {
+      return;
+    }
 
     const claimed = await this.prisma.exportJob.updateMany({
       where: {
@@ -154,7 +162,9 @@ export class ExportService {
       },
     });
 
-    if (claimed.count === 0) return;
+    if (claimed.count === 0) {
+      return;
+    }
 
     try {
       if (!isSupportedFormat(job.format)) {
@@ -165,7 +175,9 @@ export class ExportService {
         job.userId,
         job.projectId,
       );
-      if (!source) throw new NotFoundException('Project not found');
+      if (!source) {
+        throw new NotFoundException('Project not found');
+      }
 
       await this.updateProgress(exportJobId, 20);
       const imageCache = new Map<
@@ -180,7 +192,9 @@ export class ExportService {
           }
 
           const cached = imageCache.get(storageKey);
-          if (cached) return cached;
+          if (cached) {
+            return cached;
+          }
 
           const image = {
             ...imageDetails(storageKey),

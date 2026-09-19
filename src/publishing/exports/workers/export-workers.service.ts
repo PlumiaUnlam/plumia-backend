@@ -15,7 +15,9 @@ export class ExportWorkersService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    if (this.config.get<string>('APP_ROLE', 'all') === 'web') return;
+    if (this.config.get<string>('APP_ROLE', 'all') === 'web') {
+      return;
+    }
 
     this.worker = new Worker<ExportQueueJobData>(
       EXPORT_QUEUE_NAME,

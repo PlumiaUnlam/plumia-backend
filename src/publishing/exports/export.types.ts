@@ -3,7 +3,7 @@ import type { ExportFormat, ExportStatus } from '@prisma/client';
 export const EXPORT_FORMATS = ['PDF', 'DOCX', 'EPUB'] as const;
 export type SupportedExportFormat = (typeof EXPORT_FORMATS)[number];
 
-export type ExportJobRecord = {
+export interface ExportJobRecord {
   id: string;
   projectId: string;
   format: ExportFormat;
@@ -14,13 +14,13 @@ export type ExportJobRecord = {
   fileSizeBytes: bigint | null;
   createdAt: Date;
   completedAt: Date | null;
-};
+}
 
-export type ExportImage = {
+export interface ExportImage {
   buffer: Buffer;
   mimeType: string;
   extension: string;
-};
+}
 
 export type ExportInline =
   | {
@@ -32,7 +32,7 @@ export type ExportInline =
     }
   | { kind: 'break' };
 
-export type ExportTextBlock = {
+export interface ExportTextBlock {
   kind: 'paragraph' | 'heading' | 'blockquote' | 'codeBlock';
   inlines: ExportInline[];
   level?: number;
@@ -41,12 +41,12 @@ export type ExportTextBlock = {
   indentLeft?: number;
   indentRight?: number;
   firstLineIndent?: number;
-};
+}
 
-export type ExportListBlock = {
+export interface ExportListBlock {
   kind: 'bulletList' | 'orderedList';
   items: ExportBlock[][];
-};
+}
 
 export type ExportBlock =
   | (ExportTextBlock & { kind: 'paragraph' })
@@ -58,28 +58,28 @@ export type ExportBlock =
   | { kind: 'sceneDivider' }
   | { kind: 'image'; image: ExportImage; alt: string };
 
-export type ExportScene = {
+export interface ExportScene {
   title: string | null;
   content: ExportBlock[];
-};
+}
 
-export type ExportChapter = {
+export interface ExportChapter {
   title: string;
   scenes: ExportScene[];
-};
+}
 
-export type ExportBook = {
+export interface ExportBook {
   title: string;
   chapters: ExportChapter[];
-};
+}
 
-export type ExportDocument = {
+export interface ExportDocument {
   title: string;
   books: ExportBook[];
-};
+}
 
-export type RenderedExport = {
+export interface RenderedExport {
   buffer: Buffer;
   contentType: string;
   extension: SupportedExportFormat;
-};
+}

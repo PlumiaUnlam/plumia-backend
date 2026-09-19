@@ -22,28 +22,48 @@ import type {
 } from '../export.types';
 
 function imageType(image: ExportImage): 'jpg' | 'png' | 'gif' | 'bmp' {
-  if (image.extension === 'png') return 'png';
-  if (image.extension === 'gif') return 'gif';
-  if (image.extension === 'bmp') return 'bmp';
+  if (image.extension === 'png') {
+    return 'png';
+  }
+  if (image.extension === 'gif') {
+    return 'gif';
+  }
+  if (image.extension === 'bmp') {
+    return 'bmp';
+  }
   return 'jpg';
 }
 
 function heading(
   level: number | undefined,
 ): (typeof HeadingLevel)[keyof typeof HeadingLevel] | undefined {
-  if (level === 1) return HeadingLevel.HEADING_1;
-  if (level === 2) return HeadingLevel.HEADING_2;
-  if (level === 3) return HeadingLevel.HEADING_3;
+  if (level === 1) {
+    return HeadingLevel.HEADING_1;
+  }
+  if (level === 2) {
+    return HeadingLevel.HEADING_2;
+  }
+  if (level === 3) {
+    return HeadingLevel.HEADING_3;
+  }
   return undefined;
 }
 
 function alignment(
   value: string | undefined,
 ): (typeof AlignmentType)[keyof typeof AlignmentType] | undefined {
-  if (value === 'center') return AlignmentType.CENTER;
-  if (value === 'right') return AlignmentType.RIGHT;
-  if (value === 'justify') return AlignmentType.JUSTIFIED;
-  if (value === 'left') return AlignmentType.LEFT;
+  if (value === 'center') {
+    return AlignmentType.CENTER;
+  }
+  if (value === 'right') {
+    return AlignmentType.RIGHT;
+  }
+  if (value === 'justify') {
+    return AlignmentType.JUSTIFIED;
+  }
+  if (value === 'left') {
+    return AlignmentType.LEFT;
+  }
   return undefined;
 }
 

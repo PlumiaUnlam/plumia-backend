@@ -2,6 +2,8 @@ import { ExportFormat, ExportStatus } from '@prisma/client';
 import { ExportService } from '../../../src/publishing/exports/export.service';
 
 describe('ExportService', () => {
+  const containing = <T>(value: T): T => expect.objectContaining(value) as T;
+
   const prisma = {
     project: { findFirst: jest.fn() },
     exportJob: {
@@ -26,7 +28,7 @@ describe('ExportService', () => {
     prisma as never,
     storage as never,
     renderer as never,
-    source as never,
+    source,
   );
 
   beforeEach(() => {
@@ -49,7 +51,7 @@ describe('ExportService', () => {
     };
     prisma.exportJob.create.mockResolvedValue(job);
     prisma.$transaction.mockImplementation(
-      async (callback: (tx: typeof prisma) => unknown) => callback(prisma),
+      (callback: (tx: typeof prisma) => unknown) => callback(prisma),
     );
 
     const result = await service.requestExport('user-id', 'project-id', 'PDF');
@@ -61,8 +63,8 @@ describe('ExportService', () => {
       status: ExportStatus.QUEUED,
     });
     expect(prisma.exportJob.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
+      containing({
+        data: containing({
           projectId: 'project-id',
           userId: 'user-id',
           format: ExportFormat.PDF,
@@ -71,8 +73,8 @@ describe('ExportService', () => {
       }),
     );
     expect(prisma.outbox.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
+      containing({
+        data: containing({
           aggregateType: 'ExportJob',
           aggregateId: 'job-id',
           eventType: 'export.requested',
@@ -114,7 +116,7 @@ describe('ExportService', () => {
 
     expect(renderer.render).toHaveBeenCalledWith(
       ExportFormat.PDF,
-      expect.objectContaining({ title: 'La obra', books: [] }),
+      containing({ title: 'La obra', books: [] }),
     );
     expect(storage.putBuffer).toHaveBeenCalledWith(
       'exports/project-id/job-id.pdf',
@@ -123,9 +125,9 @@ describe('ExportService', () => {
       expect.stringContaining('la-obra.pdf'),
     );
     expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
-      expect.objectContaining({
+      containing({
         where: { id: 'job-id' },
-        data: expect.objectContaining({
+        data: containing({
           status: ExportStatus.COMPLETED,
           progress: 100,
           storageKey: 'exports/project-id/job-id.pdf',
