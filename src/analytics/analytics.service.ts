@@ -17,14 +17,14 @@ interface SceneSaveActivity {
   currentWordCount: number;
 }
 
-interface DailyActivity {
+export interface DailyActivity {
   date: string;
   words: number;
   durationSecs: number;
   sessions: number;
 }
 
-interface SessionSummary {
+export interface SessionSummary {
   id: string;
   sceneId: string | null;
   sceneTitle: string;
