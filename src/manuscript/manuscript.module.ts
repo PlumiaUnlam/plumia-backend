@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AnalyticsModule } from '../analytics/analytics.module';
 import { StorageModule } from '../storage/storage.module';
 import { PrismaBookRepository } from './adapters/prisma-book-repository.adapter';
 import { PrismaChapterRepository } from './adapters/prisma-chapter-repository.adapter';
@@ -25,7 +26,7 @@ import { StoryboardMatrixService } from './services/storyboard-matrix.service';
 import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup-poller.service';
 
 @Module({
-  imports: [StorageModule],
+  imports: [StorageModule, AnalyticsModule],
   controllers: [
     ProjectsController,
     BooksController,

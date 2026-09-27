@@ -342,6 +342,15 @@ export class PrismaSceneVersionRepository {
           return null;
         }
 
+        const existingScene = await tx.scene.findUnique({
+          where: { id: sceneId },
+          select: { wordCount: true },
+        });
+
+        if (!existingScene) {
+          return null;
+        }
+
         const scene = await tx.scene.update({
           where: { id: sceneId },
           data: {
@@ -374,6 +383,7 @@ export class PrismaSceneVersionRepository {
         return {
           scene: toSceneRecord(scene),
           contentChanged: true,
+          previousWordCount: existingScene.wordCount,
         };
       });
     } catch (error: unknown) {
