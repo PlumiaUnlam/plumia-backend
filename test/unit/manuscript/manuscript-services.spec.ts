@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { AnalyticsService } from '../../../src/analytics/analytics.service';
 import { SceneStatus } from '../../../src/manuscript/domain/scene-status';
 import {
   BOOK_REPOSITORY,
@@ -27,6 +28,7 @@ describe('Manuscript child services', () => {
   let bookRepository: jest.Mocked<BookRepository>;
   let chapterRepository: jest.Mocked<ChapterRepository>;
   let sceneRepository: jest.Mocked<SceneRepository>;
+  let analyticsService: { recordSceneSave: jest.Mock };
 
   const now = new Date('2026-06-09T00:00:00.000Z');
   const book: BookRecord = {
@@ -72,6 +74,10 @@ describe('Manuscript child services', () => {
         ChapterService,
         SceneService,
         {
+          provide: AnalyticsService,
+          useValue: { recordSceneSave: jest.fn() },
+        },
+        {
           provide: BOOK_REPOSITORY,
           useValue: {
             createForUser: jest.fn(),
@@ -108,6 +114,9 @@ describe('Manuscript child services', () => {
     bookRepository = module.get(BOOK_REPOSITORY);
     chapterRepository = module.get(CHAPTER_REPOSITORY);
     sceneRepository = module.get(SCENE_REPOSITORY);
+    analyticsService = module.get<{ recordSceneSave: jest.Mock }>(
+      AnalyticsService,
+    );
   });
 
   it('creates child manuscript records through repository ports', async () => {
@@ -176,5 +185,25 @@ describe('Manuscript child services', () => {
         content: { type: 'doc' },
       }),
     ).rejects.toThrow(new NotFoundException('Scene not found'));
+  });
+
+  it('records writing activity after changed scene content is saved', async () => {
+    sceneRepository.updateContentForUser.mockResolvedValue({
+      scene: { ...scene, wordCount: 25 },
+      contentChanged: true,
+      previousWordCount: 10,
+    });
+
+    await sceneService.updateContent('user-1', scene.id, {
+      content: { type: 'doc' },
+      wordCount: 25,
+    });
+
+    expect(analyticsService.recordSceneSave).toHaveBeenCalledWith({
+      userId: 'user-1',
+      sceneId: scene.id,
+      previousWordCount: 10,
+      currentWordCount: 25,
+    });
   });
 });

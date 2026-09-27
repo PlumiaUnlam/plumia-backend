@@ -160,7 +160,11 @@ describe('PrismaSceneRepository', () => {
       wordCount: 1,
     });
 
-    expect(result).toEqual({ scene, contentChanged: true });
+    expect(result).toEqual({
+      scene,
+      contentChanged: true,
+      previousWordCount: existing.wordCount,
+    });
     expect(tx.scene.findFirst).toHaveBeenCalledWith({
       where: {
         id: 'scene-1',
@@ -243,7 +247,11 @@ describe('PrismaSceneRepository', () => {
       content,
     });
 
-    expect(result).toEqual({ scene, contentChanged: false });
+    expect(result).toEqual({
+      scene,
+      contentChanged: false,
+      previousWordCount: scene.wordCount,
+    });
     expect(tx.scene.update).not.toHaveBeenCalled();
     expect(tx.outbox.create).not.toHaveBeenCalled();
   });

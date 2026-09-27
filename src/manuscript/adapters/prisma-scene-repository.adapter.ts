@@ -184,6 +184,7 @@ export class PrismaSceneRepository implements SceneRepository {
           return {
             scene: this.toSceneRecord(existing),
             contentChanged: false,
+            previousWordCount: existing.wordCount,
           };
         }
 
@@ -226,6 +227,7 @@ export class PrismaSceneRepository implements SceneRepository {
         return {
           scene: this.toSceneRecord(scene),
           contentChanged: true,
+          previousWordCount: existing.wordCount,
         };
       });
     } catch (error: unknown) {
@@ -558,6 +560,15 @@ export class PrismaSceneRepository implements SceneRepository {
           return null;
         }
 
+        const existingScene = await tx.scene.findUnique({
+          where: { id: sceneId },
+          select: { wordCount: true },
+        });
+
+        if (!existingScene) {
+          return null;
+        }
+
         const scene = await tx.scene.update({
           where: { id: sceneId },
           data: {
@@ -611,6 +622,7 @@ export class PrismaSceneRepository implements SceneRepository {
         return {
           scene: this.toSceneRecord(scene),
           contentChanged: true,
+          previousWordCount: existingScene.wordCount,
         };
       });
     } catch (error: unknown) {
