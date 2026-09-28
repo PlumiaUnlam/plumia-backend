@@ -19,6 +19,22 @@ enum UserRole {
   READER
 }
 
+enum SharePermission {
+  READ_ONLY
+  COMMENT
+}
+
+enum ShareStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+enum ReaderCommentStatus {
+  OPEN
+  RESOLVED
+}
+
 enum PlanType {
   FREE
   PRO
@@ -168,6 +184,9 @@ model User {
   writingSessions               WritingSession[]
   writingGoals                  WritingGoal[]
   imageGenerationJobs           ImageGenerationJob[]
+  createdShareLinks             ShareLink[]            @relation("ShareCreator")
+  acceptedShareLinks            ShareLink[]            @relation("ShareRecipient")
+  readerComments                ReaderComment[]        @relation("ReaderCommentAuthor")
 }
 
 model UserApiKey {
@@ -279,8 +298,9 @@ model Book {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  chapters Chapter[]
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chapters   Chapter[]
+  shareLinks ShareLink[]
 
   @@unique([projectId, sortKey])
   @@index([projectId], map: "idx_book_project")
@@ -775,7 +795,8 @@ model Version {
   projectId      String   @map("project_id") @db.Uuid
   label          String?  @db.VarChar(200)
   type           String   @default("manual") @db.VarChar(20)
-  storageKey     String   @map("storage_key") @db.VarChar(500)
+  storageKey     String?  @map("storage_key") @db.VarChar(500)
+  snapshot       Json?    @db.JsonB
   checksumSha256 String   @map("checksum_sha256") @db.Char(64)
   wordCount      Int?     @map("word_count")
   entityCount    Int?     @map("entity_count")
@@ -937,45 +958,74 @@ model StoryboardMatrixNote {
 // ============================================================
 
 model ShareLink {
-  id            String    @id @default(uuid()) @db.Uuid
-  projectId     String    @map("project_id") @db.Uuid
-  versionId     String?   @map("version_id") @db.Uuid
-  slug          String    @unique @db.Char(36)
-  passwordHash  String?   @map("password_hash") @db.VarChar(60)
-  expiresAt     DateTime? @map("expires_at") @db.Timestamptz(6)
-  allowComments Boolean   @default(true) @map("allow_comments")
-  includeWiki   Boolean   @default(false) @map("include_wiki")
-  maxReaders    Int?      @map("max_readers")
-  readerCount   Int       @default(0) @map("reader_count")
-  isActive      Boolean   @default(true) @map("is_active")
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  id            String          @id @default(uuid()) @db.Uuid
+  projectId     String          @map("project_id") @db.Uuid
+  bookId        String?         @map("book_id") @db.Uuid
+  versionId     String?         @map("version_id") @db.Uuid
+  slug          String          @unique @db.Char(36)
+  tokenHash     String?         @unique @map("token_hash") @db.Char(64)
+  invitedEmail  String?         @map("invited_email") @db.VarChar(320)
+  permission    SharePermission @default(READ_ONLY)
+  status        ShareStatus     @default(PENDING)
+  createdById   String?         @map("created_by_id")
+  acceptedById  String?         @map("accepted_by_id")
+  passwordHash  String?         @map("password_hash") @db.VarChar(60)
+  expiresAt     DateTime?       @map("expires_at") @db.Timestamptz(6)
+  acceptedAt    DateTime?       @map("accepted_at") @db.Timestamptz(6)
+  revokedAt     DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  allowComments Boolean         @default(true) @map("allow_comments")
+  includeWiki   Boolean         @default(false) @map("include_wiki")
+  maxReaders    Int?            @map("max_readers")
+  readerCount   Int             @default(0) @map("reader_count")
+  isActive      Boolean         @default(true) @map("is_active")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  project  Project         @relation(fields: [projectId], references: [id])
-  version  Version?        @relation(fields: [versionId], references: [id])
-  comments ReaderComment[]
+  project    Project         @relation(fields: [projectId], references: [id])
+  book       Book?           @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  version    Version?        @relation(fields: [versionId], references: [id])
+  createdBy  User?           @relation("ShareCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedBy User?           @relation("ShareRecipient", fields: [acceptedById], references: [id], onDelete: SetNull)
+  comments   ReaderComment[]
 
   @@index([projectId], map: "idx_share_project")
+  @@index([bookId], map: "idx_share_book")
   @@index([slug], map: "idx_share_slug")
   @@index([expiresAt], map: "idx_share_expires")
+  @@index([invitedEmail, status], map: "idx_share_recipient_status")
+  @@index([acceptedById], map: "idx_share_accepted_by")
   @@map("share_link")
 }
 
 model ReaderComment {
-  id          String   @id @default(uuid()) @db.Uuid
-  shareLinkId String   @map("share_link_id") @db.Uuid
-  sceneId     String?  @map("scene_id") @db.Uuid
-  chapterId   String?  @map("chapter_id") @db.Uuid
-  displayName String   @map("display_name") @db.VarChar(100)
-  body        String
-  isVisible   Boolean  @default(false) @map("is_visible")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id              String              @id @default(uuid()) @db.Uuid
+  shareLinkId     String              @map("share_link_id") @db.Uuid
+  sceneId         String?             @map("scene_id") @db.Uuid
+  chapterId       String?             @map("chapter_id") @db.Uuid
+  snapshotSceneId String?             @map("snapshot_scene_id") @db.Uuid
+  authorUserId    String?             @map("author_user_id")
+  displayName     String              @map("display_name") @db.VarChar(100)
+  body            String
+  anchorFrom      Int?                @map("anchor_from")
+  anchorTo        Int?                @map("anchor_to")
+  selectedText    String?             @map("selected_text")
+  prefix          String?             @db.VarChar(200)
+  suffix          String?             @db.VarChar(200)
+  status          ReaderCommentStatus @default(OPEN)
+  isVisible       Boolean             @default(true) @map("is_visible")
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  resolvedAt      DateTime?           @map("resolved_at") @db.Timestamptz(6)
 
   shareLink ShareLink @relation(fields: [shareLinkId], references: [id], onDelete: Cascade)
   scene     Scene?    @relation(fields: [sceneId], references: [id])
   chapter   Chapter?  @relation(fields: [chapterId], references: [id])
+  author    User?     @relation("ReaderCommentAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
 
   @@index([shareLinkId], map: "idx_comment_share")
   @@index([isVisible], map: "idx_comment_visible")
+  @@index([snapshotSceneId], map: "idx_comment_snapshot_scene")
+  @@index([authorUserId], map: "idx_comment_author")
   @@map("reader_comment")
 }
 
