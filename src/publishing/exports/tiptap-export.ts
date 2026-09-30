@@ -5,6 +5,7 @@ import type {
   ExportInline,
 } from './export.types';
 import type { ExportSourceRecord } from './export-source.port';
+import { buildExportToc } from './export-toc';
 
 type JsonRecord = Record<string, unknown>;
 type ImageResolver = (
@@ -229,6 +230,7 @@ export async function prepareExportDocument(
       const scenes = [];
       for (const scene of chapter.scenes) {
         scenes.push({
+          id: scene.id,
           title: scene.title,
           content: await parseBlocks(
             scene.content && isRecord(scene.content) ? [scene.content] : [],
@@ -237,12 +239,17 @@ export async function prepareExportDocument(
           ),
         });
       }
-      chapters.push({ title: chapter.title, scenes });
+      chapters.push({ id: chapter.id, title: chapter.title, scenes });
     }
-    books.push({ title: book.title, chapters });
+    books.push({ id: book.id, title: book.title, chapters });
   }
 
-  return { title: source.title, books };
+  return {
+    id: source.id,
+    title: source.title,
+    books,
+    toc: buildExportToc(source.id, source.title, books),
+  };
 }
 
 function escapeHtml(value: string): string {

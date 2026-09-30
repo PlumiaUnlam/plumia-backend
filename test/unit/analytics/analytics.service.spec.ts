@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { AnalyticsService } from '../../../src/analytics/analytics.service';
-import { PrismaService } from '../../../src/prisma/prisma.service';
+import type { PrismaService } from '../../../src/prisma/prisma.service';
 
 describe('AnalyticsService', () => {
   const prisma = {

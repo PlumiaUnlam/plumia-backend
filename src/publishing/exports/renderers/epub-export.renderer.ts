@@ -10,6 +10,7 @@ import type {
   ExportImage,
   RenderedExport,
 } from '../export.types';
+import { exportAnchor } from '../export-toc';
 import { blocksToHtml } from '../tiptap-export';
 
 function escapeHtml(value: string): string {
@@ -39,6 +40,28 @@ function imageFileUrl(path: string): string {
   return `file://${path.replaceAll('\\', '/')}`;
 }
 
+function bookFilename(index: number): string {
+  return `book-${index}.xhtml`;
+}
+
+function tocHtml(
+  document: ExportDocument,
+  locations: ReadonlyMap<string, string>,
+): string {
+  const entries = document.toc
+    .map((entry) => {
+      const href = locations.get(entry.anchor);
+      if (!href) {
+        return '';
+      }
+
+      return `<li class="toc-entry toc-level-${entry.level}"><a href="${escapeHtml(href)}">${escapeHtml(entry.title)}</a></li>`;
+    })
+    .join('\n');
+
+  return `<h1>Índice</h1><ul class="toc">${entries}</ul>`;
+}
+
 @Injectable()
 export class EpubExportRenderer implements ExportRenderer {
   readonly format = 'EPUB' as const;
@@ -64,21 +87,67 @@ export class EpubExportRenderer implements ExportRenderer {
         imagePaths.set(image, imagePath);
       }
 
-      const content = document.books.map((book) => ({
-        title: book.title,
-        data: [
-          `<h1>${escapeHtml(book.title)}</h1>`,
-          ...book.chapters.flatMap((chapter) => [
-            `<h2>${escapeHtml(chapter.title)}</h2>`,
-            ...chapter.scenes.flatMap((scene) => [
-              scene.title ? `<h3>${escapeHtml(scene.title)}</h3>` : '',
-              blocksToHtml(scene.content, (image) =>
-                imageFileUrl(imagePaths.get(image) ?? ''),
-              ),
+      const locations = new Map<string, string>([
+        [
+          exportAnchor('project', document.id),
+          `cover.xhtml#${exportAnchor('project', document.id)}`,
+        ],
+      ]);
+
+      document.books.forEach((book, bookIndex) => {
+        const filename = bookFilename(bookIndex);
+        locations.set(
+          exportAnchor('book', book.id),
+          `${filename}#${exportAnchor('book', book.id)}`,
+        );
+        for (const chapter of book.chapters) {
+          locations.set(
+            exportAnchor('chapter', chapter.id),
+            `${filename}#${exportAnchor('chapter', chapter.id)}`,
+          );
+          for (const scene of chapter.scenes) {
+            if (scene.title) {
+              locations.set(
+                exportAnchor('scene', scene.id),
+                `${filename}#${exportAnchor('scene', scene.id)}`,
+              );
+            }
+          }
+        }
+      });
+
+      const content = [
+        {
+          title: 'Portada',
+          filename: 'cover.xhtml',
+          excludeFromToc: true,
+          data: `<h1 id="${exportAnchor('project', document.id)}">${escapeHtml(document.title)}</h1>`,
+        },
+        {
+          title: 'Índice',
+          filename: 'index.xhtml',
+          excludeFromToc: true,
+          data: tocHtml(document, locations),
+        },
+        ...document.books.map((book, bookIndex) => ({
+          title: book.title,
+          filename: bookFilename(bookIndex),
+          data: [
+            `<h1 id="${exportAnchor('book', book.id)}">${escapeHtml(book.title)}</h1>`,
+            ...book.chapters.flatMap((chapter) => [
+              `<h2 id="${exportAnchor('chapter', chapter.id)}">${escapeHtml(chapter.title)}</h2>`,
+              ...chapter.scenes.flatMap((scene) => [
+                scene.title
+                  ? `<h3 id="${exportAnchor('scene', scene.id)}">${escapeHtml(scene.title)}</h3>`
+                  : '',
+                blocksToHtml(scene.content, (image) =>
+                  imageFileUrl(imagePaths.get(image) ?? ''),
+                ),
+              ]),
             ]),
-          ]),
-        ].join('\n'),
-      }));
+          ].join('\n'),
+        })),
+      ];
 
       await new Epub(
         {
@@ -86,10 +155,19 @@ export class EpubExportRenderer implements ExportRenderer {
           author: 'PlumIA',
           publisher: 'PlumIA',
           lang: 'es',
-          tocTitle: 'Contenido',
+          tocTitle: 'Índice',
+          appendChapterTitles: false,
           content,
           tempDir: workDir,
-          css: 'body { font-family: serif; } img { max-width: 100%; }',
+          css: [
+            'body { font-family: serif; }',
+            'img { max-width: 100%; }',
+            '.toc { list-style: none; padding: 0; }',
+            '.toc-entry { margin: 0.35em 0; }',
+            '.toc-level-1 { margin-left: 1em; }',
+            '.toc-level-2 { margin-left: 2em; }',
+            '.toc-level-3 { margin-left: 3em; }',
+          ].join(' '),
         },
         outputPath,
       ).promise;

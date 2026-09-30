@@ -351,7 +351,7 @@ export class AnalyticsService {
     }
     const goalSummaries = [...latestGoals.values()].map((goal) => {
       const currentWords =
-        goal.goalType === WritingGoalType.WEEKLY
+        goal.goalType === String(WritingGoalType.WEEKLY)
           ? periodWords.WEEKLY
           : periodWords.DAILY;
       return {
@@ -373,9 +373,10 @@ export class AnalyticsService {
     const dailyGoal = latestGoals.get(WritingGoalType.DAILY);
     const weeklyGoal = latestGoals.get(WritingGoalType.WEEKLY);
     const paceWordsPerDay =
-      averageDailyWords ||
-      dailyGoal?.targetWords ||
-      (weeklyGoal ? Math.ceil(weeklyGoal.targetWords / 7) : 0);
+      averageDailyWords > 0
+        ? averageDailyWords
+        : (dailyGoal?.targetWords ??
+          (weeklyGoal ? Math.ceil(weeklyGoal.targetWords / 7) : 0));
     const remainingWords = Math.max(
       (project.wordCountTarget ?? 0) - totalWords,
       0,

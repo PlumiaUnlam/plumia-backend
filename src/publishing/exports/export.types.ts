@@ -22,6 +22,14 @@ export interface ExportImage {
   extension: string;
 }
 
+export interface ExportTocEntry {
+  id: string;
+  kind: 'project' | 'book' | 'chapter' | 'scene';
+  title: string;
+  level: number;
+  anchor: string;
+}
+
 export type ExportInline =
   | {
       kind: 'text';
@@ -59,23 +67,28 @@ export type ExportBlock =
   | { kind: 'image'; image: ExportImage; alt: string };
 
 export interface ExportScene {
+  id: string;
   title: string | null;
   content: ExportBlock[];
 }
 
 export interface ExportChapter {
+  id: string;
   title: string;
   scenes: ExportScene[];
 }
 
 export interface ExportBook {
+  id: string;
   title: string;
   chapters: ExportChapter[];
 }
 
 export interface ExportDocument {
+  id: string;
   title: string;
   books: ExportBook[];
+  toc: ExportTocEntry[];
 }
 
 export interface RenderedExport {

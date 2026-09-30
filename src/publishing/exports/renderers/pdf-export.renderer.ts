@@ -3,6 +3,7 @@ import PDFDocument from 'pdfkit';
 import type { ExportBlock, ExportInline } from '../export.types';
 import type { ExportDocument, RenderedExport } from '../export.types';
 import type { ExportRenderer } from '../export-renderer.port';
+import { exportAnchor } from '../export-toc';
 
 function plainText(inlines: ExportInline[]): string {
   return inlines
@@ -126,6 +127,20 @@ function renderBlocks(
   }
 }
 
+function renderToc(pdf: PDFKit.PDFDocument, document: ExportDocument): void {
+  pdf.font('Helvetica').fontSize(17).text('Índice').moveDown(0.5);
+
+  for (const entry of document.toc) {
+    pdf
+      .fontSize(entry.level === 0 ? 12 : 11)
+      .text(entry.title, {
+        indent: entry.level * 18,
+        goTo: entry.anchor,
+      })
+      .moveDown(0.18);
+  }
+}
+
 @Injectable()
 export class PdfExportRenderer implements ExportRenderer {
   readonly format = 'PDF' as const;
@@ -146,18 +161,41 @@ export class PdfExportRenderer implements ExportRenderer {
     pdf
       .font('Helvetica')
       .fontSize(24)
-      .text(document.title, { align: 'center' })
+      .text(document.title, {
+        align: 'center',
+        destination: exportAnchor('project', document.id),
+      })
       .moveDown(1);
+
+    renderToc(pdf, document);
+    pdf.addPage();
+
     document.books.forEach((book, bookIndex) => {
       if (bookIndex > 0) {
         pdf.addPage();
       }
-      pdf.fontSize(19).text(book.title, { align: 'center' }).moveDown(0.75);
+      pdf
+        .fontSize(19)
+        .text(book.title, {
+          align: 'center',
+          destination: exportAnchor('book', book.id),
+        })
+        .moveDown(0.75);
       for (const chapter of book.chapters) {
-        pdf.fontSize(15).text(chapter.title).moveDown(0.4);
+        pdf
+          .fontSize(15)
+          .text(chapter.title, {
+            destination: exportAnchor('chapter', chapter.id),
+          })
+          .moveDown(0.4);
         for (const scene of chapter.scenes) {
           if (scene.title) {
-            pdf.fontSize(13).text(scene.title).moveDown(0.25);
+            pdf
+              .fontSize(13)
+              .text(scene.title, {
+                destination: exportAnchor('scene', scene.id),
+              })
+              .moveDown(0.25);
           }
           renderBlocks(pdf, scene.content);
         }

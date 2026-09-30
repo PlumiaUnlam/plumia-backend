@@ -1,11 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import {
   AlignmentType,
+  Bookmark,
   Document,
   ExternalHyperlink,
   HeadingLevel,
   ImageRun,
+  InternalHyperlink,
   Packer,
+  PageBreak,
   Paragraph,
   TextRun,
   type IParagraphOptions,
@@ -20,6 +23,7 @@ import type {
   ExportTextBlock,
   RenderedExport,
 } from '../export.types';
+import { exportAnchor } from '../export-toc';
 
 function imageType(image: ExportImage): 'jpg' | 'png' | 'gif' | 'bmp' {
   if (image.extension === 'png') {
@@ -225,33 +229,77 @@ function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
   return paragraphs;
 }
 
+function bookmarkedHeading(
+  title: string,
+  headingLevel: IParagraphOptions['heading'],
+  anchor: string,
+): Paragraph {
+  return new Paragraph({
+    ...(headingLevel ? { heading: headingLevel } : {}),
+    children: [
+      new Bookmark({
+        id: anchor,
+        children: [new TextRun({ text: title })],
+      }),
+    ],
+  });
+}
+
+function tocParagraph(entry: ExportDocument['toc'][number]): Paragraph {
+  return new Paragraph({
+    indent: { left: entry.level * 360 },
+    children: [
+      new InternalHyperlink({
+        anchor: entry.anchor,
+        children: [new TextRun({ text: entry.title, style: 'Hyperlink' })],
+      }),
+    ],
+  });
+}
+
 @Injectable()
 export class DocxExportRenderer implements ExportRenderer {
   readonly format = 'DOCX' as const;
 
   async render(document: ExportDocument): Promise<RenderedExport> {
     const children: Paragraph[] = [
-      new Paragraph({ text: document.title, heading: HeadingLevel.TITLE }),
+      bookmarkedHeading(
+        document.title,
+        HeadingLevel.TITLE,
+        exportAnchor('project', document.id),
+      ),
+      new Paragraph({
+        text: 'Índice',
+        heading: HeadingLevel.HEADING_1,
+      }),
+      ...document.toc.map(tocParagraph),
+      new Paragraph({ children: [new PageBreak()] }),
     ];
 
     for (const book of document.books) {
       children.push(
-        new Paragraph({ text: book.title, heading: HeadingLevel.HEADING_1 }),
+        bookmarkedHeading(
+          book.title,
+          HeadingLevel.HEADING_1,
+          exportAnchor('book', book.id),
+        ),
       );
       for (const chapter of book.chapters) {
         children.push(
-          new Paragraph({
-            text: chapter.title,
-            heading: HeadingLevel.HEADING_2,
-          }),
+          bookmarkedHeading(
+            chapter.title,
+            HeadingLevel.HEADING_2,
+            exportAnchor('chapter', chapter.id),
+          ),
         );
         for (const scene of chapter.scenes) {
           if (scene.title) {
             children.push(
-              new Paragraph({
-                text: scene.title,
-                heading: HeadingLevel.HEADING_3,
-              }),
+              bookmarkedHeading(
+                scene.title,
+                HeadingLevel.HEADING_3,
+                exportAnchor('scene', scene.id),
+              ),
             );
           }
           children.push(...blocksToParagraphs(scene.content));
