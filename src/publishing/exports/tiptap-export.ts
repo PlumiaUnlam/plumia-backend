@@ -6,6 +6,11 @@ import type {
 } from './export.types';
 import type { ExportSourceRecord } from './export-source.port';
 import { buildExportToc } from './export-toc';
+import {
+  normalizeSceneDividerVariant,
+  sceneDividerSvg,
+  type SceneDividerVariant,
+} from './scene-divider';
 
 type JsonRecord = Record<string, unknown>;
 type ImageResolver = (
@@ -180,8 +185,17 @@ async function parseBlocks(
       continue;
     }
 
-    if (type === 'horizontalRule' || type === 'sceneDivider') {
-      blocks.push({ kind: 'sceneDivider' });
+    if (type === 'horizontalRule') {
+      blocks.push({ kind: 'horizontalRule' });
+      continue;
+    }
+
+    if (type === 'sceneDivider') {
+      const attrs = nodeAttributes(value);
+      blocks.push({
+        kind: 'sceneDivider',
+        variant: normalizeSceneDividerVariant(attrs['variant']),
+      });
       continue;
     }
 
@@ -282,6 +296,7 @@ function inlineHtml(inline: ExportInline): string {
 function blocksHtml(
   blocks: ExportBlock[],
   imageSrc: (image: ExportImage) => string,
+  dividerSrc?: (variant: SceneDividerVariant) => string,
 ): string {
   return blocks
     .map((block) => {
@@ -319,11 +334,20 @@ function blocksHtml(
       if (block.kind === 'bulletList' || block.kind === 'orderedList') {
         const tag = block.kind === 'bulletList' ? 'ul' : 'ol';
         return `<${tag}>${block.items
-          .map((item) => `<li>${blocksHtml(item, imageSrc)}</li>`)
+          .map((item) => `<li>${blocksHtml(item, imageSrc, dividerSrc)}</li>`)
           .join('')}</${tag}>`;
       }
 
       if (block.kind === 'sceneDivider') {
+        const source = dividerSrc
+          ? dividerSrc(block.variant)
+          : `data:image/svg+xml;base64,${Buffer.from(
+              sceneDividerSvg(block.variant),
+            ).toString('base64')}`;
+        return `<p class="scene-divider"><img src="${escapeHtml(source)}" alt="Separador ornamental" /></p>`;
+      }
+
+      if (block.kind === 'horizontalRule') {
         return '<hr />';
       }
 
@@ -336,8 +360,9 @@ export function blocksToHtml(
   blocks: ExportBlock[],
   imageSrc: (image: ExportImage) => string = (image) =>
     `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
+  dividerSrc?: (variant: SceneDividerVariant) => string,
 ): string {
-  return blocksHtml(blocks, imageSrc);
+  return blocksHtml(blocks, imageSrc, dividerSrc);
 }
 
 export function inlineText(inlines: ExportInline[]): string {

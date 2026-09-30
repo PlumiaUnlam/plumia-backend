@@ -11,6 +11,11 @@ import type {
   RenderedExport,
 } from '../export.types';
 import { exportAnchor } from '../export-toc';
+import {
+  SCENE_DIVIDER_VARIANTS,
+  sceneDividerSvg,
+  type SceneDividerVariant,
+} from '../scene-divider';
 import { blocksToHtml } from '../tiptap-export';
 
 function escapeHtml(value: string): string {
@@ -42,6 +47,10 @@ function imageFileUrl(path: string): string {
 
 function bookFilename(index: number): string {
   return `book-${index}.xhtml`;
+}
+
+function chapterFilename(bookIndex: number, chapterIndex: number): string {
+  return `book-${bookIndex}-chapter-${chapterIndex}.xhtml`;
 }
 
 function tocHtml(
@@ -87,6 +96,13 @@ export class EpubExportRenderer implements ExportRenderer {
         imagePaths.set(image, imagePath);
       }
 
+      const dividerPaths = new Map<SceneDividerVariant, string>();
+      for (const variant of SCENE_DIVIDER_VARIANTS) {
+        const dividerPath = join(workDir, `scene-divider-${variant}.svg`);
+        await writeFile(dividerPath, sceneDividerSvg(variant), 'utf8');
+        dividerPaths.set(variant, dividerPath);
+      }
+
       const locations = new Map<string, string>([
         [
           exportAnchor('project', document.id),
@@ -95,25 +111,61 @@ export class EpubExportRenderer implements ExportRenderer {
       ]);
 
       document.books.forEach((book, bookIndex) => {
-        const filename = bookFilename(bookIndex);
+        const filename = book.chapters.length
+          ? chapterFilename(bookIndex, 0)
+          : bookFilename(bookIndex);
         locations.set(
           exportAnchor('book', book.id),
           `${filename}#${exportAnchor('book', book.id)}`,
         );
-        for (const chapter of book.chapters) {
+        book.chapters.forEach((chapter, chapterIndex) => {
+          const chapterFile = chapterFilename(bookIndex, chapterIndex);
           locations.set(
             exportAnchor('chapter', chapter.id),
-            `${filename}#${exportAnchor('chapter', chapter.id)}`,
+            `${chapterFile}#${exportAnchor('chapter', chapter.id)}`,
           );
           for (const scene of chapter.scenes) {
             if (scene.title) {
               locations.set(
                 exportAnchor('scene', scene.id),
-                `${filename}#${exportAnchor('scene', scene.id)}`,
+                `${chapterFile}#${exportAnchor('scene', scene.id)}`,
               );
             }
           }
+        });
+      });
+
+      const bookContent = document.books.flatMap((book, bookIndex) => {
+        if (book.chapters.length === 0) {
+          return [
+            {
+              title: book.title,
+              filename: bookFilename(bookIndex),
+              data: `<h1 id="${exportAnchor('book', book.id)}">${escapeHtml(book.title)}</h1>`,
+            },
+          ];
         }
+
+        return book.chapters.map((chapter, chapterIndex) => ({
+          title: chapterIndex === 0 ? book.title : chapter.title,
+          filename: chapterFilename(bookIndex, chapterIndex),
+          data: [
+            chapterIndex === 0
+              ? `<h1 id="${exportAnchor('book', book.id)}">${escapeHtml(book.title)}</h1>`
+              : '',
+            `<h2 id="${exportAnchor('chapter', chapter.id)}">${escapeHtml(chapter.title)}</h2>`,
+            ...chapter.scenes.flatMap((scene) => [
+              scene.title
+                ? `<h3 id="${exportAnchor('scene', scene.id)}">${escapeHtml(scene.title)}</h3>`
+                : '',
+              blocksToHtml(
+                scene.content,
+                (image) => imageFileUrl(imagePaths.get(image) ?? ''),
+                (variant) => imageFileUrl(dividerPaths.get(variant) ?? ''),
+              ),
+            ]),
+          ].join('\n'),
+        }));
       });
 
       const content = [
@@ -129,24 +181,7 @@ export class EpubExportRenderer implements ExportRenderer {
           excludeFromToc: true,
           data: tocHtml(document, locations),
         },
-        ...document.books.map((book, bookIndex) => ({
-          title: book.title,
-          filename: bookFilename(bookIndex),
-          data: [
-            `<h1 id="${exportAnchor('book', book.id)}">${escapeHtml(book.title)}</h1>`,
-            ...book.chapters.flatMap((chapter) => [
-              `<h2 id="${exportAnchor('chapter', chapter.id)}">${escapeHtml(chapter.title)}</h2>`,
-              ...chapter.scenes.flatMap((scene) => [
-                scene.title
-                  ? `<h3 id="${exportAnchor('scene', scene.id)}">${escapeHtml(scene.title)}</h3>`
-                  : '',
-                blocksToHtml(scene.content, (image) =>
-                  imageFileUrl(imagePaths.get(image) ?? ''),
-                ),
-              ]),
-            ]),
-          ].join('\n'),
-        })),
+        ...bookContent,
       ];
 
       await new Epub(
@@ -162,6 +197,8 @@ export class EpubExportRenderer implements ExportRenderer {
           css: [
             'body { font-family: serif; }',
             'img { max-width: 100%; }',
+            '.scene-divider { text-align: center; margin: 1.5em 0; }',
+            '.scene-divider img { width: 100%; max-width: 16em; height: auto; }',
             '.toc { list-style: none; padding: 0; }',
             '.toc-entry { margin: 0.35em 0; }',
             '.toc-level-1 { margin-left: 1em; }',

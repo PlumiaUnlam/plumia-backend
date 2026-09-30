@@ -6,6 +6,11 @@ import {
   blocksToHtml,
   prepareExportDocument,
 } from '../../../src/publishing/exports/tiptap-export';
+import {
+  SCENE_DIVIDER_VARIANTS,
+  normalizeSceneDividerVariant,
+  sceneDividerSvg,
+} from '../../../src/publishing/exports/scene-divider';
 
 const imageBuffer = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -90,6 +95,11 @@ const source = {
                     ],
                   },
                   {
+                    type: 'sceneDivider',
+                    attrs: { variant: 'stars' },
+                  },
+                  { type: 'horizontalRule' },
+                  {
                     type: 'image',
                     attrs: {
                       storageKey: 'scenes/scene/image.png',
@@ -108,6 +118,25 @@ const source = {
               id: 'scene-duplicate-title-id',
               title: 'La llegada',
               content: null,
+            },
+          ],
+        },
+        {
+          id: 'chapter-ii-id',
+          title: 'CapÃ­tulo II',
+          scenes: [
+            {
+              id: 'scene-ii-id',
+              title: 'La partida',
+              content: {
+                type: 'doc',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'ContinÃºo.' }],
+                  },
+                ],
+              },
             },
           ],
         },
@@ -130,45 +159,70 @@ describe('export rendering', () => {
     const html = blocksToHtml(blocks);
 
     expect(html).toContain('<h2>Una noche</h2>');
+    expect(html).toContain('class="scene-divider"');
+    expect(html).toContain('data:image/svg+xml;base64');
+    expect(html).toContain('<hr />');
+    expect(blocks).toEqual(
+      expect.arrayContaining([
+        { kind: 'sceneDivider', variant: 'stars' },
+        { kind: 'horizontalRule' },
+      ]),
+    );
     expect(html).toContain('<strong>El tren llegó.</strong>');
     expect(html).toContain('data:image/png;base64');
-    expect(document.toc).toEqual([
-      {
-        id: 'project-id',
-        kind: 'project',
-        title: 'La obra',
-        level: 0,
-        anchor: 'export_project_project_id',
-      },
-      {
-        id: 'book-id',
-        kind: 'book',
-        title: 'Libro I',
-        level: 1,
-        anchor: 'export_book_book_id',
-      },
-      {
-        id: 'chapter-id',
-        kind: 'chapter',
-        title: 'Capítulo I',
-        level: 2,
-        anchor: 'export_chapter_chapter_id',
-      },
-      {
-        id: 'scene-id',
-        kind: 'scene',
-        title: 'La llegada',
-        level: 3,
-        anchor: 'export_scene_scene_id',
-      },
-      {
-        id: 'scene-duplicate-title-id',
-        kind: 'scene',
-        title: 'La llegada',
-        level: 3,
-        anchor: 'export_scene_scene_duplicate_title_id',
-      },
-    ]);
+    expect(document.toc).toEqual(
+      expect.arrayContaining([
+        {
+          id: 'project-id',
+          kind: 'project',
+          title: 'La obra',
+          level: 0,
+          anchor: 'export_project_project_id',
+        },
+        {
+          id: 'book-id',
+          kind: 'book',
+          title: 'Libro I',
+          level: 1,
+          anchor: 'export_book_book_id',
+        },
+        {
+          id: 'chapter-id',
+          kind: 'chapter',
+          title: 'Capítulo I',
+          level: 2,
+          anchor: 'export_chapter_chapter_id',
+        },
+        {
+          id: 'scene-id',
+          kind: 'scene',
+          title: 'La llegada',
+          level: 3,
+          anchor: 'export_scene_scene_id',
+        },
+        {
+          id: 'chapter-ii-id',
+          kind: 'chapter',
+          title: 'CapÃ­tulo II',
+          level: 2,
+          anchor: 'export_chapter_chapter_ii_id',
+        },
+        {
+          id: 'scene-ii-id',
+          kind: 'scene',
+          title: 'La partida',
+          level: 3,
+          anchor: 'export_scene_scene_ii_id',
+        },
+        {
+          id: 'scene-duplicate-title-id',
+          kind: 'scene',
+          title: 'La llegada',
+          level: 3,
+          anchor: 'export_scene_scene_duplicate_title_id',
+        },
+      ]),
+    );
   });
 
   it('generates a DOCX, PDF and EPUB buffer', async () => {
@@ -194,14 +248,86 @@ describe('export rendering', () => {
     expect(docxXml).toContain('Índice');
     expect(docxXml).toContain('w:bookmarkStart');
     expect(docxXml).toContain('export_book_book_id');
+    expect(docxXml.match(/w:type="page"/g)?.length).toBe(2);
+    expect(docx.buffer.toString('latin1')).toContain('.svg');
+    expect(docx.buffer.toString('latin1')).toContain('.png');
 
     const pdfText = pdf.buffer.toString('latin1');
     expect(pdfText).toContain('export_book_book_id');
+    expect(pdfText).not.toContain('⁂');
+    expect(pdfText.match(/\/Type\s*\/Page\b/g)?.length).toBe(3);
 
     const epubIndex = zipEntryText(epub.buffer, 'OEBPS/index.xhtml');
-    const epubBook = zipEntryText(epub.buffer, 'OEBPS/book-0.xhtml');
+    const epubBook = zipEntryText(epub.buffer, 'OEBPS/book-0-chapter-0.xhtml');
+    const epubSecondChapter = zipEntryText(
+      epub.buffer,
+      'OEBPS/book-0-chapter-1.xhtml',
+    );
     expect(epubIndex).toContain('&#xCD;ndice');
-    expect(epubIndex).toContain('book-0.xhtml#export_book_book_id');
+    expect(epubIndex).toContain('book-0-chapter-0.xhtml#export_book_book_id');
     expect(epubBook).toContain('id="export_book_book_id"');
+    expect(epubBook).toMatch(/images\/[^"']+\.svg/);
+    expect(epubSecondChapter).toContain('id="export_chapter_chapter_ii_id"');
+  });
+
+  it('normalizes divider variants and preserves the four vector artworks', async () => {
+    expect(normalizeSceneDividerVariant(undefined)).toBe('flourish');
+    expect(normalizeSceneDividerVariant('unknown')).toBe('flourish');
+    expect(SCENE_DIVIDER_VARIANTS).toEqual([
+      'flourish',
+      'diamonds',
+      'stars',
+      'waves',
+    ]);
+
+    for (const variant of SCENE_DIVIDER_VARIANTS) {
+      expect(sceneDividerSvg(variant)).toContain('viewBox="0 0 256 64"');
+      expect(sceneDividerSvg(variant)).toContain('#5b3d6f');
+    }
+
+    const baseBook = source.books[0]!;
+    const baseChapter = baseBook.chapters[0]!;
+    const baseScene = baseChapter.scenes[0]!;
+
+    const document = await prepareExportDocument(
+      {
+        ...source,
+        books: [
+          {
+            ...baseBook,
+            chapters: [
+              {
+                ...baseChapter,
+                scenes: [
+                  {
+                    ...baseScene,
+                    content: {
+                      type: 'doc',
+                      content: SCENE_DIVIDER_VARIANTS.map((variant) => ({
+                        type: 'sceneDivider',
+                        attrs: { variant },
+                      })),
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      () =>
+        Promise.resolve({
+          buffer: imageBuffer,
+          mimeType: 'image/png',
+          extension: 'png',
+        }),
+    );
+
+    expect(document.books[0]?.chapters[0]?.scenes[0]?.content).toEqual(
+      SCENE_DIVIDER_VARIANTS.map((variant) => ({
+        kind: 'sceneDivider',
+        variant,
+      })),
+    );
   });
 });

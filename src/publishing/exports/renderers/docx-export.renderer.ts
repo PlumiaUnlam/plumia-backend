@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   AlignmentType,
   Bookmark,
+  BorderStyle,
   Document,
   ExternalHyperlink,
   HeadingLevel,
@@ -24,6 +25,7 @@ import type {
   RenderedExport,
 } from '../export.types';
 import { exportAnchor } from '../export-toc';
+import { sceneDividerPngFallback, sceneDividerSvg } from '../scene-divider';
 
 function imageType(image: ExportImage): 'jpg' | 'png' | 'gif' | 'bmp' {
   if (image.extension === 'png') {
@@ -196,7 +198,43 @@ function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
 
     if (block.kind === 'sceneDivider') {
       paragraphs.push(
-        new Paragraph({ text: '⁂', alignment: AlignmentType.CENTER }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 120, after: 120 },
+          children: [
+            new ImageRun({
+              type: 'svg',
+              data: Buffer.from(sceneDividerSvg(block.variant), 'utf8'),
+              fallback: {
+                type: 'png',
+                data: sceneDividerPngFallback(block.variant),
+              },
+              transformation: { width: 360, height: 90 },
+              altText: {
+                title: 'Separador ornamental',
+                description: 'Separador ornamental',
+                name: 'Separador ornamental',
+              },
+            }),
+          ],
+        }),
+      );
+      continue;
+    }
+
+    if (block.kind === 'horizontalRule') {
+      paragraphs.push(
+        new Paragraph({
+          spacing: { before: 120, after: 120 },
+          border: {
+            bottom: {
+              color: '808080',
+              style: BorderStyle.SINGLE,
+              size: 6,
+              space: 1,
+            },
+          },
+        }),
       );
       continue;
     }
@@ -276,7 +314,10 @@ export class DocxExportRenderer implements ExportRenderer {
       new Paragraph({ children: [new PageBreak()] }),
     ];
 
-    for (const book of document.books) {
+    document.books.forEach((book, bookIndex) => {
+      if (bookIndex > 0) {
+        children.push(new Paragraph({ children: [new PageBreak()] }));
+      }
       children.push(
         bookmarkedHeading(
           book.title,
@@ -284,7 +325,10 @@ export class DocxExportRenderer implements ExportRenderer {
           exportAnchor('book', book.id),
         ),
       );
-      for (const chapter of book.chapters) {
+      book.chapters.forEach((chapter, chapterIndex) => {
+        if (chapterIndex > 0) {
+          children.push(new Paragraph({ children: [new PageBreak()] }));
+        }
         children.push(
           bookmarkedHeading(
             chapter.title,
@@ -304,8 +348,8 @@ export class DocxExportRenderer implements ExportRenderer {
           }
           children.push(...blocksToParagraphs(scene.content));
         }
-      }
-    }
+      });
+    });
 
     const file = new Document({ sections: [{ children }] });
     return {

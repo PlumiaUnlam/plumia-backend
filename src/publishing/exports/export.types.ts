@@ -1,4 +1,5 @@
 import type { ExportFormat, ExportStatus } from '@prisma/client';
+import type { SceneDividerVariant } from './scene-divider';
 
 export const EXPORT_FORMATS = ['PDF', 'DOCX', 'EPUB'] as const;
 export type SupportedExportFormat = (typeof EXPORT_FORMATS)[number];
@@ -63,7 +64,8 @@ export type ExportBlock =
   | (ExportTextBlock & { kind: 'codeBlock' })
   | (ExportListBlock & { kind: 'bulletList' })
   | (ExportListBlock & { kind: 'orderedList' })
-  | { kind: 'sceneDivider' }
+  | { kind: 'sceneDivider'; variant: SceneDividerVariant }
+  | { kind: 'horizontalRule' }
   | { kind: 'image'; image: ExportImage; alt: string };
 
 export interface ExportScene {
