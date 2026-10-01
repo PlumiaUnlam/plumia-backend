@@ -221,28 +221,24 @@ export async function prepareExportDocument(
   source: ExportSourceRecord,
   resolveImage: ImageResolver,
 ): Promise<ExportDocument> {
-  const books = [];
+  const chapters = [];
 
-  for (const book of source.books) {
-    const chapters = [];
-    for (const chapter of book.chapters) {
-      const scenes = [];
-      for (const scene of chapter.scenes) {
-        scenes.push({
-          title: scene.title,
-          content: await parseBlocks(
-            scene.content && isRecord(scene.content) ? [scene.content] : [],
-            resolveImage,
-            scene.id,
-          ),
-        });
-      }
-      chapters.push({ title: chapter.title, scenes });
+  for (const chapter of source.chapters) {
+    const scenes = [];
+    for (const scene of chapter.scenes) {
+      scenes.push({
+        title: scene.title,
+        content: await parseBlocks(
+          scene.content && isRecord(scene.content) ? [scene.content] : [],
+          resolveImage,
+          scene.id,
+        ),
+      });
     }
-    books.push({ title: book.title, chapters });
+    chapters.push({ title: chapter.title, scenes });
   }
 
-  return { title: source.title, books };
+  return { title: source.title, chapters };
 }
 
 function escapeHtml(value: string): string {

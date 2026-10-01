@@ -5,15 +5,12 @@ export const EXPORT_SOURCE = Symbol('EXPORT_SOURCE');
 export interface ExportSourceRecord {
   id: string;
   title: string;
-  books: Array<{
+  chapters: Array<{
     title: string;
-    chapters: Array<{
-      title: string;
-      scenes: Array<{
-        id: string;
-        title: string | null;
-        content: Prisma.JsonValue | null;
-      }>;
+    scenes: Array<{
+      id: string;
+      title: string | null;
+      content: Prisma.JsonValue | null;
     }>;
   }>;
 }
@@ -21,6 +18,6 @@ export interface ExportSourceRecord {
 export interface ExportSourceRepository {
   findByIdForUser(
     userId: string,
-    projectId: string,
+    bookId: string,
   ): Promise<ExportSourceRecord | null>;
 }

@@ -7,6 +7,7 @@ import {
   type ExportSourceRepository,
 } from './export-source.port';
 import { ExportRendererService } from './export-renderer.service';
+import { ExportSettingsService } from './export-settings.service';
 import {
   EXPORT_FORMATS,
   type ExportJobRecord,
@@ -62,6 +63,7 @@ export class ExportService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly renderer: ExportRendererService,
+    private readonly exportSettings: ExportSettingsService,
     @Inject(EXPORT_SOURCE)
     private readonly sourceRepository: ExportSourceRepository,
   ) {}
@@ -69,15 +71,21 @@ export class ExportService {
   async requestExport(
     userId: string,
     projectId: string,
+    bookId: string,
     format: SupportedExportFormat,
   ): Promise<ExportJobResponseDto> {
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, userId, deletedAt: null },
+    const book = await this.prisma.book.findFirst({
+      where: {
+        id: bookId,
+        projectId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
       select: { id: true },
     });
 
-    if (!project) {
-      throw new NotFoundException('Project not found');
+    if (!book) {
+      throw new NotFoundException('Book not found');
     }
 
     const job = await this.prisma.$transaction(async (tx) => {
@@ -86,7 +94,8 @@ export class ExportService {
           projectId,
           userId,
           format,
-          scopeType: 'PROJECT',
+          scopeType: 'BOOK',
+          scopeId: bookId,
           template: 'classic',
           options: { includeImages: true },
         },
@@ -97,7 +106,7 @@ export class ExportService {
           aggregateType: 'ExportJob',
           aggregateId: created.id,
           eventType: 'export.requested',
-          payload: { exportJobId: created.id, projectId, userId },
+          payload: { exportJobId: created.id, projectId, bookId, userId },
           createdAt: new Date(),
         },
       });
@@ -111,11 +120,11 @@ export class ExportService {
   async getExportStatus(
     userId: string,
     projectId: string,
+    bookId: string,
     exportJobId: string,
   ): Promise<ExportJobResponseDto> {
     const job = await this.prisma.exportJob.findFirst({
-      where: { id: exportJobId, projectId, userId },
-      include: { project: { select: { title: true } } },
+      where: { id: exportJobId, projectId, scopeId: bookId, userId },
     });
 
     if (!job) {
@@ -123,14 +132,21 @@ export class ExportService {
     }
 
     const record = this.toRecord(job);
-    const downloadUrl =
-      record.status === ExportStatus.COMPLETED && record.storageKey
-        ? await this.storage.generatePresignedGetUrl(record.storageKey, {
-            responseContentType:
-              MIME_TYPES[record.format as SupportedExportFormat],
-            downloadName: `${fileSlug(job.project.title)}.${record.format.toLowerCase()}`,
-          })
-        : null;
+    let downloadUrl: string | null = null;
+    if (record.status === ExportStatus.COMPLETED && record.storageKey) {
+      const book = await this.prisma.book.findUnique({
+        where: { id: bookId },
+        select: { title: true },
+      });
+      downloadUrl = await this.storage.generatePresignedGetUrl(
+        record.storageKey,
+        {
+          responseContentType:
+            MIME_TYPES[record.format as SupportedExportFormat],
+          downloadName: `${fileSlug(book?.title ?? 'obra')}.${record.format.toLowerCase()}`,
+        },
+      );
+    }
 
     return ExportJobResponseDto.from(record, downloadUrl);
   }
@@ -171,12 +187,15 @@ export class ExportService {
         throw new Error(`Unsupported export format: ${job.format}`);
       }
 
+      if (!job.scopeId) {
+        throw new Error('Export job is missing a book scopeId');
+      }
       const source = await this.sourceRepository.findByIdForUser(
         job.userId,
-        job.projectId,
+        job.scopeId,
       );
       if (!source) {
-        throw new NotFoundException('Project not found');
+        throw new NotFoundException('Book not found');
       }
 
       await this.updateProgress(exportJobId, 20);
@@ -206,7 +225,14 @@ export class ExportService {
       );
 
       await this.updateProgress(exportJobId, 55);
-      const rendered = await this.renderer.render(job.format, document);
+      const settings = await this.exportSettings.getEffectiveConfig(
+        job.projectId,
+      );
+      const rendered = await this.renderer.render(
+        job.format,
+        document,
+        settings,
+      );
       const storageKey = `exports/${job.projectId}/${job.id}.${job.format.toLowerCase()}`;
       await this.storage.putBuffer(
         storageKey,
@@ -254,6 +280,7 @@ export class ExportService {
   private toRecord(job: {
     id: string;
     projectId: string;
+    scopeId: string | null;
     format: ExportFormat;
     status: ExportStatus;
     progress: number;
@@ -266,6 +293,7 @@ export class ExportService {
     return {
       id: job.id,
       projectId: job.projectId,
+      bookId: job.scopeId,
       format: job.format,
       status: job.status,
       progress: job.progress,

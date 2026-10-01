@@ -6,6 +6,7 @@ export type SupportedExportFormat = (typeof EXPORT_FORMATS)[number];
 export interface ExportJobRecord {
   id: string;
   projectId: string;
+  bookId: string | null;
   format: ExportFormat;
   status: ExportStatus;
   progress: number;
@@ -68,14 +69,9 @@ export interface ExportChapter {
   scenes: ExportScene[];
 }
 
-export interface ExportBook {
-  title: string;
-  chapters: ExportChapter[];
-}
-
 export interface ExportDocument {
   title: string;
-  books: ExportBook[];
+  chapters: ExportChapter[];
 }
 
 export interface RenderedExport {

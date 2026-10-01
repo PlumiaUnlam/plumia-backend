@@ -257,6 +257,7 @@ model Project {
   summaryGenerationJobs SummaryGenerationJob[]
   versions              Version[]
   exportJobs            ExportJob[]
+  exportSettings        ExportSettings?
   storyboardNotes       StoryboardNote[]
   storyboardArcs        StoryboardArc[]
   shareLinks            ShareLink[]
@@ -813,6 +814,26 @@ model ExportJob {
   @@index([projectId], map: "idx_export_project")
   @@index([status], map: "idx_export_status")
   @@map("export_job")
+}
+
+/// `header`/`footer` shape (validated at the DTO layer, not by Prisma):
+/// { text: string | null, alignment: 'left' | 'center' | 'right',
+///   pageNumber: { enabled: boolean, format: string } }
+model ExportSettings {
+  id             String   @id @default(uuid()) @db.Uuid
+  projectId      String   @unique @map("project_id") @db.Uuid
+  marginTopCm    Float    @default(2.5) @map("margin_top_cm")
+  marginBottomCm Float    @default(2.5) @map("margin_bottom_cm")
+  marginLeftCm   Float    @default(2.5) @map("margin_left_cm")
+  marginRightCm  Float    @default(2.5) @map("margin_right_cm")
+  header         Json?    @db.JsonB
+  footer         Json?    @db.JsonB
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("export_settings")
 }
 
 model GeneratedImage {
