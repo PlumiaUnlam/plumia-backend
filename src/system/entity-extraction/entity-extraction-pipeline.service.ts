@@ -333,28 +333,22 @@ export class EntityExtractionPipelineService {
     const hasSceneText = sceneText.trim().length > 0;
 
     if (hasSceneText) {
-      await dirtyChunks.reduce(
-        (processing, chunk) =>
-          processing.then(() =>
-            this.processDirtyChunk({
-              scene,
-              projectId,
-              confirmedEntities,
-              chunk,
-              proposalsById,
-              relationshipProposals: pendingRelationshipProposals,
-              rejectedRelationshipProposals,
-              compareEmbedding,
-            }),
-          ),
-        Promise.resolve(),
-      );
+      for (const chunk of dirtyChunks) {
+        await this.processDirtyChunk({
+          scene,
+          projectId,
+          confirmedEntities,
+          chunk,
+          proposalsById,
+          relationshipProposals: pendingRelationshipProposals,
+          rejectedRelationshipProposals,
+          compareEmbedding,
+        });
+      }
     } else {
-      await dirtyChunks.reduce(
-        (processing, chunk) =>
-          processing.then(() => this.clearChunkDirtyFlag(chunk.id)),
-        Promise.resolve(),
-      );
+      for (const chunk of dirtyChunks) {
+        await this.clearChunkDirtyFlag(chunk.id);
+      }
     }
   }
 
@@ -418,20 +412,15 @@ export class EntityExtractionPipelineService {
     this.embeddingWarningShown = true;
   }
 
-  private processEntityCandidates(
+  private async processEntityCandidates(
     input: DirtyChunkInput,
     candidates: ExtractionCandidate[],
   ): Promise<ResolvedEntityReferences> {
     const references: ResolvedEntityReferences = new Map();
-    return candidates
-      .reduce(
-        (processing, candidate) =>
-          processing.then(() =>
-            this.processEntityCandidate(input, candidate, references),
-          ),
-        Promise.resolve(),
-      )
-      .then(() => references);
+    for (const candidate of candidates) {
+      await this.processEntityCandidate(input, candidate, references);
+    }
+    return references;
   }
 
   private async processEntityCandidate(
@@ -739,19 +728,15 @@ export class EntityExtractionPipelineService {
     chunksById: Map<string, ChunkRow>,
     sceneId: string,
   ): Promise<void> {
-    await [...proposalsById.values()].reduce(
-      (processing, proposal) =>
-        processing.then(() =>
-          this.pruneProposalWithoutActiveSupport(
-            proposal,
-            proposalsById,
-            activeChunkIds,
-            chunksById,
-            sceneId,
-          ),
-        ),
-      Promise.resolve(),
-    );
+    for (const proposal of [...proposalsById.values()]) {
+      await this.pruneProposalWithoutActiveSupport(
+        proposal,
+        proposalsById,
+        activeChunkIds,
+        chunksById,
+        sceneId,
+      );
+    }
   }
 
   private async pruneProposalWithoutActiveSupport(
@@ -835,13 +820,9 @@ export class EntityExtractionPipelineService {
     relationshipProposals: RelationshipProposalRecord[];
     rejectedRelationshipProposals: RelationshipProposalRecord[];
   }): Promise<void> {
-    await (input.relationships ?? []).reduce(
-      (processing, relationship) =>
-        processing.then(() =>
-          this.processRelationshipCandidate(relationship, input),
-        ),
-      Promise.resolve(),
-    );
+    for (const relationship of input.relationships ?? []) {
+      await this.processRelationshipCandidate(relationship, input);
+    }
   }
 
   private async processRelationshipCandidate(

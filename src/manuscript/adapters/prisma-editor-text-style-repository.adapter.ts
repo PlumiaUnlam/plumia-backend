@@ -24,7 +24,7 @@ const RETURNING_STYLE = Prisma.sql`
 export class PrismaEditorTextStyleRepository implements EditorTextStyleRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listByProject(projectId: string): Promise<EditorTextStyleRecord[]> {
+  listByProject(projectId: string): Promise<EditorTextStyleRecord[]> {
     return this.prisma.$queryRaw<EditorTextStyleRecord[]>(Prisma.sql`
       SELECT
         "id",

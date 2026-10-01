@@ -140,19 +140,10 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
                 removeOnFail: false,
               },
             );
-
-            await this.prisma.outbox.update({
-              where: { id: row.id },
-              data: { processedAt: new Date() },
-            });
           } catch (error) {
             const message =
               error instanceof Error ? error.message : String(error);
             if (message.toLowerCase().includes('already exists')) {
-              await this.prisma.outbox.update({
-                where: { id: row.id },
-                data: { processedAt: new Date() },
-              });
               return;
             }
 

@@ -22,6 +22,7 @@ import {
 
 const LEAF_TOKEN_BUDGET = 12_000;
 const REDUCE_TOKEN_BUDGET = 14_000;
+const MAX_REDUCTION_PASSES = 8;
 const MAX_PARALLEL_GENERATIONS = 2;
 
 interface ReductionTotals {
@@ -299,6 +300,7 @@ export class SummaryService {
     parts: string[],
     outputWords: number,
     totals: ReductionTotals = createEmptyReductionTotals(),
+    pass = 0,
   ): Promise<
     {
       parts: string[];
@@ -309,6 +311,9 @@ export class SummaryService {
       estimateTokens(parts[0] ?? '') <= REDUCE_TOKEN_BUDGET
     ) {
       return { parts, ...totals };
+    }
+    if (pass >= MAX_REDUCTION_PASSES) {
+      throw new Error('Summary reduction did not converge');
     }
 
     const chunks = splitTextByTokenBudget(
@@ -336,6 +341,7 @@ export class SummaryService {
       generated.map((item) => item.content),
       outputWords,
       nextTotals,
+      pass + 1,
     );
   }
 

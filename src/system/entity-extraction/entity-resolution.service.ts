@@ -365,31 +365,25 @@ export class EntityResolutionService {
     );
   }
 
-  private findBestEmbeddingMatch<T>(
+  private async findBestEmbeddingMatch<T>(
     candidateEmbedding: number[],
     candidates: T[],
     getName: (candidate: T) => string,
     compareEmbedding: (text: string) => Promise<number[] | null>,
   ): Promise<T | null> {
     let best: { candidate: T; score: number } | null = null;
-    return candidates
-      .reduce(
-        (processing, candidate) =>
-          processing.then(async () => {
-            const embedding =
-              (await compareEmbedding(getName(candidate))) ?? [];
-            if (embedding.length === 0) {
-              return;
-            }
+    for (const candidate of candidates) {
+      const embedding = (await compareEmbedding(getName(candidate))) ?? [];
+      if (embedding.length === 0) {
+        continue;
+      }
 
-            const score = this.cosineSimilarity(candidateEmbedding, embedding);
-            if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
-              best = { candidate, score };
-            }
-          }),
-        Promise.resolve(),
-      )
-      .then(() => best?.candidate ?? null);
+      const score = this.cosineSimilarity(candidateEmbedding, embedding);
+      if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
+        best = { candidate, score };
+      }
+    }
+    return best?.candidate ?? null;
   }
 
   private trigramSimilarity(a: string, b: string): number {
