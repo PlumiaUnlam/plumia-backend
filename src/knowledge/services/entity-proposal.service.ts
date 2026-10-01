@@ -146,7 +146,7 @@ export class EntityProposalService {
       const storedPayload = this.readProposalPayload(proposal.proposedData);
       const mergedPayload = {
         ...storedPayload,
-        ...(override ?? {}),
+        ...override,
       };
 
       // Extraction uses null when it has no image suggestion. For an update,
@@ -265,9 +265,7 @@ export class EntityProposalService {
 
   private hasOwnField(value: unknown, key: string): boolean {
     return (
-      value !== null &&
-      typeof value === 'object' &&
-      Object.prototype.hasOwnProperty.call(value, key)
+      value !== null && typeof value === 'object' && Object.hasOwn(value, key)
     );
   }
 
@@ -275,15 +273,10 @@ export class EntityProposalService {
     value: unknown,
     fallback?: Pick<ProposalPayload, 'canonicalName' | 'type'>,
   ): ProposalPayload {
-    const raw =
-      value && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : {};
+    const raw = this.asRecord(value);
     const rawCanonicalName = raw['canonicalName'];
     const canonicalName =
-      typeof rawCanonicalName === 'string' && rawCanonicalName.trim()
-        ? rawCanonicalName.trim()
-        : (fallback?.canonicalName ?? '');
+      this.normalizedString(rawCanonicalName) ?? fallback?.canonicalName ?? '';
 
     if (!canonicalName) {
       throw new BadRequestException(
@@ -291,43 +284,14 @@ export class EntityProposalService {
       );
     }
 
-    const rawTypeValue = raw['type'];
     const rawType =
-      typeof rawTypeValue === 'string' && rawTypeValue.trim()
-        ? rawTypeValue.trim().toUpperCase()
-        : (fallback?.type ?? 'CONCEPT');
-    const rawAliases = raw['aliases'];
-    const aliases = Array.isArray(rawAliases)
-      ? [
-          ...new Set(
-            rawAliases
-              .filter((alias): alias is string => typeof alias === 'string')
-              .map((alias) => alias.trim())
-              .filter(Boolean),
-          ),
-        ]
-      : [];
-    const rawDescription = raw['description'];
-    const description =
-      rawDescription === null
-        ? null
-        : typeof rawDescription === 'string'
-          ? rawDescription
-          : undefined;
-    const rawAttributes = raw['attributes'];
-    const attributes =
-      rawAttributes &&
-      typeof rawAttributes === 'object' &&
-      !Array.isArray(rawAttributes)
-        ? (rawAttributes as Record<string, unknown>)
-        : {};
-    const rawImageUrl = raw['imageUrl'];
-    const imageUrl =
-      rawImageUrl === null
-        ? null
-        : typeof rawImageUrl === 'string'
-          ? rawImageUrl
-          : undefined;
+      this.normalizedString(raw['type'])?.toUpperCase() ??
+      fallback?.type ??
+      'CONCEPT';
+    const aliases = this.normalizeAliases(raw['aliases']);
+    const description = this.nullableString(raw['description']);
+    const attributes = this.asRecord(raw['attributes']);
+    const imageUrl = this.nullableString(raw['imageUrl']);
 
     return {
       canonicalName,
@@ -365,6 +329,39 @@ export class EntityProposalService {
     };
   }
 
+  private asRecord(value: unknown): Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private normalizedString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private nullableString(value: unknown): string | null | undefined {
+    if (value === null) {
+      return null;
+    }
+    return typeof value === 'string' ? value : undefined;
+  }
+
+  private normalizeAliases(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const aliases = value
+      .filter((alias): alias is string => typeof alias === 'string')
+      .map((alias) => alias.trim())
+      .filter(Boolean);
+    return [...new Set(aliases)];
+  }
+
   private buildAcceptedUpdateEntityData(
     entity: {
       canonicalName: string;
@@ -388,20 +385,24 @@ export class EntityProposalService {
       proposal.attributes,
     );
 
-    return {
-      ...(proposal.canonicalName === undefined
-        ? {}
-        : { canonicalName: proposal.canonicalName }),
-      ...(proposal.type === undefined ? {} : { type: proposal.type }),
+    const data: Prisma.EntityUpdateInput = {
       aliases: mergedAliases,
-      ...(mergedDescription === undefined
-        ? {}
-        : { description: mergedDescription }),
-      ...(proposal.imageUrl === undefined
-        ? {}
-        : { imageUrl: proposal.imageUrl }),
       attributes: mergedAttributes as Prisma.InputJsonValue,
     };
+
+    if (proposal.canonicalName !== undefined) {
+      data.canonicalName = proposal.canonicalName;
+    }
+    if (proposal.type !== undefined) {
+      data.type = proposal.type;
+    }
+    if (mergedDescription !== undefined) {
+      data.description = mergedDescription;
+    }
+    if (proposal.imageUrl !== undefined) {
+      data.imageUrl = proposal.imageUrl;
+    }
+    return data;
   }
 
   private mergeDescriptions(
@@ -441,7 +442,7 @@ export class EntityProposalService {
 
     return {
       ...currentRecord,
-      ...(suggested ?? {}),
+      ...suggested,
     };
   }
 }

@@ -52,7 +52,8 @@ function fileSlug(value: string): string {
   const normalized = value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
   const slug = normalized
     .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '')
     .toLowerCase();
   return slug || 'obra';
 }

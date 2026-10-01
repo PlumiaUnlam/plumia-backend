@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
-import type { ExportBlock, ExportInline } from '../export.types';
-import type { ExportDocument, RenderedExport } from '../export.types';
+import type {
+  ExportBlock,
+  ExportDocument,
+  ExportInline,
+  RenderedExport,
+} from '../export.types';
 import type { ExportRenderer } from '../export-renderer.port';
 import type {
   ExportHeaderFooterConfig,
@@ -77,80 +81,92 @@ function renderInlineRuns(
   pdf.moveDown(0.35);
 }
 
-function renderBlocks(
-  pdf: PDFKit.PDFDocument,
-  blocks: ExportBlock[],
-  listPrefix = '',
-): void {
+function renderBlocks(pdf: PDFKit.PDFDocument, blocks: ExportBlock[]): void {
   for (const block of blocks) {
-    if (
-      block.kind === 'paragraph' ||
-      block.kind === 'heading' ||
-      block.kind === 'blockquote' ||
-      block.kind === 'codeBlock'
-    ) {
-      const size =
-        block.kind === 'heading'
-          ? Math.max(12, 22 - (block.level ?? 1) * 2)
-          : block.kind === 'codeBlock'
-            ? 9
-            : 11;
-      pdf.fontSize(size);
-      if (block.kind === 'codeBlock') {
-        pdf.font('Courier');
-      }
-      if (block.kind === 'blockquote') {
-        pdf.font('Helvetica-Oblique');
-      }
-      renderInlineRuns(pdf, block.inlines, {
-        ...textOptions(block),
-        indent:
-          textOptions(block).indent + (block.kind === 'blockquote' ? 20 : 0),
-      });
-      pdf.font('Helvetica');
-      continue;
-    }
-
-    if (block.kind === 'image') {
-      pdf.image(block.image.buffer, {
-        fit: [460, 320],
-        align: 'center',
-      });
-      pdf.moveDown(0.5);
-      continue;
-    }
-
-    if (block.kind === 'sceneDivider') {
-      // Línea vectorial real (evita depender de glifos Unicode que la
-      // fuente base Helvetica no soporta — WinAnsi no tiene el asterismo
-      // ⁂, y pdfkit lo resolvía mal mostrando "B"). Consistente con el
-      // <hr/> de EPUB y el thematicBreak de DOCX.
-      const y = pdf.y + 6;
-      pdf
-        .moveTo(pdf.page.margins.left, y)
-        .lineTo(pdf.page.width - pdf.page.margins.right, y)
-        .lineWidth(1)
-        .strokeColor('#333333')
-        .stroke();
-      pdf.y = y + 14;
-      continue;
-    }
-
-    block.items.forEach((item, index) => {
-      const prefix = block.kind === 'bulletList' ? '• ' : `${index + 1}. `;
-      if (item[0]?.kind === 'paragraph') {
-        const first = item[0];
-        pdf.fontSize(11).text(`${prefix}${plainText(first.inlines)}`, {
-          indent: 18,
-          paragraphGap: 4,
-        });
-        renderBlocks(pdf, item.slice(1), listPrefix);
-      } else {
-        pdf.fontSize(11).text(`${prefix}`, { indent: 18, continued: true });
-        renderBlocks(pdf, item, listPrefix);
-      }
-    });
+    renderBlock(pdf, block);
   }
+}
+
+function renderBlock(pdf: PDFKit.PDFDocument, block: ExportBlock): void {
+  if (
+    block.kind === 'paragraph' ||
+    block.kind === 'heading' ||
+    block.kind === 'blockquote' ||
+    block.kind === 'codeBlock'
+  ) {
+    renderTextBlock(pdf, block);
+    return;
+  }
+  if (block.kind === 'image') {
+    pdf.image(block.image.buffer, { fit: [460, 320], align: 'center' });
+    pdf.moveDown(0.5);
+    return;
+  }
+  if (block.kind === 'sceneDivider') {
+    renderSceneDivider(pdf);
+    return;
+  }
+  renderListBlock(pdf, block);
+}
+
+function renderTextBlock(
+  pdf: PDFKit.PDFDocument,
+  block: Extract<ExportBlock, { inlines: ExportInline[] }>,
+): void {
+  pdf.fontSize(fontSizeForBlock(block));
+  if (block.kind === 'codeBlock') {
+    pdf.font('Courier');
+  }
+  if (block.kind === 'blockquote') {
+    pdf.font('Helvetica-Oblique');
+  }
+  const options = textOptions(block);
+  renderInlineRuns(pdf, block.inlines, {
+    ...options,
+    indent: options.indent + (block.kind === 'blockquote' ? 20 : 0),
+  });
+  pdf.font('Helvetica');
+}
+
+function fontSizeForBlock(
+  block: Extract<ExportBlock, { inlines: ExportInline[] }>,
+): number {
+  if (block.kind === 'heading') {
+    return Math.max(12, 22 - (block.level ?? 1) * 2);
+  }
+  return block.kind === 'codeBlock' ? 9 : 11;
+}
+
+function renderSceneDivider(pdf: PDFKit.PDFDocument): void {
+  // Línea vectorial real para evitar caracteres que Helvetica no soporta.
+  const y = pdf.y + 6;
+  pdf
+    .moveTo(pdf.page.margins.left, y)
+    .lineTo(pdf.page.width - pdf.page.margins.right, y)
+    .lineWidth(1)
+    .strokeColor('#333333')
+    .stroke();
+  pdf.y = y + 14;
+}
+
+function renderListBlock(
+  pdf: PDFKit.PDFDocument,
+  block: Extract<ExportBlock, { kind: 'bulletList' | 'orderedList' }>,
+): void {
+  block.items.forEach((item, index) => {
+    const prefix = block.kind === 'bulletList' ? '• ' : `${index + 1}. `;
+    if (item[0]?.kind === 'paragraph') {
+      const first = item[0];
+      pdf.fontSize(11).text(`${prefix}${plainText(first.inlines)}`, {
+        indent: 18,
+        paragraphGap: 4,
+      });
+      renderBlocks(pdf, item.slice(1));
+      return;
+    }
+    pdf.fontSize(11).text(`${prefix}`, { indent: 18, continued: true });
+    renderBlocks(pdf, item);
+  });
 }
 
 function drawBand(

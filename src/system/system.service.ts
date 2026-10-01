@@ -127,34 +127,39 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
       take: OUTBOX_BATCH_SIZE,
     });
 
-    for (const row of outboxRows) {
-      try {
-        await this.queue.add(
-          'process-scene-changed',
-          { outboxId: row.id },
-          {
-            jobId: row.id,
-            removeOnComplete: true,
-            removeOnFail: false,
-          },
-        );
+    await outboxRows.reduce(
+      (processing, row) =>
+        processing.then(async () => {
+          try {
+            await this.queue.add(
+              'process-scene-changed',
+              { outboxId: row.id },
+              {
+                jobId: row.id,
+                removeOnComplete: true,
+                removeOnFail: false,
+              },
+            );
 
-        await this.prisma.outbox.update({
-          where: { id: row.id },
-          data: { processedAt: new Date() },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.toLowerCase().includes('already exists')) {
-          await this.prisma.outbox.update({
-            where: { id: row.id },
-            data: { processedAt: new Date() },
-          });
-          continue;
-        }
+            await this.prisma.outbox.update({
+              where: { id: row.id },
+              data: { processedAt: new Date() },
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (message.toLowerCase().includes('already exists')) {
+              await this.prisma.outbox.update({
+                where: { id: row.id },
+                data: { processedAt: new Date() },
+              });
+              return;
+            }
 
-        this.logger.error(`Failed to enqueue outbox ${row.id}: ${message}`);
-      }
-    }
+            this.logger.error(`Failed to enqueue outbox ${row.id}: ${message}`);
+          }
+        }),
+      Promise.resolve(),
+    );
   }
 }

@@ -167,7 +167,7 @@ function paragraphOptions(
 ): IParagraphOptions {
   const blockHeading = heading(block.level);
   const blockAlignment = alignment(block.textAlign);
-  const lineHeight = block.lineHeight ? Number(block.lineHeight) : NaN;
+  const lineHeight = block.lineHeight ? Number(block.lineHeight) : Number.NaN;
 
   return {
     children,
@@ -225,74 +225,74 @@ function textBlockParagraph(block: ExportTextBlock): Paragraph {
 }
 
 function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
-  const paragraphs: Paragraph[] = [];
+  return blocks.flatMap((block) => blockToParagraphs(block));
+}
 
-  for (const block of blocks) {
-    if (
-      block.kind === 'paragraph' ||
-      block.kind === 'heading' ||
-      block.kind === 'blockquote' ||
-      block.kind === 'codeBlock'
-    ) {
-      paragraphs.push(textBlockParagraph(block));
-      continue;
-    }
-
-    if (block.kind === 'image') {
-      paragraphs.push(
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [
-            new ImageRun({
-              type: imageType(block.image),
-              data: block.image.buffer,
-              transformation: { width: 450, height: 300 },
-              altText: {
-                title: block.alt,
-                description: block.alt,
-                name: block.alt,
-              },
-            }),
-          ],
-        }),
-      );
-      continue;
-    }
-
-    if (block.kind === 'sceneDivider') {
-      // Línea horizontal nativa de Word (borde inferior de un párrafo
-      // vacío) — el mismo mecanismo que usa Word al escribir "---" y
-      // presionar Enter. Consistente con el <hr/> de EPUB.
-      paragraphs.push(new Paragraph({ thematicBreak: true }));
-      continue;
-    }
-
-    const bullet = block.kind === 'bulletList';
-    for (const item of block.items) {
-      const firstParagraph = item.find(
-        (
-          child,
-        ): child is Extract<ExportBlock, { kind: 'paragraph' | 'heading' }> =>
-          child.kind === 'paragraph' || child.kind === 'heading',
-      );
-
-      if (firstParagraph) {
-        paragraphs.push(
-          new Paragraph(paragraphOptions(firstParagraph, undefined, bullet)),
-        );
-        paragraphs.push(
-          ...blocksToParagraphs(
-            item.filter((child) => child !== firstParagraph),
-          ),
-        );
-      } else {
-        paragraphs.push(new Paragraph({ text: bullet ? '•' : '1.' }));
-        paragraphs.push(...blocksToParagraphs(item));
-      }
-    }
+function blockToParagraphs(block: ExportBlock): Paragraph[] {
+  if (
+    block.kind === 'paragraph' ||
+    block.kind === 'heading' ||
+    block.kind === 'blockquote' ||
+    block.kind === 'codeBlock'
+  ) {
+    return [textBlockParagraph(block)];
   }
+  if (block.kind === 'image') {
+    return [imageParagraph(block)];
+  }
+  if (block.kind === 'sceneDivider') {
+    // Línea horizontal nativa de Word (borde inferior de un párrafo
+    // vacío) — el mismo mecanismo que usa Word al escribir "---" y
+    // presionar Enter. Consistente con el <hr/> de EPUB.
+    return [new Paragraph({ thematicBreak: true })];
+  }
+  return listParagraphs(block);
+}
 
-  return paragraphs;
+function imageParagraph(
+  block: Extract<ExportBlock, { kind: 'image' }>,
+): Paragraph {
+  return new Paragraph({
+    alignment: AlignmentType.CENTER,
+    children: [
+      new ImageRun({
+        type: imageType(block.image),
+        data: block.image.buffer,
+        transformation: { width: 450, height: 300 },
+        altText: {
+          title: block.alt,
+          description: block.alt,
+          name: block.alt,
+        },
+      }),
+    ],
+  });
+}
+
+function listParagraphs(
+  block: Extract<ExportBlock, { kind: 'bulletList' | 'orderedList' }>,
+): Paragraph[] {
+  const bullet = block.kind === 'bulletList';
+  return block.items.flatMap((item) => {
+    const firstParagraph = item.find(
+      (
+        child,
+      ): child is Extract<ExportBlock, { kind: 'paragraph' | 'heading' }> =>
+        child.kind === 'paragraph' || child.kind === 'heading',
+    );
+
+    if (!firstParagraph) {
+      return [
+        new Paragraph({ text: bullet ? '•' : '1.' }),
+        ...blocksToParagraphs(item),
+      ];
+    }
+
+    return [
+      new Paragraph(paragraphOptions(firstParagraph, undefined, bullet)),
+      ...blocksToParagraphs(item.filter((child) => child !== firstParagraph)),
+    ];
+  });
 }
 
 @Injectable()

@@ -3,6 +3,17 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { UpsertWritingGoalDto } from './dto/upsert-writing-goal.dto';
 import { WritingGoalType } from './domain/writing-goal-type';
+import type {
+  AnalyticsDashboard,
+  DailyActivity,
+  SessionSummary,
+} from './analytics.types';
+
+export type {
+  AnalyticsDashboard,
+  DailyActivity,
+  SessionSummary,
+} from './analytics.types';
 
 const SESSION_GAP_MILLIS = 30 * 60 * 1000;
 const MAX_ACTIVE_GAP_SECONDS = 5 * 60;
@@ -17,24 +28,88 @@ interface SceneSaveActivity {
   currentWordCount: number;
 }
 
-export interface DailyActivity {
-  date: string;
-  words: number;
-  durationSecs: number;
-  sessions: number;
+interface SessionActivityRecord {
+  startedAt: Date;
+  wordsAdded: number;
+  durationSecs: number | null;
 }
 
-export interface SessionSummary {
-  id: string;
-  sceneId: string | null;
-  sceneTitle: string;
-  startedAt: Date;
-  endedAt: Date | null;
-  durationSecs: number;
-  wordsAdded: number;
-  wordsDeleted: number;
-  wordsNet: number;
-  avgWpm: number;
+function aggregateSessionActivity(
+  sessions: SessionActivityRecord[],
+  todayKey: string,
+  timezoneOffsetMinutes: number,
+): {
+  dailyMap: Map<string, DailyActivity>;
+  activeDays: Set<string>;
+  estimateWords: number;
+  estimateActiveDays: Set<string>;
+  firstActivityKey: string;
+} {
+  const firstActivityKey = shiftDateKey(todayKey, -(ACTIVITY_DAYS - 1));
+  const estimateStartKey = shiftDateKey(todayKey, -(ESTIMATE_DAYS - 1));
+  const dailyMap = new Map<string, DailyActivity>();
+  const activeDays = new Set<string>();
+  const estimateActiveDays = new Set<string>();
+  let estimateWords = 0;
+
+  for (const session of sessions) {
+    const key = localDateKey(session.startedAt, timezoneOffsetMinutes);
+    activeDays.add(key);
+    if (key >= estimateStartKey && key <= todayKey) {
+      estimateWords += session.wordsAdded;
+      if (session.wordsAdded > 0) {
+        estimateActiveDays.add(key);
+      }
+    }
+    if (key < firstActivityKey || key > todayKey) {
+      continue;
+    }
+
+    const current = dailyMap.get(key) ?? {
+      date: key,
+      words: 0,
+      durationSecs: 0,
+      sessions: 0,
+    };
+    current.words += session.wordsAdded;
+    current.durationSecs += session.durationSecs ?? 0;
+    current.sessions += 1;
+    dailyMap.set(key, current);
+  }
+
+  return {
+    dailyMap,
+    activeDays,
+    estimateWords,
+    estimateActiveDays,
+    firstActivityKey,
+  };
+}
+
+function latestGoalsByType<T extends { goalType: string }>(
+  goals: T[],
+): Map<string, T> {
+  const latest = new Map<string, T>();
+  for (const goal of goals) {
+    if (!latest.has(goal.goalType)) {
+      latest.set(goal.goalType, goal);
+    }
+  }
+  return latest;
+}
+
+function calculateWritingPace(
+  averageDailyWords: number,
+  dailyGoal?: { targetWords: number },
+  weeklyGoal?: { targetWords: number },
+): number {
+  if (averageDailyWords > 0) {
+    return averageDailyWords;
+  }
+  if (dailyGoal && dailyGoal.targetWords > 0) {
+    return dailyGoal.targetWords;
+  }
+  return weeklyGoal ? Math.ceil(weeklyGoal.targetWords / 7) : 0;
 }
 
 function localDateKey(date: Date, timezoneOffsetMinutes: number): string {
@@ -55,8 +130,13 @@ function weekStartKey(dateKey: string): string {
   return shiftDateKey(dateKey, -(day === 0 ? 6 : day - 1));
 }
 
-function calculateStreaks(activityKeys: Set<string>, todayKey: string) {
-  const sorted = [...activityKeys].sort();
+function calculateStreaks(
+  activityKeys: Set<string>,
+  todayKey: string,
+): { current: number; best: number } {
+  const sorted = [...activityKeys].sort((left, right) =>
+    left.localeCompare(right),
+  );
   let best = 0;
   let running = 0;
   let previous: string | null = null;
@@ -167,7 +247,7 @@ export class AnalyticsService {
     projectId: string,
     goalType: WritingGoalType,
     dto: UpsertWritingGoalDto,
-  ) {
+  ): Promise<Prisma.WritingGoalGetPayload<undefined>> {
     await this.assertProjectAccess(userId, projectId);
 
     return this.prisma.$transaction(async (tx) => {
@@ -195,7 +275,7 @@ export class AnalyticsService {
     userId: string,
     projectId: string,
     timezoneOffsetMinutes = 0,
-  ) {
+  ): Promise<AnalyticsDashboard> {
     const safeTimezoneOffset = Math.max(
       -840,
       Math.min(840, timezoneOffsetMinutes),
@@ -259,39 +339,16 @@ export class AnalyticsService {
 
     const now = new Date();
     const todayKey = localDateKey(now, safeTimezoneOffset);
-    const firstActivityKey = shiftDateKey(todayKey, -(ACTIVITY_DAYS - 1));
-    const estimateStartKey = shiftDateKey(todayKey, -(ESTIMATE_DAYS - 1));
-    const dailyMap = new Map<string, DailyActivity>();
-    const activeDays = new Set<string>();
-    let estimateWords = 0;
-    const estimateActiveDays = new Set<string>();
-
-    for (const session of sessions) {
-      const key = localDateKey(session.startedAt, safeTimezoneOffset);
-      activeDays.add(key);
-      if (key >= estimateStartKey && key <= todayKey) {
-        estimateWords += session.wordsAdded;
-        if (session.wordsAdded > 0) {
-          estimateActiveDays.add(key);
-        }
-      }
-      if (key < firstActivityKey || key > todayKey) {
-        continue;
-      }
-      const current = dailyMap.get(key) ?? {
-        date: key,
-        words: 0,
-        durationSecs: 0,
-        sessions: 0,
-      };
-      current.words += session.wordsAdded;
-      current.durationSecs += session.durationSecs ?? 0;
-      current.sessions += 1;
-      dailyMap.set(key, current);
-    }
+    const activity = aggregateSessionActivity(
+      sessions,
+      todayKey,
+      safeTimezoneOffset,
+    );
+    const { dailyMap, activeDays, estimateWords, estimateActiveDays } =
+      activity;
 
     const dailyActivity = Array.from({ length: ACTIVITY_DAYS }, (_, index) => {
-      const date = shiftDateKey(firstActivityKey, index);
+      const date = shiftDateKey(activity.firstActivityKey, index);
       return (
         dailyMap.get(date) ?? { date, words: 0, durationSecs: 0, sessions: 0 }
       );
@@ -343,12 +400,7 @@ export class AnalyticsService {
           : total;
       }, 0),
     };
-    const latestGoals = new Map<string, (typeof goals)[number]>();
-    for (const goal of goals) {
-      if (!latestGoals.has(goal.goalType)) {
-        latestGoals.set(goal.goalType, goal);
-      }
-    }
+    const latestGoals = latestGoalsByType(goals);
     const goalSummaries = [...latestGoals.values()].map((goal) => {
       const currentWords =
         goal.goalType === String(WritingGoalType.WEEKLY)
@@ -372,14 +424,11 @@ export class AnalyticsService {
       : 0;
     const dailyGoal = latestGoals.get(WritingGoalType.DAILY);
     const weeklyGoal = latestGoals.get(WritingGoalType.WEEKLY);
-    const paceWordsPerDay =
-      averageDailyWords > 0
-        ? averageDailyWords
-        : dailyGoal && dailyGoal.targetWords > 0
-          ? dailyGoal.targetWords
-          : weeklyGoal
-            ? Math.ceil(weeklyGoal.targetWords / 7)
-            : 0;
+    const paceWordsPerDay = calculateWritingPace(
+      averageDailyWords,
+      dailyGoal,
+      weeklyGoal,
+    );
     const remainingWords = Math.max(
       (project.wordCountTarget ?? 0) - totalWords,
       0,

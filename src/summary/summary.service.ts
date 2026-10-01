@@ -154,37 +154,50 @@ export class SummaryService {
 
   async processInvalidation(sceneId: string, chapterId: string): Promise<void> {
     const affected = await this.repository.invalidateScene(sceneId, chapterId);
-    for (const summary of [affected.scene, affected.chapter]) {
-      if (summary?.source === 'ai_generated') {
-        const input =
-          summary.scopeType === SUMMARY_SCOPE.SCENE
-            ? await this.repository.findSceneInputById(summary.scopeId)
-            : await this.repository.findChapterInputById(summary.scopeId);
-        if (!input) {
-          continue;
-        }
-        const hash = this.inputHash(input, summary.scopeType);
-        const queued = await this.repository.createOrGetJob({
-          projectId: input.projectId,
-          scope: summary.scopeType,
-          scopeId: summary.scopeId,
-          inputHash: hash,
-          force: false,
-          bullJobId: `summary-${summary.scopeType}-${summary.scopeId}-${hash.slice(0, 20)}`,
-        });
-        if (queued.status === 'QUEUED') {
-          await this.queue.enqueueGeneration(
-            {
-              summaryJobId: queued.id,
-              scope: queued.scopeType,
-              scopeId: queued.scopeId,
-              force: false,
-            },
-            10,
-          );
-        }
-      }
+    await Promise.all(
+      [affected.scene, affected.chapter].map((summary) =>
+        this.enqueueInvalidatedSummary(summary),
+      ),
+    );
+  }
+
+  private async enqueueInvalidatedSummary(
+    summary: SummaryRecord | null,
+  ): Promise<void> {
+    if (summary?.source !== 'ai_generated') {
+      return;
     }
+
+    const input =
+      summary.scopeType === SUMMARY_SCOPE.SCENE
+        ? await this.repository.findSceneInputById(summary.scopeId)
+        : await this.repository.findChapterInputById(summary.scopeId);
+    if (!input) {
+      return;
+    }
+
+    const hash = this.inputHash(input, summary.scopeType);
+    const queued = await this.repository.createOrGetJob({
+      projectId: input.projectId,
+      scope: summary.scopeType,
+      scopeId: summary.scopeId,
+      inputHash: hash,
+      force: false,
+      bullJobId: `summary-${summary.scopeType}-${summary.scopeId}-${hash.slice(0, 20)}`,
+    });
+    if (queued.status !== 'QUEUED') {
+      return;
+    }
+
+    await this.queue.enqueueGeneration(
+      {
+        summaryJobId: queued.id,
+        scope: queued.scopeType,
+        scopeId: queued.scopeId,
+        force: false,
+      },
+      10,
+    );
   }
 
   private async generateScene(scene: SceneSummaryInput): Promise<{
@@ -211,18 +224,19 @@ export class SummaryService {
     if (chapter.scenes.length === 0) {
       throw new Error('Chapter has no scenes to summarize');
     }
-    const parts: string[] = [];
-    for (const scene of chapter.scenes) {
-      const existing = await this.repository.findSummaryByScope(
-        SUMMARY_SCOPE.SCENE,
-        scene.id,
-      );
-      if (existing && !existing.isDirty) {
-        parts.push(existing.content);
-      } else {
-        parts.push((await this.generateScene(scene)).content);
-      }
-    }
+    const parts = await this.mapWithConcurrency(
+      chapter.scenes,
+      async (scene) => {
+        const existing = await this.repository.findSummaryByScope(
+          SUMMARY_SCOPE.SCENE,
+          scene.id,
+        );
+        if (existing && !existing.isDirty) {
+          return existing.content;
+        }
+        return (await this.generateScene(scene)).content;
+      },
+    );
     const totalWords = chapter.scenes.reduce(
       (sum, scene) => sum + scene.wordCount,
       0,
@@ -245,46 +259,75 @@ export class SummaryService {
     provider: string;
     model: string;
   }> {
-    let parts = splitTextByTokenBudget(text, LEAF_TOKEN_BUDGET);
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let provider = '';
-    let model = '';
-    while (
-      parts.length > 1 ||
-      estimateTokens(parts[0] ?? '') > REDUCE_TOKEN_BUDGET
-    ) {
-      const chunks = splitTextByTokenBudget(
-        parts.join('\n\n'),
-        REDUCE_TOKEN_BUDGET,
-      );
-      const generated = await this.mapWithConcurrency(chunks, async (chunk) =>
-        this.generateVerified({
-          scope,
-          text: chunk,
-          targetWords: Math.max(100, Math.round(outputWords / chunks.length)),
-        }),
-      );
-      for (const item of generated) {
-        inputTokens += item.inputTokens;
-        outputTokens += item.outputTokens;
-        provider = item.provider;
-        model = item.model;
-      }
-      parts = generated.map((item) => item.content);
-    }
+    const reduced = await this.reduceParts(
+      scope,
+      splitTextByTokenBudget(text, LEAF_TOKEN_BUDGET),
+      outputWords,
+    );
     const final = await this.generateVerified({
       scope,
-      text: parts[0] ?? text,
+      text: reduced.parts[0] ?? text,
       targetWords: outputWords,
     });
     return {
       content: final.content,
-      inputTokens: inputTokens + final.inputTokens,
-      outputTokens: outputTokens + final.outputTokens,
-      provider: final.provider || provider,
-      model: final.model || model,
+      inputTokens: reduced.inputTokens + final.inputTokens,
+      outputTokens: reduced.outputTokens + final.outputTokens,
+      provider: final.provider || reduced.provider,
+      model: final.model || reduced.model,
     };
+  }
+
+  private async reduceParts(
+    scope: 'scene' | 'chapter',
+    parts: string[],
+    outputWords: number,
+    totals = {
+      inputTokens: 0,
+      outputTokens: 0,
+      provider: '',
+      model: '',
+    },
+  ): Promise<{
+    parts: string[];
+    inputTokens: number;
+    outputTokens: number;
+    provider: string;
+    model: string;
+  }> {
+    if (
+      parts.length <= 1 &&
+      estimateTokens(parts[0] ?? '') <= REDUCE_TOKEN_BUDGET
+    ) {
+      return { parts, ...totals };
+    }
+
+    const chunks = splitTextByTokenBudget(
+      parts.join('\n\n'),
+      REDUCE_TOKEN_BUDGET,
+    );
+    const generated = await this.mapWithConcurrency(chunks, async (chunk) =>
+      this.generateVerified({
+        scope,
+        text: chunk,
+        targetWords: Math.max(100, Math.round(outputWords / chunks.length)),
+      }),
+    );
+    const nextTotals = generated.reduce(
+      (current, item) => ({
+        inputTokens: current.inputTokens + item.inputTokens,
+        outputTokens: current.outputTokens + item.outputTokens,
+        provider: item.provider,
+        model: item.model,
+      }),
+      totals,
+    );
+    return this.reduceParts(
+      scope,
+      generated.map((item) => item.content),
+      outputWords,
+      nextTotals,
+    );
   }
 
   private async generateVerified(input: {
@@ -335,10 +378,12 @@ export class SummaryService {
     const results = new Array<R>(items.length);
     let nextIndex = 0;
     const worker = async (): Promise<void> => {
-      while (nextIndex < items.length) {
-        const index = nextIndex++;
-        results[index] = await mapper(items[index]!);
+      const index = nextIndex++;
+      if (index >= items.length) {
+        return;
       }
+      results[index] = await mapper(items[index]!);
+      await worker();
     };
     await Promise.all(
       Array.from(
