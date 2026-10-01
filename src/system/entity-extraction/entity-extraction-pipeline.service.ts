@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { toEntityType } from '../../knowledge/domain/entity-type';
 import { EntityExtractionClient } from './entity-extraction.client';
 import { EntityResolutionService } from './entity-resolution.service';
+import { forEachSequentially } from './for-each-sequentially';
 import type {
   ChunkEvidence,
   ConfirmedEntityLike,
@@ -333,8 +334,8 @@ export class EntityExtractionPipelineService {
     const hasSceneText = sceneText.trim().length > 0;
 
     if (hasSceneText) {
-      for (const chunk of dirtyChunks) {
-        await this.processDirtyChunk({
+      await forEachSequentially(dirtyChunks, (chunk) =>
+        this.processDirtyChunk({
           scene,
           projectId,
           confirmedEntities,
@@ -343,12 +344,12 @@ export class EntityExtractionPipelineService {
           relationshipProposals: pendingRelationshipProposals,
           rejectedRelationshipProposals,
           compareEmbedding,
-        });
-      }
+        }),
+      );
     } else {
-      for (const chunk of dirtyChunks) {
-        await this.clearChunkDirtyFlag(chunk.id);
-      }
+      await forEachSequentially(dirtyChunks, (chunk) =>
+        this.clearChunkDirtyFlag(chunk.id),
+      );
     }
   }
 
@@ -417,9 +418,9 @@ export class EntityExtractionPipelineService {
     candidates: ExtractionCandidate[],
   ): Promise<ResolvedEntityReferences> {
     const references: ResolvedEntityReferences = new Map();
-    for (const candidate of candidates) {
-      await this.processEntityCandidate(input, candidate, references);
-    }
+    await forEachSequentially(candidates, (candidate) =>
+      this.processEntityCandidate(input, candidate, references),
+    );
     return references;
   }
 
@@ -728,15 +729,15 @@ export class EntityExtractionPipelineService {
     chunksById: Map<string, ChunkRow>,
     sceneId: string,
   ): Promise<void> {
-    for (const proposal of [...proposalsById.values()]) {
-      await this.pruneProposalWithoutActiveSupport(
+    await forEachSequentially(proposalsById.values(), (proposal) =>
+      this.pruneProposalWithoutActiveSupport(
         proposal,
         proposalsById,
         activeChunkIds,
         chunksById,
         sceneId,
-      );
-    }
+      ),
+    );
   }
 
   private async pruneProposalWithoutActiveSupport(
@@ -820,9 +821,9 @@ export class EntityExtractionPipelineService {
     relationshipProposals: RelationshipProposalRecord[];
     rejectedRelationshipProposals: RelationshipProposalRecord[];
   }): Promise<void> {
-    for (const relationship of input.relationships ?? []) {
-      await this.processRelationshipCandidate(relationship, input);
-    }
+    await forEachSequentially(input.relationships ?? [], (relationship) =>
+      this.processRelationshipCandidate(relationship, input),
+    );
   }
 
   private async processRelationshipCandidate(

@@ -5,6 +5,7 @@ import type {
   ProposalDataLike,
   PendingProposalLike,
 } from './entity-extraction.types';
+import { forEachSequentially } from './for-each-sequentially';
 
 const TRIGRAM_THRESHOLD = 0.82;
 const EMBEDDING_THRESHOLD = 0.88;
@@ -371,19 +372,24 @@ export class EntityResolutionService {
     getName: (candidate: T) => string,
     compareEmbedding: (text: string) => Promise<number[] | null>,
   ): Promise<T | null> {
-    let best: { candidate: T; score: number } | null = null;
-    for (const candidate of candidates) {
+    const best: { match: { candidate: T; score: number } | null } = {
+      match: null,
+    };
+    await forEachSequentially(candidates, async (candidate) => {
       const embedding = (await compareEmbedding(getName(candidate))) ?? [];
       if (embedding.length === 0) {
-        continue;
+        return;
       }
 
       const score = this.cosineSimilarity(candidateEmbedding, embedding);
-      if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
-        best = { candidate, score };
+      if (
+        score >= EMBEDDING_THRESHOLD &&
+        (!best.match || score > best.match.score)
+      ) {
+        best.match = { candidate, score };
       }
-    }
-    return best?.candidate ?? null;
+    });
+    return best.match?.candidate ?? null;
   }
 
   private trigramSimilarity(a: string, b: string): number {
