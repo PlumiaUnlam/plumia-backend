@@ -7,6 +7,7 @@ CREATE TABLE "editor_text_style" (
     "is_active" BOOLEAN NOT NULL DEFAULT true,
     "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    "deleted_at" TIMESTAMPTZ(6),
 
     CONSTRAINT "editor_text_style_pkey" PRIMARY KEY ("id")
 );

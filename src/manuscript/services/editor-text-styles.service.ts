@@ -1,64 +1,42 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../prisma/prisma.service';
-import { SaveEditorTextStyleDto } from '../dto/editor-text-styles/save-editor-text-style.dto';
+import { EditorTextStyleNameConflictError } from '../domain/editor-text-style-name-conflict.error';
+import type { SaveEditorTextStyleDto } from '../dto/editor-text-styles/save-editor-text-style.dto';
+import {
+  EDITOR_TEXT_STYLE_REPOSITORY,
+  type EditorTextStyleRecord,
+  type EditorTextStyleRepository,
+} from '../ports/editor-text-style-repository.port';
+import {
+  PROJECT_REPOSITORY,
+  type ProjectRepository,
+} from '../ports/project-repository.port';
 
 const ALIGNMENTS = ['left', 'center', 'right', 'justify'] as const;
 const LINE_HEIGHTS = ['1', '1.15', '1.5', '1.8', '2'] as const;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const FONT_SIZE_PATTERN = /^\d+(?:\.\d+)?(?:pt|px|em|rem|%)$/i;
 
-export interface EditorTextStyleRecord {
-  id: string;
-  projectId: string;
-  name: string;
-  kind: string;
-  definition: Record<string, unknown>;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const RETURNING_STYLE = Prisma.sql`
-  RETURNING
-    "id",
-    "project_id" AS "projectId",
-    "name",
-    "kind",
-    "definition",
-    "is_active" AS "isActive",
-    "created_at" AS "createdAt",
-    "updated_at" AS "updatedAt"
-`;
-
 @Injectable()
 export class EditorTextStylesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(EDITOR_TEXT_STYLE_REPOSITORY)
+    private readonly editorTextStyleRepository: EditorTextStyleRepository,
+    @Inject(PROJECT_REPOSITORY)
+    private readonly projectRepository: ProjectRepository,
+  ) {}
 
   async list(
     userId: string,
     projectId: string,
   ): Promise<EditorTextStyleRecord[]> {
     await this.assertProjectAccess(userId, projectId);
-    return this.prisma.$queryRaw<EditorTextStyleRecord[]>(Prisma.sql`
-      SELECT
-        "id",
-        "project_id" AS "projectId",
-        "name",
-        "kind",
-        "definition",
-        "is_active" AS "isActive",
-        "created_at" AS "createdAt",
-        "updated_at" AS "updatedAt"
-      FROM "editor_text_style"
-      WHERE "project_id" = ${projectId}::uuid
-      ORDER BY "kind" ASC, "name" ASC
-    `);
+    return this.editorTextStyleRepository.listByProject(projectId);
   }
 
   async create(
@@ -68,30 +46,17 @@ export class EditorTextStylesService {
   ): Promise<EditorTextStyleRecord> {
     await this.assertProjectAccess(userId, projectId);
     const name = this.normalizedName(dto.name);
-    const definition = JSON.stringify(this.sanitizeDefinition(dto.definition));
+    const definition = this.sanitizeDefinition(dto.definition);
 
     try {
-      const [style] = await this.prisma.$queryRaw<
-        EditorTextStyleRecord[]
-      >(Prisma.sql`
-        INSERT INTO "editor_text_style" (
-          "id", "project_id", "name", "kind", "definition", "updated_at"
-        ) VALUES (
-          COALESCE(${dto.id ?? null}::uuid, gen_random_uuid()),
-          ${projectId}::uuid,
-          ${name},
-          ${dto.kind},
-          ${definition}::jsonb,
-          CURRENT_TIMESTAMP
-        )
-        ${RETURNING_STYLE}
-      `);
-      if (!style) {
-        throw new Error('No se pudo crear el estilo');
-      }
-      return style;
+      return await this.editorTextStyleRepository.create(projectId, {
+        ...(dto.id !== undefined ? { id: dto.id } : {}),
+        name,
+        kind: dto.kind,
+        definition,
+      });
     } catch (error) {
-      if (this.isUniqueConflict(error)) {
+      if (error instanceof EditorTextStyleNameConflictError) {
         throw new ConflictException('Ya existe un estilo con ese nombre');
       }
       throw error;
@@ -106,29 +71,20 @@ export class EditorTextStylesService {
   ): Promise<EditorTextStyleRecord> {
     await this.assertProjectAccess(userId, projectId);
     const name = this.normalizedName(dto.name);
-    const definition = JSON.stringify(this.sanitizeDefinition(dto.definition));
+    const definition = this.sanitizeDefinition(dto.definition);
 
     try {
-      const rows = await this.prisma.$queryRaw<
-        EditorTextStyleRecord[]
-      >(Prisma.sql`
-        UPDATE "editor_text_style"
-        SET
-          "name" = ${name},
-          "kind" = ${dto.kind},
-          "definition" = ${definition}::jsonb,
-          "updated_at" = CURRENT_TIMESTAMP
-        WHERE "id" = ${styleId}::uuid
-          AND "project_id" = ${projectId}::uuid
-          AND "is_active" = true
-        ${RETURNING_STYLE}
-      `);
-      if (!rows[0]) {
+      const style = await this.editorTextStyleRepository.update(
+        projectId,
+        styleId,
+        { name, kind: dto.kind, definition },
+      );
+      if (!style) {
         throw new NotFoundException('Estilo no encontrado');
       }
-      return rows[0];
+      return style;
     } catch (error) {
-      if (this.isUniqueConflict(error)) {
+      if (error instanceof EditorTextStyleNameConflictError) {
         throw new ConflictException('Ya existe un estilo con ese nombre');
       }
       throw error;
@@ -141,22 +97,24 @@ export class EditorTextStylesService {
     styleId: string,
   ): Promise<void> {
     await this.assertProjectAccess(userId, projectId);
-    const deleted = await this.prisma.$executeRaw(Prisma.sql`
-      UPDATE "editor_text_style"
-      SET "is_active" = false, "name" = 'archived-' || "id"::text
-      WHERE "id" = ${styleId}::uuid
-        AND "project_id" = ${projectId}::uuid
-        AND "is_active" = true
-    `);
-    if (deleted === 0) {
+    const deactivated = await this.editorTextStyleRepository.deactivate(
+      projectId,
+      styleId,
+    );
+    if (!deactivated) {
       throw new NotFoundException('Estilo no encontrado');
     }
   }
 
-  private normalizedName(value: string) {
+  private normalizedName(value: string): string {
     const name = value.trim();
     if (!name) {
       throw new BadRequestException('El nombre del estilo es obligatorio');
+    }
+    if (name.toLowerCase().startsWith('archived-')) {
+      throw new BadRequestException(
+        'Los nombres que comienzan con "archived-" están reservados',
+      );
     }
     return name;
   }
@@ -266,20 +224,15 @@ export class EditorTextStylesService {
     return result;
   }
 
-  private isUniqueConflict(error: unknown): boolean {
-    return (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      (error.code === 'P2002' ||
-        (error.code === 'P2010' && error.meta?.['code'] === '23505'))
+  private async assertProjectAccess(
+    userId: string,
+    projectId: string,
+  ): Promise<void> {
+    const hasAccess = await this.projectRepository.existsByIdForUser(
+      userId,
+      projectId,
     );
-  }
-
-  private async assertProjectAccess(userId: string, projectId: string) {
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, userId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!project) {
+    if (!hasAccess) {
       throw new NotFoundException('Project not found');
     }
   }

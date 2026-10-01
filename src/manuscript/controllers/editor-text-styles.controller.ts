@@ -11,10 +11,8 @@ import {
 } from '@nestjs/common';
 import type { AuthenticatedRequest } from './authenticated-request';
 import { SaveEditorTextStyleDto } from '../dto/editor-text-styles/save-editor-text-style.dto';
-import {
-  EditorTextStylesService,
-  type EditorTextStyleRecord,
-} from '../services/editor-text-styles.service';
+import type { EditorTextStyleRecord } from '../ports/editor-text-style-repository.port';
+import { EditorTextStylesService } from '../services/editor-text-styles.service';
 
 @Controller('projects/:projectId/editor-styles')
 export class EditorTextStylesController {
