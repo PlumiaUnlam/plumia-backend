@@ -5,6 +5,7 @@ import type {
   RenderedExport,
   SupportedExportFormat,
 } from './export.types';
+import type { ExportSettingsConfig } from './export-settings.types';
 import { DocxExportRenderer } from './renderers/docx-export.renderer';
 import { EpubExportRenderer } from './renderers/epub-export.renderer';
 import { PdfExportRenderer } from './renderers/pdf-export.renderer';
@@ -31,11 +32,12 @@ export class ExportRendererService {
   render(
     format: SupportedExportFormat,
     document: ExportDocument,
+    settings: ExportSettingsConfig,
   ): Promise<RenderedExport> {
     const renderer = this.renderers.get(format);
     if (!renderer) {
       throw new Error(`Unsupported export format: ${format}`);
     }
-    return renderer.render(document);
+    return renderer.render(document, settings);
   }
 }

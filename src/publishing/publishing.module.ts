@@ -13,6 +13,8 @@ import { ImageGenerationEventsService } from './workers/image-generation-events.
 import { ImageAssetsService } from './image-assets.service';
 import { ExportController } from './exports/export.controller';
 import { ExportService } from './exports/export.service';
+import { ExportSettingsController } from './exports/export-settings.controller';
+import { ExportSettingsService } from './exports/export-settings.service';
 import { EXPORT_QUEUE } from './exports/export-queue.port';
 import { EXPORT_SOURCE } from './exports/export-source.port';
 import { BullmqExportQueue } from './exports/adapters/bullmq-export-queue.adapter';
@@ -26,11 +28,16 @@ import { ExportWorkersService } from './exports/workers/export-workers.service';
 
 @Module({
   imports: [AuthModule, StorageModule],
-  controllers: [PublishingController, ExportController],
+  controllers: [
+    PublishingController,
+    ExportController,
+    ExportSettingsController,
+  ],
   providers: [
     PublishingService,
     ImageAssetsService,
     ExportService,
+    ExportSettingsService,
     ExportRendererService,
     DocxExportRenderer,
     PdfExportRenderer,

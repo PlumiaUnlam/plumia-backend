@@ -3,15 +3,24 @@ import {
   AlignmentType,
   Document,
   ExternalHyperlink,
+  Footer,
+  Header,
   HeadingLevel,
   ImageRun,
   Packer,
+  PageBreak,
+  PageNumber,
   Paragraph,
   TextRun,
   type IParagraphOptions,
   type ParagraphChild,
 } from 'docx';
 import type { ExportRenderer } from '../export-renderer.port';
+import type {
+  ExportHeaderFooterConfig,
+  ExportSettingsConfig,
+} from '../export-settings.types';
+import { resolveTemplate } from '../export-settings.defaults';
 import type {
   ExportBlock,
   ExportDocument,
@@ -20,6 +29,66 @@ import type {
   ExportTextBlock,
   RenderedExport,
 } from '../export.types';
+
+const CM_TO_TWIPS = 567;
+// Distancia fija (en twips) desde el borde de la página al header/footer,
+// independiente del margen configurado — mismo valor que PDF (24pt) para
+// consistencia visual entre formatos. Sin esto, Word usa su propio default
+// implícito (~1.25cm), que puede variar según el visor (Word/LibreOffice).
+const HEADER_FOOTER_DISTANCE_TWIPS = 480;
+
+function bandChildren(
+  config: ExportHeaderFooterConfig,
+  vars: Record<string, string>,
+): ParagraphChild[] {
+  const children: ParagraphChild[] = [];
+
+  if (config.text) {
+    children.push(new TextRun(resolveTemplate(config.text, vars)));
+  }
+
+  if (config.pageNumber.enabled) {
+    if (children.length > 0) {
+      children.push(new TextRun('  '));
+    }
+    const [before, afterTotal] =
+      config.pageNumber.format.split('{{totalPaginas}}');
+    const [beforeCurrent, afterCurrent] = (before ?? '').split('{{pagina}}');
+    if (beforeCurrent) {
+      children.push(new TextRun(resolveTemplate(beforeCurrent, vars)));
+    }
+    children.push(new TextRun({ children: [PageNumber.CURRENT] }));
+    if (afterTotal !== undefined) {
+      if (afterCurrent) {
+        children.push(new TextRun(resolveTemplate(afterCurrent, vars)));
+      }
+      children.push(
+        new TextRun({ children: [PageNumber.TOTAL_PAGES_IN_SECTION] }),
+      );
+      if (afterTotal) {
+        children.push(new TextRun(resolveTemplate(afterTotal, vars)));
+      }
+    } else if (afterCurrent) {
+      children.push(new TextRun(resolveTemplate(afterCurrent, vars)));
+    }
+  }
+
+  return children;
+}
+
+function buildBand(
+  config: ExportHeaderFooterConfig | null,
+  vars: Record<string, string>,
+): Paragraph | undefined {
+  if (!config || (!config.text && !config.pageNumber.enabled)) {
+    return undefined;
+  }
+  const paragraphAlignment = alignment(config.alignment);
+  return new Paragraph({
+    ...(paragraphAlignment ? { alignment: paragraphAlignment } : {}),
+    children: bandChildren(config, vars),
+  });
+}
 
 function imageType(image: ExportImage): 'jpg' | 'png' | 'gif' | 'bmp' {
   if (image.extension === 'png') {
@@ -191,9 +260,10 @@ function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
     }
 
     if (block.kind === 'sceneDivider') {
-      paragraphs.push(
-        new Paragraph({ text: '⁂', alignment: AlignmentType.CENTER }),
-      );
+      // Línea horizontal nativa de Word (borde inferior de un párrafo
+      // vacío) — el mismo mecanismo que usa Word al escribir "---" y
+      // presionar Enter. Consistente con el <hr/> de EPUB.
+      paragraphs.push(new Paragraph({ thematicBreak: true }));
       continue;
     }
 
@@ -229,37 +299,88 @@ function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
 export class DocxExportRenderer implements ExportRenderer {
   readonly format = 'DOCX' as const;
 
-  async render(document: ExportDocument): Promise<RenderedExport> {
-    const children: Paragraph[] = [
-      new Paragraph({ text: document.title, heading: HeadingLevel.TITLE }),
-    ];
+  async render(
+    document: ExportDocument,
+    settings: ExportSettingsConfig,
+  ): Promise<RenderedExport> {
+    const children: Paragraph[] = [];
 
-    for (const book of document.books) {
-      children.push(
-        new Paragraph({ text: book.title, heading: HeadingLevel.HEADING_1 }),
-      );
-      for (const chapter of book.chapters) {
-        children.push(
-          new Paragraph({
-            text: chapter.title,
-            heading: HeadingLevel.HEADING_2,
-          }),
-        );
-        for (const scene of chapter.scenes) {
-          if (scene.title) {
-            children.push(
-              new Paragraph({
-                text: scene.title,
-                heading: HeadingLevel.HEADING_3,
-              }),
-            );
-          }
-          children.push(...blocksToParagraphs(scene.content));
-        }
+    document.chapters.forEach((chapter, chapterIndex) => {
+      if (chapterIndex > 0) {
+        children.push(new Paragraph({ children: [new PageBreak()] }));
       }
-    }
+      children.push(
+        new Paragraph({
+          text: chapter.title,
+          heading: HeadingLevel.HEADING_2,
+        }),
+      );
+      chapter.scenes.forEach((scene, sceneIndex) => {
+        if (scene.title) {
+          children.push(
+            new Paragraph({
+              text: scene.title,
+              heading: HeadingLevel.HEADING_3,
+            }),
+          );
+        }
+        children.push(...blocksToParagraphs(scene.content));
+        if (sceneIndex < chapter.scenes.length - 1) {
+          children.push(new Paragraph({ children: [new PageBreak()] }));
+        }
+      });
+    });
 
-    const file = new Document({ sections: [{ children }] });
+    const vars = {
+      tituloLibro: document.title,
+      fecha: new Date().toLocaleDateString('es'),
+    };
+    const headerParagraph = buildBand(settings.header, vars);
+    const footerParagraph = buildBand(settings.footer, vars);
+    const margin = {
+      top: Math.round(settings.margins.topCm * CM_TO_TWIPS),
+      bottom: Math.round(settings.margins.bottomCm * CM_TO_TWIPS),
+      left: Math.round(settings.margins.leftCm * CM_TO_TWIPS),
+      right: Math.round(settings.margins.rightCm * CM_TO_TWIPS),
+      header: HEADER_FOOTER_DISTANCE_TWIPS,
+      footer: HEADER_FOOTER_DISTANCE_TWIPS,
+    };
+
+    const file = new Document({
+      sections: [
+        {
+          // Portada: sin headers/footers y sin entrar en la numeración de
+          // página de la sección de contenido (section break = página nueva).
+          properties: { page: { margin } },
+          children: [
+            new Paragraph({
+              text: document.title,
+              heading: HeadingLevel.TITLE,
+            }),
+          ],
+        },
+        {
+          properties: {
+            page: { margin, pageNumbers: { start: 1 } },
+          },
+          ...(headerParagraph
+            ? {
+                headers: {
+                  default: new Header({ children: [headerParagraph] }),
+                },
+              }
+            : {}),
+          ...(footerParagraph
+            ? {
+                footers: {
+                  default: new Footer({ children: [footerParagraph] }),
+                },
+              }
+            : {}),
+          children,
+        },
+      ],
+    });
     return {
       buffer: await Packer.toBuffer(file),
       contentType:
