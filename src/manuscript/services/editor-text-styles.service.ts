@@ -13,7 +13,7 @@ const LINE_HEIGHTS = ['1', '1.15', '1.5', '1.8', '2'] as const;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const FONT_SIZE_PATTERN = /^\d+(?:\.\d+)?(?:pt|px|em|rem|%)$/i;
 
-export type EditorTextStyleRecord = {
+export interface EditorTextStyleRecord {
   id: string;
   projectId: string;
   name: string;
@@ -22,7 +22,7 @@ export type EditorTextStyleRecord = {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
-};
+}
 
 const RETURNING_STYLE = Prisma.sql`
   RETURNING
@@ -71,7 +71,9 @@ export class EditorTextStylesService {
     const definition = JSON.stringify(this.sanitizeDefinition(dto.definition));
 
     try {
-      const [style] = await this.prisma.$queryRaw<EditorTextStyleRecord[]>(Prisma.sql`
+      const [style] = await this.prisma.$queryRaw<
+        EditorTextStyleRecord[]
+      >(Prisma.sql`
         INSERT INTO "editor_text_style" (
           "id", "project_id", "name", "kind", "definition", "updated_at"
         ) VALUES (
@@ -84,7 +86,9 @@ export class EditorTextStylesService {
         )
         ${RETURNING_STYLE}
       `);
-      if (!style) throw new Error('No se pudo crear el estilo');
+      if (!style) {
+        throw new Error('No se pudo crear el estilo');
+      }
       return style;
     } catch (error) {
       if (this.isUniqueConflict(error)) {
@@ -105,7 +109,9 @@ export class EditorTextStylesService {
     const definition = JSON.stringify(this.sanitizeDefinition(dto.definition));
 
     try {
-      const rows = await this.prisma.$queryRaw<EditorTextStyleRecord[]>(Prisma.sql`
+      const rows = await this.prisma.$queryRaw<
+        EditorTextStyleRecord[]
+      >(Prisma.sql`
         UPDATE "editor_text_style"
         SET
           "name" = ${name},
@@ -117,7 +123,9 @@ export class EditorTextStylesService {
           AND "is_active" = true
         ${RETURNING_STYLE}
       `);
-      if (!rows[0]) throw new NotFoundException('Estilo no encontrado');
+      if (!rows[0]) {
+        throw new NotFoundException('Estilo no encontrado');
+      }
       return rows[0];
     } catch (error) {
       if (this.isUniqueConflict(error)) {
@@ -140,12 +148,16 @@ export class EditorTextStylesService {
         AND "project_id" = ${projectId}::uuid
         AND "is_active" = true
     `);
-    if (deleted === 0) throw new NotFoundException('Estilo no encontrado');
+    if (deleted === 0) {
+      throw new NotFoundException('Estilo no encontrado');
+    }
   }
 
   private normalizedName(value: string) {
     const name = value.trim();
-    if (!name) throw new BadRequestException('El nombre del estilo es obligatorio');
+    if (!name) {
+      throw new BadRequestException('El nombre del estilo es obligatorio');
+    }
     return name;
   }
 
@@ -160,14 +172,13 @@ export class EditorTextStylesService {
         result[field] = null;
         continue;
       }
-      if (value === undefined || value === '') continue;
+      if (value === undefined || value === '') {
+        continue;
+      }
       if (typeof value !== 'string' || value.length > 120) {
         throw new BadRequestException(`Formato inválido para ${field}`);
       }
-      if (
-        field === 'fontFamily' &&
-        !/^[\p{L}\p{N} ,.'"_-]+$/u.test(value)
-      ) {
+      if (field === 'fontFamily' && !/^[\p{L}\p{N} ,.'"_-]+$/u.test(value)) {
         throw new BadRequestException('Familia tipográfica inválida');
       }
       if (field === 'fontSize' && !FONT_SIZE_PATTERN.test(value)) {
@@ -268,6 +279,8 @@ export class EditorTextStylesService {
       where: { id: projectId, userId, deletedAt: null },
       select: { id: true },
     });
-    if (!project) throw new NotFoundException('Project not found');
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
   }
 }
