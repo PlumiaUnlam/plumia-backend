@@ -24,6 +24,22 @@ const LEAF_TOKEN_BUDGET = 12_000;
 const REDUCE_TOKEN_BUDGET = 14_000;
 const MAX_PARALLEL_GENERATIONS = 2;
 
+interface ReductionTotals {
+  inputTokens: number;
+  outputTokens: number;
+  provider: string;
+  model: string;
+}
+
+function createEmptyReductionTotals(): ReductionTotals {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    provider: '',
+    model: '',
+  };
+}
+
 @Injectable()
 export class SummaryService {
   constructor(
@@ -282,19 +298,12 @@ export class SummaryService {
     scope: 'scene' | 'chapter',
     parts: string[],
     outputWords: number,
-    totals = {
-      inputTokens: 0,
-      outputTokens: 0,
-      provider: '',
-      model: '',
-    },
-  ): Promise<{
-    parts: string[];
-    inputTokens: number;
-    outputTokens: number;
-    provider: string;
-    model: string;
-  }> {
+    totals: ReductionTotals = createEmptyReductionTotals(),
+  ): Promise<
+    {
+      parts: string[];
+    } & ReductionTotals
+  > {
     if (
       parts.length <= 1 &&
       estimateTokens(parts[0] ?? '') <= REDUCE_TOKEN_BUDGET

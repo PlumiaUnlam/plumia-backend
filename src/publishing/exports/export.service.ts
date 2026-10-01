@@ -50,11 +50,13 @@ function imageDetails(storageKey: string): {
 
 function fileSlug(value: string): string {
   const normalized = value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
-  const slug = normalized
-    .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '')
-    .toLowerCase();
+  let slug = normalized.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
+  if (slug.startsWith('-')) {
+    slug = slug.slice(1);
+  }
+  if (slug.endsWith('-')) {
+    slug = slug.slice(0, -1);
+  }
   return slug || 'obra';
 }
 

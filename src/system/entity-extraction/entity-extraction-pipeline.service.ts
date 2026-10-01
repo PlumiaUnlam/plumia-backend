@@ -95,6 +95,16 @@ interface RelationshipCandidateInput {
   rejectedRelationshipProposals: RelationshipProposalRecord[];
 }
 
+interface RelationshipProposalDraft {
+  relationship: ExtractedRelationship;
+  relationType: ReturnType<typeof toRelationType>;
+  source: { entityId: string | null; proposalId: string | null };
+  target: { entityId: string | null; proposalId: string | null };
+  relationshipId: string | null;
+  intensity: number;
+  evidence: string[];
+}
+
 const confirmedEntitySelect = {
   id: true,
   canonicalName: true,
@@ -911,16 +921,15 @@ export class EntityExtractionPipelineService {
       );
       return;
     }
-    await this.createRelationshipProposal(
-      input,
+    await this.createRelationshipProposal(input, {
       relationship,
       relationType,
       source,
       target,
-      existingRelationship?.id ?? null,
+      relationshipId: existingRelationship?.id ?? null,
       intensity,
       evidence,
-    );
+    });
   }
 
   private async updateRelationshipProposal(
@@ -950,14 +959,17 @@ export class EntityExtractionPipelineService {
 
   private async createRelationshipProposal(
     input: RelationshipCandidateInput,
-    relationship: ExtractedRelationship,
-    relationType: ReturnType<typeof toRelationType>,
-    source: { entityId: string | null; proposalId: string | null },
-    target: { entityId: string | null; proposalId: string | null },
-    relationshipId: string | null,
-    intensity: number,
-    evidence: string[],
+    draft: RelationshipProposalDraft,
   ): Promise<void> {
+    const {
+      relationship,
+      relationType,
+      source,
+      target,
+      relationshipId,
+      intensity,
+      evidence,
+    } = draft;
     const created = await this.prisma.relationshipProposal.create({
       data: {
         projectId: input.projectId,

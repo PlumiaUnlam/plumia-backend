@@ -21,6 +21,10 @@ const ALIGNMENTS = ['left', 'center', 'right', 'justify'] as const;
 const LINE_HEIGHTS = ['1', '1.15', '1.5', '1.8', '2'] as const;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const FONT_SIZE_PATTERN = /^\d+(?:\.\d+)?(?:pt|px|em|rem|%)$/i;
+type SanitizedEditorTextStyleDefinition = Record<
+  string,
+  string | boolean | number | null
+>;
 
 @Injectable()
 export class EditorTextStylesService {
@@ -121,10 +125,22 @@ export class EditorTextStylesService {
 
   private sanitizeDefinition(
     input: Record<string, unknown>,
-  ): Record<string, string | boolean | number | null> {
-    const result: Record<string, string | boolean | number | null> = {};
-    const stringFields = ['fontFamily', 'fontSize', 'color', 'highlightColor'];
-    for (const field of stringFields) {
+  ): SanitizedEditorTextStyleDefinition {
+    const result: SanitizedEditorTextStyleDefinition = {};
+    this.sanitizeStringFields(input, result);
+    this.sanitizeBlockType(input, result);
+    this.sanitizeBooleanFields(input, result);
+    this.sanitizeParagraphSettings(input, result);
+    this.sanitizeIndentFields(input, result);
+    this.sanitizeTabSize(input, result);
+    return result;
+  }
+
+  private sanitizeStringFields(
+    input: Record<string, unknown>,
+    result: SanitizedEditorTextStyleDefinition,
+  ): void {
+    for (const field of ['fontFamily', 'fontSize', 'color', 'highlightColor']) {
       const value = input[field];
       if (value === null) {
         result[field] = null;
@@ -136,21 +152,30 @@ export class EditorTextStylesService {
       if (typeof value !== 'string' || value.length > 120) {
         throw new BadRequestException(`Formato inválido para ${field}`);
       }
-      if (field === 'fontFamily' && !/^[\p{L}\p{N} ,.'"_-]+$/u.test(value)) {
-        throw new BadRequestException('Familia tipográfica inválida');
-      }
-      if (field === 'fontSize' && !FONT_SIZE_PATTERN.test(value)) {
-        throw new BadRequestException('Tamaño de fuente inválido');
-      }
-      if (
-        (field === 'color' || field === 'highlightColor') &&
-        !COLOR_PATTERN.test(value)
-      ) {
-        throw new BadRequestException(`Color inválido para ${field}`);
-      }
+      this.validateStringField(field, value);
       result[field] = value;
     }
+  }
 
+  private validateStringField(field: string, value: string): void {
+    if (field === 'fontFamily' && !/^[\p{L}\p{N} ,.'"_-]+$/u.test(value)) {
+      throw new BadRequestException('Familia tipográfica inválida');
+    }
+    if (field === 'fontSize' && !FONT_SIZE_PATTERN.test(value)) {
+      throw new BadRequestException('Tamaño de fuente inválido');
+    }
+    if (
+      (field === 'color' || field === 'highlightColor') &&
+      !COLOR_PATTERN.test(value)
+    ) {
+      throw new BadRequestException(`Color inválido para ${field}`);
+    }
+  }
+
+  private sanitizeBlockType(
+    input: Record<string, unknown>,
+    result: SanitizedEditorTextStyleDefinition,
+  ): void {
     const blockType = input['blockType'];
     if (blockType !== undefined) {
       if (
@@ -162,7 +187,12 @@ export class EditorTextStylesService {
       }
       result['blockType'] = blockType as string;
     }
+  }
 
+  private sanitizeBooleanFields(
+    input: Record<string, unknown>,
+    result: SanitizedEditorTextStyleDefinition,
+  ): void {
     for (const field of [
       'bold',
       'italic',
@@ -179,7 +209,12 @@ export class EditorTextStylesService {
         result[field] = value;
       }
     }
+  }
 
+  private sanitizeParagraphSettings(
+    input: Record<string, unknown>,
+    result: SanitizedEditorTextStyleDefinition,
+  ): void {
     const textAlign = input['textAlign'];
     if (textAlign !== undefined) {
       if (!ALIGNMENTS.includes(textAlign as (typeof ALIGNMENTS)[number])) {
@@ -194,7 +229,12 @@ export class EditorTextStylesService {
       }
       result['lineHeight'] = lineHeight as string;
     }
+  }
 
+  private sanitizeIndentFields(
+    input: Record<string, unknown>,
+    result: SanitizedEditorTextStyleDefinition,
+  ): void {
     for (const field of [
       'indentLeft',
       'indentRight',
@@ -213,6 +253,12 @@ export class EditorTextStylesService {
         result[field] = value;
       }
     }
+  }
+
+  private sanitizeTabSize(
+    input: Record<string, unknown>,
+    result: SanitizedEditorTextStyleDefinition,
+  ): void {
     const tabSize = input['tabSize'];
     if (tabSize !== undefined) {
       if (![2, 4, 8].includes(tabSize as number)) {
@@ -220,8 +266,6 @@ export class EditorTextStylesService {
       }
       result['tabSize'] = tabSize as number;
     }
-
-    return result;
   }
 
   private async assertProjectAccess(
