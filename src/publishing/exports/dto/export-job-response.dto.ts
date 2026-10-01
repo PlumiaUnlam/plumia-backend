@@ -4,6 +4,7 @@ import type { ExportJobRecord } from '../export.types';
 export class ExportJobResponseDto {
   id!: string;
   projectId!: string;
+  bookId!: string | null;
   format!: ExportFormat;
   status!: ExportStatus;
   progress!: number;
@@ -19,6 +20,7 @@ export class ExportJobResponseDto {
     return {
       id: record.id,
       projectId: record.projectId,
+      bookId: record.bookId,
       format: record.format,
       status: record.status,
       progress: record.progress,

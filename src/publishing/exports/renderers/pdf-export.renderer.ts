@@ -3,6 +3,22 @@ import PDFDocument from 'pdfkit';
 import type { ExportBlock, ExportInline } from '../export.types';
 import type { ExportDocument, RenderedExport } from '../export.types';
 import type { ExportRenderer } from '../export-renderer.port';
+import type {
+  ExportHeaderFooterConfig,
+  ExportSettingsConfig,
+} from '../export-settings.types';
+import { resolveTemplate } from '../export-settings.defaults';
+
+const CM_TO_PT = 28.35;
+// Distancia fija desde el borde físico de la página hasta el header/footer —
+// independiente del margen configurado por el usuario, igual que en un
+// procesador de texto tradicional (el margen solo controla dónde arranca
+// el cuerpo del texto).
+const HEADER_DISTANCE_PT = 24;
+const FOOTER_DISTANCE_PT = 24;
+// Alto reservado para el texto del header/footer (evita que se superponga
+// con el cuerpo cuando el margen configurado es menor a este mínimo).
+const HEADER_FOOTER_TEXT_HEIGHT_PT = 20;
 
 function plainText(inlines: ExportInline[]): string {
   return inlines
@@ -105,7 +121,18 @@ function renderBlocks(
     }
 
     if (block.kind === 'sceneDivider') {
-      pdf.fontSize(16).text('⁂', { align: 'center' }).moveDown(0.5);
+      // Línea vectorial real (evita depender de glifos Unicode que la
+      // fuente base Helvetica no soporta — WinAnsi no tiene el asterismo
+      // ⁂, y pdfkit lo resolvía mal mostrando "B"). Consistente con el
+      // <hr/> de EPUB y el thematicBreak de DOCX.
+      const y = pdf.y + 6;
+      pdf
+        .moveTo(pdf.page.margins.left, y)
+        .lineTo(pdf.page.width - pdf.page.margins.right, y)
+        .lineWidth(1)
+        .strokeColor('#333333')
+        .stroke();
+      pdf.y = y + 14;
       continue;
     }
 
@@ -126,14 +153,73 @@ function renderBlocks(
   }
 }
 
+function drawBand(
+  pdf: PDFKit.PDFDocument,
+  config: ExportHeaderFooterConfig | null,
+  vars: Record<string, string>,
+  position: 'top' | 'bottom',
+  margins: { top: number; bottom: number; left: number; right: number },
+): void {
+  if (!config || (!config.text && !config.pageNumber.enabled)) {
+    return;
+  }
+
+  const parts: string[] = [];
+  if (config.text) {
+    parts.push(resolveTemplate(config.text, vars));
+  }
+  if (config.pageNumber.enabled) {
+    parts.push(resolveTemplate(config.pageNumber.format, vars));
+  }
+  const text = parts.join('  ');
+
+  const pageWidth = pdf.page.width;
+  const pageHeight = pdf.page.height;
+  // Posición fija respecto al borde físico de la página: no depende del
+  // margen configurado por el usuario.
+  const y =
+    position === 'top' ? HEADER_DISTANCE_PT : pageHeight - FOOTER_DISTANCE_PT;
+
+  // `height` acota el cuadro de texto para que pdfkit no interprete que el
+  // contenido "desborda" la página y dispare su paginación automática
+  // (lo que agregaba hojas en blanco al final del documento).
+  pdf.fontSize(9).text(text, margins.left, y, {
+    width: pageWidth - margins.left - margins.right,
+    height: HEADER_FOOTER_TEXT_HEIGHT_PT,
+    align: config.alignment,
+    lineBreak: false,
+  });
+}
+
 @Injectable()
 export class PdfExportRenderer implements ExportRenderer {
   readonly format = 'PDF' as const;
 
-  async render(document: ExportDocument): Promise<RenderedExport> {
+  async render(
+    document: ExportDocument,
+    settings: ExportSettingsConfig,
+  ): Promise<RenderedExport> {
+    // El margen real nunca es menor al necesario para que el header/footer
+    // (a distancia fija del borde) no se superponga con el cuerpo — igual
+    // que el comportamiento automático de Word cuando la distancia del
+    // encabezado es mayor al margen configurado.
+    const margins = {
+      top: Math.max(
+        settings.margins.topCm * CM_TO_PT,
+        settings.header ? HEADER_DISTANCE_PT + HEADER_FOOTER_TEXT_HEIGHT_PT : 0,
+      ),
+      bottom: Math.max(
+        settings.margins.bottomCm * CM_TO_PT,
+        settings.footer ? FOOTER_DISTANCE_PT + HEADER_FOOTER_TEXT_HEIGHT_PT : 0,
+      ),
+      left: settings.margins.leftCm * CM_TO_PT,
+      right: settings.margins.rightCm * CM_TO_PT,
+    };
+
     const pdf = new PDFDocument({
       size: 'A4',
-      margin: 60,
+      margins,
+      bufferPages: true,
       info: { Title: document.title },
     });
     const chunks: Buffer[] = [];
@@ -148,21 +234,46 @@ export class PdfExportRenderer implements ExportRenderer {
       .fontSize(24)
       .text(document.title, { align: 'center' })
       .moveDown(1);
-    document.books.forEach((book, bookIndex) => {
-      if (bookIndex > 0) {
+    // La portada queda sola en la página 1; el contenido siempre arranca en la 2.
+    pdf.addPage();
+    document.chapters.forEach((chapter, chapterIndex) => {
+      if (chapterIndex > 0) {
         pdf.addPage();
       }
-      pdf.fontSize(19).text(book.title, { align: 'center' }).moveDown(0.75);
-      for (const chapter of book.chapters) {
-        pdf.fontSize(15).text(chapter.title).moveDown(0.4);
-        for (const scene of chapter.scenes) {
-          if (scene.title) {
-            pdf.fontSize(13).text(scene.title).moveDown(0.25);
-          }
-          renderBlocks(pdf, scene.content);
+      pdf.fontSize(15).text(chapter.title).moveDown(0.4);
+      chapter.scenes.forEach((scene, sceneIndex) => {
+        if (scene.title) {
+          pdf.fontSize(13).text(scene.title).moveDown(0.25);
         }
-      }
+        renderBlocks(pdf, scene.content);
+        if (sceneIndex < chapter.scenes.length - 1) {
+          pdf.addPage();
+        }
+      });
     });
+
+    if (settings.header || settings.footer) {
+      const vars = {
+        tituloLibro: document.title,
+        fecha: new Date().toLocaleDateString('es'),
+      };
+      const range = pdf.bufferedPageRange();
+      // La página 1 (portada) nunca lleva header/footer ni entra en la
+      // numeración: "Página 1" corresponde a la primera página de contenido.
+      const contentStart = range.start + 1;
+      const totalContentPages = range.count - 1;
+      for (let i = contentStart; i < range.start + range.count; i++) {
+        pdf.switchToPage(i);
+        const pageVars = {
+          ...vars,
+          pagina: String(i - contentStart + 1),
+          totalPaginas: String(totalContentPages),
+        };
+        drawBand(pdf, settings.header, pageVars, 'top', margins);
+        drawBand(pdf, settings.footer, pageVars, 'bottom', margins);
+      }
+    }
+
     pdf.end();
 
     return {
