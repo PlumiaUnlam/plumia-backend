@@ -2,6 +2,21 @@
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
+## Datos demo locales
+
+Después de iniciar sesión al menos una vez (para que exista el usuario), se puede
+poblar un proyecto completo con manuscrito, wiki, relaciones, timeline,
+storyboard, resúmenes, alertas y actividad de escritura:
+
+```bash
+pnpm seed:demo
+```
+
+El seed usa `Proyecto Demo PlumIA` si existe y, de lo contrario, lo crea para el
+único usuario activo. También acepta `SEED_PROJECT_ID` o `SEED_USER_ID` para
+resolver casos con varios proyectos o usuarios. Es idempotente y rechaza su
+ejecución cuando `NODE_ENV=production`.
+
 [circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
 [circleci-url]: https://circleci.com/gh/nestjs/nest
 
