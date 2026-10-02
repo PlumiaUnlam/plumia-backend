@@ -218,10 +218,7 @@ export class ExportService {
             return cached;
           }
 
-          const image = (async () => ({
-            ...imageDetails(storageKey),
-            buffer: await this.storage.getBuffer(storageKey),
-          }))();
+          const image = this.loadExportImage(storageKey);
           imageCache.set(storageKey, image);
           return image;
         },
@@ -278,6 +275,15 @@ export class ExportService {
       where: { id: exportJobId },
       data: { progress },
     });
+  }
+
+  private async loadExportImage(
+    storageKey: string,
+  ): Promise<ReturnType<typeof imageDetails> & { buffer: Buffer }> {
+    return {
+      ...imageDetails(storageKey),
+      buffer: await this.storage.getBuffer(storageKey),
+    };
   }
 
   private toRecord(job: {
