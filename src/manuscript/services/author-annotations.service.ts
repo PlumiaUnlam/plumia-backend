@@ -3,21 +3,35 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateAuthorAnnotationDto } from '../dto/create-author-annotation.dto';
 import { UpdateAuthorAnnotationDto } from '../dto/update-author-annotation.dto';
 
 const annotationInclude = {
   author: {
-    select: { id: true, name: true, lastname: true, displayName: true, avatarUrl: true },
+    select: {
+      id: true,
+      name: true,
+      lastname: true,
+      displayName: true,
+      avatarUrl: true,
+    },
   },
-};
+} as const satisfies Prisma.AuthorAnnotationInclude;
+
+type AuthorAnnotationWithAuthor = Prisma.AuthorAnnotationGetPayload<{
+  include: typeof annotationInclude;
+}>;
 
 @Injectable()
 export class AuthorAnnotationsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(userId: string, sceneId: string) {
+  async list(
+    userId: string,
+    sceneId: string,
+  ): Promise<AuthorAnnotationWithAuthor[]> {
     await this.requireOwnedScene(userId, sceneId);
     return this.prisma.authorAnnotation.findMany({
       where: { sceneId, deletedAt: null },
@@ -26,21 +40,33 @@ export class AuthorAnnotationsService {
     });
   }
 
-  async create(userId: string, sceneId: string, dto: CreateAuthorAnnotationDto) {
+  async create(
+    userId: string,
+    sceneId: string,
+    dto: CreateAuthorAnnotationDto,
+  ): Promise<AuthorAnnotationWithAuthor> {
     await this.requireOwnedScene(userId, sceneId);
     const body = this.requireBody(dto.body);
-    const quote = dto.quote?.trim() || null;
+    const trimmedQuote = dto.quote?.trim() ?? '';
+    const quote = trimmedQuote.length > 0 ? trimmedQuote : null;
     const from = dto.anchorFrom;
     const to = dto.anchorTo;
 
-    if ((from === undefined) !== (to === undefined) || (quote && from === undefined)) {
-      throw new BadRequestException('La referencia al texto seleccionado no es válida');
+    if (
+      (from === undefined) !== (to === undefined) ||
+      (quote && from === undefined)
+    ) {
+      throw new BadRequestException(
+        'La referencia al texto seleccionado no es válida',
+      );
     }
     if (from !== undefined && to !== undefined && to <= from) {
       throw new BadRequestException('Selecciona un fragmento de texto válido');
     }
     if (quote && quote.length > 3000) {
-      throw new BadRequestException('El fragmento seleccionado es demasiado largo');
+      throw new BadRequestException(
+        'El fragmento seleccionado es demasiado largo',
+      );
     }
 
     return this.prisma.authorAnnotation.create({
@@ -51,8 +77,8 @@ export class AuthorAnnotationsService {
         quote,
         anchorFrom: from ?? null,
         anchorTo: to ?? null,
-        contextBefore: dto.contextBefore?.slice(-200),
-        contextAfter: dto.contextAfter?.slice(0, 200),
+        contextBefore: dto.contextBefore?.slice(-200) ?? null,
+        contextAfter: dto.contextAfter?.slice(0, 200) ?? null,
       },
       include: annotationInclude,
     });
@@ -63,16 +89,30 @@ export class AuthorAnnotationsService {
     sceneId: string,
     annotationId: string,
     dto: UpdateAuthorAnnotationDto,
-  ) {
+  ): Promise<AuthorAnnotationWithAuthor> {
     await this.requireOwnedAnnotation(userId, sceneId, annotationId);
+    const data = {
+      ...(dto.body !== undefined ? { body: this.requireBody(dto.body) } : {}),
+      ...(dto.isResolved !== undefined
+        ? { resolvedAt: dto.isResolved ? new Date() : null }
+        : {}),
+    };
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('No hay cambios para guardar');
+    }
+
     return this.prisma.authorAnnotation.update({
       where: { id: annotationId },
-      data: { body: this.requireBody(dto.body) },
+      data,
       include: annotationInclude,
     });
   }
 
-  async remove(userId: string, sceneId: string, annotationId: string) {
+  async remove(
+    userId: string,
+    sceneId: string,
+    annotationId: string,
+  ): Promise<void> {
     await this.requireOwnedAnnotation(userId, sceneId, annotationId);
     await this.prisma.authorAnnotation.update({
       where: { id: annotationId },
@@ -81,7 +121,10 @@ export class AuthorAnnotationsService {
     });
   }
 
-  private async requireOwnedScene(userId: string, sceneId: string) {
+  private async requireOwnedScene(
+    userId: string,
+    sceneId: string,
+  ): Promise<void> {
     const scene = await this.prisma.scene.findFirst({
       where: {
         id: sceneId,
@@ -93,10 +136,16 @@ export class AuthorAnnotationsService {
       },
       select: { id: true },
     });
-    if (!scene) throw new NotFoundException('No se encontró la escena');
+    if (!scene) {
+      throw new NotFoundException('No se encontró la escena');
+    }
   }
 
-  private async requireOwnedAnnotation(userId: string, sceneId: string, id: string) {
+  private async requireOwnedAnnotation(
+    userId: string,
+    sceneId: string,
+    id: string,
+  ): Promise<void> {
     const annotation = await this.prisma.authorAnnotation.findFirst({
       where: {
         id,
@@ -106,12 +155,16 @@ export class AuthorAnnotationsService {
       },
       select: { id: true },
     });
-    if (!annotation) throw new NotFoundException('No se encontró la anotación');
+    if (!annotation) {
+      throw new NotFoundException('No se encontró la anotación');
+    }
   }
 
   private requireBody(value: string): string {
     const body = value.trim();
-    if (!body) throw new BadRequestException('La anotación no puede estar vacía');
+    if (!body) {
+      throw new BadRequestException('La anotación no puede estar vacía');
+    }
     return body;
   }
 }

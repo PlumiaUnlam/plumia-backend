@@ -26,7 +26,7 @@ export class AnalyticsController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Query('timezoneOffsetMinutes', new DefaultValuePipe(0), ParseIntPipe)
     timezoneOffsetMinutes: number,
-  ) {
+  ): ReturnType<AnalyticsService['getDashboard']> {
     return this.analyticsService.getDashboard(
       req.user.id,
       projectId,
@@ -41,7 +41,7 @@ export class AnalyticsController {
     @Param('goalType', new ParseEnumPipe(WritingGoalType))
     goalType: WritingGoalType,
     @Body() dto: UpsertWritingGoalDto,
-  ) {
+  ): ReturnType<AnalyticsService['upsertGoal']> {
     return this.analyticsService.upsertGoal(
       req.user.id,
       projectId,

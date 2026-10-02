@@ -21,11 +21,16 @@ import { CreateShareDto } from './dto/create-share.dto';
 import { UpdateReaderCommentDto } from './dto/update-reader-comment.dto';
 import { UpdateShareDto } from './dto/update-share.dto';
 import {
+  assertShareActive,
+  assertViewerAccess,
+  commentThreadInclude,
+  findShareAccess,
   hashToken,
   isSnapshotContent,
   normalizeEmail,
   parseSnapshot,
   shareSummarySelect,
+  snapshotBookSelect,
   snapshotHasScene,
   tokenMatches,
   toCommentView,
@@ -40,65 +45,6 @@ import type {
   SharedManuscriptView,
   SnapshotContent,
 } from './reading.types';
-
-const snapshotBookSelect = {
-  id: true,
-  title: true,
-  project: { select: { id: true, title: true } },
-  chapters: {
-    where: { deletedAt: null },
-    orderBy: { sortKey: 'asc' },
-    select: {
-      id: true,
-      title: true,
-      scenes: {
-        where: { deletedAt: null },
-        orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
-        select: {
-          id: true,
-          title: true,
-          content: true,
-          wordCount: true,
-        },
-      },
-    },
-  },
-} satisfies Prisma.BookSelect;
-
-const shareAccessSelect = {
-  id: true,
-  slug: true,
-  tokenHash: true,
-  invitedEmail: true,
-  permission: true,
-  status: true,
-  acceptedById: true,
-  expiresAt: true,
-  isActive: true,
-  createdAt: true,
-  versionId: true,
-  project: { select: { id: true, userId: true, deletedAt: true } },
-  version: { select: { snapshot: true, createdAt: true } },
-} satisfies Prisma.ShareLinkSelect;
-
-const commentThreadInclude = {
-  author: {
-    select: { id: true, displayName: true, name: true, email: true },
-  },
-  replies: {
-    orderBy: { createdAt: 'asc' },
-    include: {
-      author: {
-        select: { id: true, displayName: true, name: true, email: true },
-      },
-    },
-  },
-  statusEvents: { orderBy: { createdAt: 'asc' } },
-} satisfies Prisma.ReaderCommentInclude;
-
-type ShareAccessRecord = Prisma.ShareLinkGetPayload<{
-  select: typeof shareAccessSelect;
-}>;
 
 @Injectable()
 export class ReadingService {
@@ -268,11 +214,11 @@ export class ReadingService {
     slug: string,
     token: string,
   ): Promise<SharedManuscriptView> {
-    const share = await this.findShareAccess(slug);
+    const share = await findShareAccess(this.prisma, slug);
     if (share.project.userId === user.id) {
       return this.getSharedManuscript(user, slug);
     }
-    this.assertShareActive(share);
+    assertShareActive(share);
     if (!share.tokenHash || !tokenMatches(token, share.tokenHash)) {
       throw new ForbiddenException('Invalid invitation token');
     }
@@ -306,8 +252,8 @@ export class ReadingService {
     slug: string,
     token?: string,
   ): Promise<SharedManuscriptView> {
-    const share = await this.findShareAccess(slug);
-    const isOwner = this.assertViewerAccess(share, user, token);
+    const share = await findShareAccess(this.prisma, slug);
+    const isOwner = assertViewerAccess(share, user, token);
     return {
       invitation: toShareSummary(share),
       manuscript: parseSnapshot(share.version?.snapshot),
@@ -323,8 +269,11 @@ export class ReadingService {
     slug: string,
     token?: string,
   ): Promise<ReaderCommentView[]> {
-    const share = await this.findShareAccess(slug);
-    const isOwner = this.assertViewerAccess(share, user, token);
+    const share = await findShareAccess(this.prisma, slug);
+    const isOwner = assertViewerAccess(share, user, token);
+    if (!isOwner && share.permission !== SharePermission.COMMENT) {
+      throw new ForbiddenException('This invitation is read-only');
+    }
     if (!share.versionId) {
       return [];
     }
@@ -358,9 +307,9 @@ export class ReadingService {
     token: string | undefined,
     dto: CreateReaderCommentDto,
   ): Promise<ReaderCommentView> {
-    const share = await this.findShareAccess(slug);
-    const isOwner = this.assertViewerAccess(share, user, token);
-    this.assertShareActive(share);
+    const share = await findShareAccess(this.prisma, slug);
+    const isOwner = assertViewerAccess(share, user, token);
+    assertShareActive(share);
     if (share.permission !== SharePermission.COMMENT) {
       throw new ForbiddenException('This invitation is read-only');
     }
@@ -437,8 +386,8 @@ export class ReadingService {
     token: string | undefined,
     dto: CreateReaderCommentReplyDto,
   ): Promise<ReaderCommentView> {
-    const share = await this.findShareAccess(slug);
-    const isOwner = this.assertViewerAccess(share, user, token);
+    const share = await findShareAccess(this.prisma, slug);
+    const isOwner = assertViewerAccess(share, user, token);
     if (!isOwner && share.permission !== SharePermission.COMMENT) {
       throw new ForbiddenException('This invitation is read-only');
     }
@@ -487,10 +436,10 @@ export class ReadingService {
     commentId: string,
     dto: UpdateReaderCommentDto,
   ): Promise<ReaderCommentView> {
-    const share = await this.findShareAccess(slug);
+    const share = await findShareAccess(this.prisma, slug);
     const isOwner = share.project.userId === user.id;
     if (!isOwner) {
-      this.assertShareActive(share);
+      assertShareActive(share);
       throw new ForbiddenException(
         'Only the manuscript owner can resolve comments',
       );
@@ -551,8 +500,8 @@ export class ReadingService {
     storageKey: string,
     token?: string,
   ): Promise<string> {
-    const share = await this.findShareAccess(slug);
-    this.assertViewerAccess(share, user, token);
+    const share = await findShareAccess(this.prisma, slug);
+    assertViewerAccess(share, user, token);
     const snapshot = parseSnapshot(share.version?.snapshot);
     const match = /^scenes\/([0-9a-f-]{36})\//i.exec(storageKey);
     if (!match?.[1] || !snapshotHasScene(snapshot, match[1])) {
@@ -575,64 +524,5 @@ export class ReadingService {
     if (!book) {
       throw new NotFoundException('Book not found');
     }
-  }
-
-  private async findShareAccess(slug: string): Promise<ShareAccessRecord> {
-    const share = await this.prisma.shareLink.findUnique({
-      where: { slug },
-      select: shareAccessSelect,
-    });
-    if (!share) {
-      throw new NotFoundException('Share invitation not found');
-    }
-    return share;
-  }
-
-  private assertShareActive(share: ShareAccessRecord): void {
-    if (
-      !share.isActive ||
-      share.status === ShareStatus.REVOKED ||
-      share.project.deletedAt
-    ) {
-      throw new GoneException('Share invitation is no longer active');
-    }
-    if (share.expiresAt && share.expiresAt.getTime() <= Date.now()) {
-      throw new GoneException('Share invitation has expired');
-    }
-    if (!share.version?.snapshot) {
-      throw new GoneException('Shared version is not available');
-    }
-  }
-
-  private assertViewerAccess(
-    share: ShareAccessRecord,
-    user: ShareViewerIdentity,
-    token?: string,
-  ): boolean {
-    const isOwner = share.project.userId === user.id;
-    if (isOwner) {
-      return true;
-    }
-    this.assertShareActive(share);
-
-    const hasLegacyAccountAccess =
-      share.status === ShareStatus.ACCEPTED &&
-      share.acceptedById === user.id &&
-      Boolean(share.invitedEmail) &&
-      share.invitedEmail === normalizeEmail(user.email);
-    const hasLinkAccess =
-      share.status === ShareStatus.ACCEPTED &&
-      user.provider === 'google.com' &&
-      user.emailVerified &&
-      Boolean(share.invitedEmail) &&
-      share.invitedEmail === normalizeEmail(user.email) &&
-      typeof token === 'string' &&
-      Boolean(share.tokenHash) &&
-      tokenMatches(token, share.tokenHash ?? '');
-
-    if (!hasLegacyAccountAccess && !hasLinkAccess) {
-      throw new ForbiddenException('You do not have access to this version');
-    }
-    return false;
   }
 }

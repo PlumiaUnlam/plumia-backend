@@ -23,7 +23,7 @@ export class AuthorAnnotationsController {
   list(
     @Request() req: AuthenticatedRequest,
     @Param('sceneId', ParseUUIDPipe) sceneId: string,
-  ) {
+  ): ReturnType<AuthorAnnotationsService['list']> {
     return this.annotations.list(req.user.id, sceneId);
   }
 
@@ -32,7 +32,7 @@ export class AuthorAnnotationsController {
     @Request() req: AuthenticatedRequest,
     @Param('sceneId', ParseUUIDPipe) sceneId: string,
     @Body() dto: CreateAuthorAnnotationDto,
-  ) {
+  ): ReturnType<AuthorAnnotationsService['create']> {
     return this.annotations.create(req.user.id, sceneId, dto);
   }
 
@@ -42,7 +42,7 @@ export class AuthorAnnotationsController {
     @Param('sceneId', ParseUUIDPipe) sceneId: string,
     @Param('annotationId', ParseUUIDPipe) annotationId: string,
     @Body() dto: UpdateAuthorAnnotationDto,
-  ) {
+  ): ReturnType<AuthorAnnotationsService['update']> {
     return this.annotations.update(req.user.id, sceneId, annotationId, dto);
   }
 
