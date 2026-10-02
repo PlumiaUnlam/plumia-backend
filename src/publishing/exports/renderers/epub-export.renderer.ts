@@ -67,10 +67,16 @@ export class EpubExportRenderer implements ExportRenderer {
       }
 
       const imagePaths = new Map<ExportImage, string>();
-      for (const [index, image] of images.entries()) {
+      const writes = images.map(async (image, index) => {
         const imagePath = join(workDir, `image-${index}.${image.extension}`);
         await writeFile(imagePath, image.buffer);
         imagePaths.set(image, imagePath);
+      });
+      try {
+        await Promise.all(writes);
+      } catch (error) {
+        await Promise.allSettled(writes);
+        throw error;
       }
 
       // Cada entrada de `content` se escribe como su propio archivo XHTML

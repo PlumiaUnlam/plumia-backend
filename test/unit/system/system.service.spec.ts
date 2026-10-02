@@ -159,7 +159,7 @@ describe('SystemService', () => {
     expect(Worker).not.toHaveBeenCalled();
   });
 
-  it('enqueues pending outbox rows and marks them processed', async () => {
+  it('enqueues pending outbox rows without marking them processed', async () => {
     extractionClient.hasExtractionModel.mockReturnValue(true);
     prisma.outbox.findMany.mockResolvedValue([
       { id: 'outbox-1', createdAt: new Date('2026-07-18T10:00:00.000Z') },
@@ -187,13 +187,10 @@ describe('SystemService', () => {
         removeOnFail: false,
       },
     );
-    expect(prisma.outbox.update).toHaveBeenCalledWith({
-      where: { id: 'outbox-1' },
-      data: { processedAt: expect.any(Date) as unknown },
-    });
+    expect(prisma.outbox.update).not.toHaveBeenCalled();
   });
 
-  it('marks duplicate jobs as processed without logging an error', async () => {
+  it('leaves duplicate jobs unprocessed without logging an error', async () => {
     extractionClient.hasExtractionModel.mockReturnValue(true);
     prisma.outbox.findMany.mockResolvedValue([
       { id: 'outbox-2', createdAt: new Date('2026-07-18T10:00:00.000Z') },
@@ -205,10 +202,7 @@ describe('SystemService', () => {
 
     await service.start();
 
-    expect(prisma.outbox.update).toHaveBeenCalledWith({
-      where: { id: 'outbox-2' },
-      data: { processedAt: expect.any(Date) as unknown },
-    });
+    expect(prisma.outbox.update).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
   });
 

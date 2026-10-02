@@ -50,10 +50,13 @@ function imageDetails(storageKey: string): {
 
 function fileSlug(value: string): string {
   const normalized = value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
-  const slug = normalized
-    .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .toLowerCase();
+  let slug = normalized.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
+  if (slug.startsWith('-')) {
+    slug = slug.slice(1);
+  }
+  if (slug.endsWith('-')) {
+    slug = slug.slice(0, -1);
+  }
   return slug || 'obra';
 }
 
@@ -201,7 +204,7 @@ export class ExportService {
       await this.updateProgress(exportJobId, 20);
       const imageCache = new Map<
         string,
-        ReturnType<typeof imageDetails> & { buffer: Buffer }
+        Promise<ReturnType<typeof imageDetails> & { buffer: Buffer }>
       >();
       const document = await prepareExportDocument(
         source,
@@ -215,10 +218,7 @@ export class ExportService {
             return cached;
           }
 
-          const image = {
-            ...imageDetails(storageKey),
-            buffer: await this.storage.getBuffer(storageKey),
-          };
+          const image = this.loadExportImage(storageKey);
           imageCache.set(storageKey, image);
           return image;
         },
@@ -275,6 +275,15 @@ export class ExportService {
       where: { id: exportJobId },
       data: { progress },
     });
+  }
+
+  private async loadExportImage(
+    storageKey: string,
+  ): Promise<ReturnType<typeof imageDetails> & { buffer: Buffer }> {
+    return {
+      ...imageDetails(storageKey),
+      buffer: await this.storage.getBuffer(storageKey),
+    };
   }
 
   private toRecord(job: {

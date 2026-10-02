@@ -13,6 +13,13 @@ export interface SceneChunkPlan {
   tokenCount: number;
 }
 
+interface ChunkBuilder {
+  chunks: string[];
+  current: string[];
+  currentChars: number;
+  currentWords: number;
+}
+
 const DEFAULT_MAX_CHUNK_CHARS = 2600;
 const DEFAULT_MAX_CHUNK_WORDS = 420;
 const BLOCK_NODE_TYPES = new Set([
@@ -34,62 +41,7 @@ export function planSceneChunks(
 ): SceneChunkPlan[] {
   const maxChars = Math.max(400, options?.maxChars ?? DEFAULT_MAX_CHUNK_CHARS);
   const maxWords = Math.max(80, options?.maxWords ?? DEFAULT_MAX_CHUNK_WORDS);
-  const blocks = collectBlockTexts(content).filter(Boolean);
-
-  const chunks: string[] = [];
-  let current: string[] = [];
-  let currentChars = 0;
-  let currentWords = 0;
-
-  const flushCurrent = (): void => {
-    const joined = normalizeWhitespace(current.join('\n\n'));
-    if (joined) {
-      chunks.push(joined);
-    }
-    current = [];
-    currentChars = 0;
-    currentWords = 0;
-  };
-
-  for (const block of blocks) {
-    const blockText = normalizeWhitespace(block);
-    if (!blockText) {
-      continue;
-    }
-
-    const blockChars = blockText.length;
-    const blockWords = countWords(blockText);
-    const tooLarge = blockChars > maxChars || blockWords > maxWords;
-
-    if (tooLarge) {
-      if (current.length > 0) {
-        flushCurrent();
-      }
-
-      for (const fragment of splitOversizedBlock(
-        blockText,
-        maxChars,
-        maxWords,
-      )) {
-        chunks.push(fragment);
-      }
-      continue;
-    }
-
-    const nextChars = currentChars + blockChars + (current.length > 0 ? 2 : 0);
-    const nextWords = currentWords + blockWords;
-    if (current.length > 0 && (nextChars > maxChars || nextWords > maxWords)) {
-      flushCurrent();
-    }
-
-    current.push(blockText);
-    currentChars += blockChars + (current.length > 1 ? 2 : 0);
-    currentWords += blockWords;
-  }
-
-  if (current.length > 0) {
-    flushCurrent();
-  }
+  const chunks = chunkBlocks(collectBlockTexts(content), maxChars, maxWords);
 
   return chunks.map((chunk, index) => ({
     chunkIndex: index,
@@ -106,6 +58,71 @@ export function createStringHash(value: string): string {
 export function countWords(value: string): number {
   const text = normalizeWhitespace(value);
   return text ? text.split(/\s+/).length : 0;
+}
+
+function chunkBlocks(
+  blocks: string[],
+  maxChars: number,
+  maxWords: number,
+): string[] {
+  const builder: ChunkBuilder = {
+    chunks: [],
+    current: [],
+    currentChars: 0,
+    currentWords: 0,
+  };
+
+  for (const block of blocks) {
+    appendBlock(builder, block, maxChars, maxWords);
+  }
+  flush(builder, '\n\n');
+  return builder.chunks;
+}
+
+function appendBlock(
+  builder: ChunkBuilder,
+  block: string,
+  maxChars: number,
+  maxWords: number,
+): void {
+  const text = normalizeWhitespace(block);
+  if (!text) {
+    return;
+  }
+
+  const words = countWords(text);
+  if (text.length > maxChars || words > maxWords) {
+    flush(builder, '\n\n');
+    builder.chunks.push(...splitOversizedBlock(text, maxChars, maxWords));
+    return;
+  }
+
+  const separatorChars = builder.current.length > 0 ? 2 : 0;
+  const nextChars = builder.currentChars + text.length + separatorChars;
+  const nextWords = builder.currentWords + words;
+  if (
+    builder.current.length > 0 &&
+    (nextChars > maxChars || nextWords > maxWords)
+  ) {
+    flush(builder, '\n\n');
+  }
+
+  const nextSeparatorChars = builder.current.length > 0 ? 2 : 0;
+  builder.current.push(text);
+  builder.currentChars += text.length + nextSeparatorChars;
+  builder.currentWords += words;
+}
+
+function flush(builder: ChunkBuilder, separator: string): void {
+  if (builder.current.length > 0) {
+    const joined = normalizeWhitespace(builder.current.join(separator));
+    if (joined) {
+      builder.chunks.push(joined);
+    }
+  }
+  builder.current = [];
+  builder.currentChars = 0;
+  builder.currentWords = 0;
 }
 
 function collectBlockTexts(node: unknown): string[] {
@@ -165,72 +182,68 @@ function splitOversizedBlock(
     .map((sentence) => normalizeWhitespace(sentence))
     .filter(Boolean);
 
-  const result: string[] = [];
-  let current: string[] = [];
-  let currentChars = 0;
-  let currentWords = 0;
-
-  const flush = (): void => {
-    const joined = normalizeWhitespace(current.join(' '));
-    if (joined) {
-      result.push(joined);
-    }
-    current = [];
-    currentChars = 0;
-    currentWords = 0;
-  };
-
-  const pushWords = (text: string): void => {
-    const words = text.split(/\s+/);
-    for (const word of words) {
-      const nextChars =
-        currentChars + word.length + (current.length > 0 ? 1 : 0);
-      const nextWords = currentWords + 1;
-      if (
-        current.length > 0 &&
-        (nextChars > maxChars || nextWords > maxWords)
-      ) {
-        flush();
-      }
-
-      current.push(word);
-      currentChars += word.length + (current.length > 1 ? 1 : 0);
-      currentWords += 1;
-    }
+  const builder: ChunkBuilder = {
+    chunks: [],
+    current: [],
+    currentChars: 0,
+    currentWords: 0,
   };
 
   for (const sentence of sentences.length > 0 ? sentences : [block]) {
-    const sentenceChars = sentence.length;
-    const sentenceWords = countWords(sentence);
-    if (sentenceChars <= maxChars && sentenceWords <= maxWords) {
-      const nextChars =
-        currentChars + sentenceChars + (current.length > 0 ? 1 : 0);
-      const nextWords = currentWords + sentenceWords;
-      if (
-        current.length > 0 &&
-        (nextChars > maxChars || nextWords > maxWords)
-      ) {
-        flush();
-      }
+    appendSentence(builder, sentence, maxChars, maxWords);
+  }
+  flush(builder, ' ');
+  return builder.chunks;
+}
 
-      current.push(sentence);
-      currentChars += sentenceChars + (current.length > 1 ? 1 : 0);
-      currentWords += sentenceWords;
-      continue;
-    }
-
-    if (current.length > 0) {
-      flush();
-    }
-
-    pushWords(sentence);
+function appendSentence(
+  builder: ChunkBuilder,
+  sentence: string,
+  maxChars: number,
+  maxWords: number,
+): void {
+  const sentenceWords = countWords(sentence);
+  if (sentence.length <= maxChars && sentenceWords <= maxWords) {
+    appendTextChunk(builder, sentence, sentenceWords, maxChars, maxWords);
+    return;
   }
 
-  if (current.length > 0) {
-    flush();
+  flush(builder, ' ');
+  appendWords(builder, sentence, maxChars, maxWords);
+}
+
+function appendTextChunk(
+  builder: ChunkBuilder,
+  text: string,
+  words: number,
+  maxChars: number,
+  maxWords: number,
+): void {
+  const separatorChars = builder.current.length > 0 ? 1 : 0;
+  const nextChars = builder.currentChars + text.length + separatorChars;
+  const nextWords = builder.currentWords + words;
+  if (
+    builder.current.length > 0 &&
+    (nextChars > maxChars || nextWords > maxWords)
+  ) {
+    flush(builder, ' ');
   }
 
-  return result;
+  const nextSeparatorChars = builder.current.length > 0 ? 1 : 0;
+  builder.current.push(text);
+  builder.currentChars += text.length + nextSeparatorChars;
+  builder.currentWords += words;
+}
+
+function appendWords(
+  builder: ChunkBuilder,
+  text: string,
+  maxChars: number,
+  maxWords: number,
+): void {
+  for (const word of text.split(/\s+/)) {
+    appendTextChunk(builder, word, 1, maxChars, maxWords);
+  }
 }
 
 function normalizeWhitespace(value: string): string {

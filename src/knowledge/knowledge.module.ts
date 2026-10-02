@@ -8,7 +8,6 @@ import { EntityProposalsController } from './controllers/entity-proposals.contro
 import { RelationshipProposalsController } from './controllers/relationship-proposals.controller';
 import { RelationshipsController } from './controllers/relationships.controller';
 import { TimelineController } from './controllers/timeline.controller';
-import { KnowledgeController } from './knowledge.controller';
 import { KnowledgeService } from './knowledge.service';
 import { EntityProposalService } from './services/entity-proposal.service';
 import { RelationshipProposalService } from './services/relationship-proposal.service';
@@ -19,7 +18,6 @@ import { TIMELINE_EVENT_REPOSITORY } from './ports/timeline-event-repository.por
 
 @Module({
   controllers: [
-    KnowledgeController,
     EntitiesController,
     EntityProposalsController,
     RelationshipProposalsController,

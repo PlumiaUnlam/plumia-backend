@@ -61,9 +61,10 @@ export abstract class OutboxPoller implements OnModuleInit, OnModuleDestroy {
         take: 50,
       });
 
-      for (const event of events) {
-        await this.processEvent(event);
-      }
+      await events.reduce(
+        (processing, event) => processing.then(() => this.processEvent(event)),
+        Promise.resolve(),
+      );
     } catch (error: unknown) {
       this.outboxLogger.error(
         `No se pudo procesar la cola ${this.eventType}.`,

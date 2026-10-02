@@ -12,6 +12,10 @@ import type {
   TimelineEventRepository,
   UpdateTimelineEventData,
 } from '../ports/timeline-event-repository.port';
+import {
+  countActiveEntitiesForProject,
+  findProjectForUser,
+} from './prisma-knowledge-access';
 
 const positionStep = new Prisma.Decimal(1000);
 const minimumPositionGap = new Prisma.Decimal('0.000000000001');
@@ -37,7 +41,11 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
     userId: string,
     filters: TimelineEventListFilters,
   ): Promise<TimelineEventRecord[] | null> {
-    const project = await this.findProjectForUser(userId, filters.projectId);
+    const project = await findProjectForUser(
+      this.prisma,
+      userId,
+      filters.projectId,
+    );
     if (!project) {
       return null;
     }
@@ -73,7 +81,7 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
     data: CreateTimelineEventData,
   ): Promise<TimelineEventRecord | null> {
     const eventId = await this.prisma.$transaction(async (tx) => {
-      if (!(await this.findProjectForUser(userId, data.projectId, tx))) {
+      if (!(await findProjectForUser(tx, userId, data.projectId))) {
         return null;
       }
       if (
@@ -292,17 +300,6 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
     return event ? this.toRecord(event) : null;
   }
 
-  private async findProjectForUser(
-    userId: string,
-    projectId: string,
-    client: Prisma.TransactionClient | PrismaService = this.prisma,
-  ): Promise<{ id: string } | null> {
-    return client.project.findFirst({
-      where: { id: projectId, userId, deletedAt: null },
-      select: { id: true },
-    });
-  }
-
   private async entityIdsBelongToProject(
     client: Prisma.TransactionClient,
     projectId: string,
@@ -312,13 +309,11 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
       return true;
     }
     const uniqueEntityIds = [...new Set(entityIds)];
-    const count = await client.entity.count({
-      where: {
-        id: { in: uniqueEntityIds },
-        projectId,
-        deletedAt: null,
-      },
-    });
+    const count = await countActiveEntitiesForProject(
+      client,
+      projectId,
+      uniqueEntityIds,
+    );
     return count === uniqueEntityIds.length;
   }
 
@@ -354,64 +349,20 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
     excludedEventId?: string,
     hasReindexed = false,
   ): Promise<Prisma.Decimal | null> {
-    const scope = {
-      projectId,
-      deletedAt: null,
-      ...(excludedEventId === undefined
-        ? {}
-        : { id: { not: excludedEventId } }),
-    };
-    const [before, after] = await Promise.all([
-      beforeEventId === undefined
-        ? Promise.resolve(null)
-        : client.timelineEvent.findFirst({
-            where: { ...scope, id: beforeEventId },
-            select: { position: true },
-          }),
-      afterEventId === undefined
-        ? Promise.resolve(null)
-        : client.timelineEvent.findFirst({
-            where: { ...scope, id: afterEventId },
-            select: { position: true },
-          }),
-    ]);
-
-    if (
-      (beforeEventId !== undefined && !before) ||
-      (afterEventId !== undefined && !after)
-    ) {
-      return null;
-    }
-    if (before && after && !after.position.lessThan(before.position)) {
+    const scope = this.placementScope(projectId, excludedEventId);
+    const anchors = await this.findPlacementAnchors(
+      client,
+      scope,
+      beforeEventId,
+      afterEventId,
+    );
+    if (!anchors) {
       return null;
     }
 
-    const [previous, next, last] = await Promise.all([
-      before
-        ? client.timelineEvent.findFirst({
-            where: { ...scope, position: { lt: before.position } },
-            orderBy: { position: 'desc' },
-            select: { position: true },
-          })
-        : Promise.resolve(null),
-      after
-        ? client.timelineEvent.findFirst({
-            where: { ...scope, position: { gt: after.position } },
-            orderBy: { position: 'asc' },
-            select: { position: true },
-          })
-        : Promise.resolve(null),
-      !before && !after
-        ? client.timelineEvent.findFirst({
-            where: scope,
-            orderBy: { position: 'desc' },
-            select: { position: true },
-          })
-        : Promise.resolve(null),
-    ]);
-
-    const lower = after?.position ?? previous?.position;
-    const upper = before?.position ?? next?.position;
+    const bounds = await this.findPlacementBounds(client, scope, anchors);
+    const lower = anchors.after?.position ?? bounds.previous?.position;
+    const upper = anchors.before?.position ?? bounds.next?.position;
     if (lower && upper) {
       const gap = upper.minus(lower);
       if (gap.lessThanOrEqualTo(minimumPositionGap) && !hasReindexed) {
@@ -433,7 +384,91 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
     if (upper) {
       return upper.minus(positionStep);
     }
-    return last ? last.position.plus(positionStep) : positionStep;
+    return bounds.last ? bounds.last.position.plus(positionStep) : positionStep;
+  }
+
+  private placementScope(
+    projectId: string,
+    excludedEventId?: string,
+  ): Prisma.TimelineEventWhereInput {
+    return {
+      projectId,
+      deletedAt: null,
+      ...(excludedEventId === undefined
+        ? {}
+        : { id: { not: excludedEventId } }),
+    };
+  }
+
+  private async findPlacementAnchors(
+    client: Prisma.TransactionClient,
+    scope: Prisma.TimelineEventWhereInput,
+    beforeEventId?: string,
+    afterEventId?: string,
+  ): Promise<{
+    before: { position: Prisma.Decimal } | null;
+    after: { position: Prisma.Decimal } | null;
+  } | null> {
+    const [before, after] = await Promise.all([
+      beforeEventId === undefined
+        ? Promise.resolve(null)
+        : client.timelineEvent.findFirst({
+            where: { ...scope, id: beforeEventId },
+            select: { position: true },
+          }),
+      afterEventId === undefined
+        ? Promise.resolve(null)
+        : client.timelineEvent.findFirst({
+            where: { ...scope, id: afterEventId },
+            select: { position: true },
+          }),
+    ]);
+
+    const missingBefore = beforeEventId !== undefined && !before;
+    const missingAfter = afterEventId !== undefined && !after;
+    const invalidOrder =
+      before && after && !after.position.lessThan(before.position);
+    return missingBefore || missingAfter || invalidOrder
+      ? null
+      : { before, after };
+  }
+
+  private async findPlacementBounds(
+    client: Prisma.TransactionClient,
+    scope: Prisma.TimelineEventWhereInput,
+    anchors: {
+      before: { position: Prisma.Decimal } | null;
+      after: { position: Prisma.Decimal } | null;
+    },
+  ): Promise<{
+    previous: { position: Prisma.Decimal } | null;
+    next: { position: Prisma.Decimal } | null;
+    last: { position: Prisma.Decimal } | null;
+  }> {
+    const [previous, next, last] = await Promise.all([
+      anchors.before
+        ? client.timelineEvent.findFirst({
+            where: { ...scope, position: { lt: anchors.before.position } },
+            orderBy: { position: 'desc' },
+            select: { position: true },
+          })
+        : Promise.resolve(null),
+      anchors.after
+        ? client.timelineEvent.findFirst({
+            where: { ...scope, position: { gt: anchors.after.position } },
+            orderBy: { position: 'asc' },
+            select: { position: true },
+          })
+        : Promise.resolve(null),
+      !anchors.before && !anchors.after
+        ? client.timelineEvent.findFirst({
+            where: scope,
+            orderBy: { position: 'desc' },
+            select: { position: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    return { previous, next, last };
   }
 
   private async reindexPositions(

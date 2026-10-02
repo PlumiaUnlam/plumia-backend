@@ -54,6 +54,22 @@ describe('EntityResolutionService', () => {
     ]);
   });
 
+  it('drops candidates whose names normalize to empty strings', () => {
+    const valid = buildCandidate('Silver Key', []);
+
+    expect(
+      service.dedupeCandidates([
+        buildCandidate('   !!! ', ['unusable']),
+        valid,
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        canonicalName: 'Silver Key',
+        normalizedName: 'silver key',
+      }),
+    ]);
+  });
+
   it('merges proposal data while keeping chunk evidence', () => {
     const current: ProposalDataLike = {
       canonicalName: 'Ana',
@@ -130,6 +146,38 @@ describe('EntityResolutionService', () => {
     });
   });
 
+  it('prefers an exact confirmed entity over a matching pending proposal', async () => {
+    const candidate = buildCandidate('Old Harbor', ['Harbor']);
+    const result = await service.resolveCandidate(
+      candidate,
+      [
+        {
+          id: 'entity-1',
+          canonicalName: 'Port',
+          aliases: ['Harbor'],
+          type: EntityType.LOCATION,
+          description: null,
+        },
+      ],
+      [
+        {
+          id: 'proposal-1',
+          confidenceScore: 0.9,
+          proposedData: {
+            canonicalName: 'Old Harbor',
+            aliases: [],
+            type: EntityType.LOCATION,
+          },
+        },
+      ],
+      () => Promise.resolve(null),
+    );
+
+    expect(result.confirmedEntityId).toBe('entity-1');
+    expect(result.proposalId).toBeNull();
+    expect(result.shouldCreateProposal).toBe(false);
+  });
+
   it('resolves against pending proposals before creating a new one', async () => {
     const candidate = buildCandidate('Old Harbor', []);
     const proposals: PendingProposalLike[] = [
@@ -190,6 +238,32 @@ describe('EntityResolutionService', () => {
 
     expect(result.confirmedEntityId).toBe('entity-2');
     expect(result.shouldCreateProposal).toBe(false);
+  });
+
+  it('does not match embeddings with different dimensions', async () => {
+    const candidate = buildCandidate('The Crimson Keep', []);
+    const compareEmbedding = jest.fn((text: string) =>
+      Promise.resolve(text === candidate.canonicalName ? [1, 0] : [1]),
+    );
+
+    const result = await service.resolveCandidate(
+      candidate,
+      [
+        {
+          id: 'entity-1',
+          canonicalName: 'Marsh Lantern',
+          aliases: [],
+          type: EntityType.LOCATION,
+          description: null,
+        },
+      ],
+      [],
+      compareEmbedding,
+    );
+
+    expect(result.confirmedEntityId).toBeNull();
+    expect(result.proposalId).toBeNull();
+    expect(result.shouldCreateProposal).toBe(true);
   });
 
   it('requests proposal creation when no strategy matches', async () => {
