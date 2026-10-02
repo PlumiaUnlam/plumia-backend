@@ -3,13 +3,18 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Request,
+  UnauthorizedException,
 } from '@nestjs/common';
+import type { Request as ExpressRequest } from 'express';
+import { FirebaseAdminService } from '../auth/firebase-admin.service';
+import { Public } from '../common/decorators/public.decorator';
 import type { AuthenticatedRequest } from '../manuscript/controllers/authenticated-request';
 import { AcceptShareDto } from './dto/accept-share.dto';
 import { CreateReaderCommentDto } from './dto/create-reader-comment.dto';
@@ -27,7 +32,10 @@ import type {
 
 @Controller()
 export class ReadingController {
-  constructor(private readonly readingService: ReadingService) {}
+  constructor(
+    private readonly readingService: ReadingService,
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {}
 
   @Post('books/:bookId/shares')
   createShare(
@@ -67,37 +75,61 @@ export class ReadingController {
   }
 
   @Post('reading/invitations/:slug/accept')
-  acceptInvitation(
-    @Request() req: AuthenticatedRequest,
+  @Public()
+  async acceptInvitation(
+    @Request() req: ExpressRequest,
     @Param('slug') slug: string,
     @Body() dto: AcceptShareDto,
   ): Promise<SharedManuscriptView> {
-    return this.readingService.acceptInvitation(req.user, slug, dto.token);
+    return this.readingService.acceptInvitation(
+      await this.getFirebaseUser(req),
+      slug,
+      dto.token,
+    );
   }
 
   @Get('reading/invitations/:slug')
-  getSharedManuscript(
-    @Request() req: AuthenticatedRequest,
+  @Public()
+  async getSharedManuscript(
+    @Request() req: ExpressRequest,
     @Param('slug') slug: string,
+    @Headers('x-share-token') shareToken?: string,
   ): Promise<SharedManuscriptView> {
-    return this.readingService.getSharedManuscript(req.user, slug);
+    return this.readingService.getSharedManuscript(
+      await this.getFirebaseUser(req),
+      slug,
+      shareToken,
+    );
   }
 
   @Get('reading/invitations/:slug/comments')
-  listComments(
-    @Request() req: AuthenticatedRequest,
+  @Public()
+  async listComments(
+    @Request() req: ExpressRequest,
     @Param('slug') slug: string,
+    @Headers('x-share-token') shareToken?: string,
   ): Promise<ReaderCommentView[]> {
-    return this.readingService.listComments(req.user, slug);
+    return this.readingService.listComments(
+      await this.getFirebaseUser(req),
+      slug,
+      shareToken,
+    );
   }
 
   @Post('reading/invitations/:slug/comments')
-  createComment(
-    @Request() req: AuthenticatedRequest,
+  @Public()
+  async createComment(
+    @Request() req: ExpressRequest,
     @Param('slug') slug: string,
+    @Headers('x-share-token') shareToken: string | undefined,
     @Body() dto: CreateReaderCommentDto,
   ): Promise<ReaderCommentView> {
-    return this.readingService.createComment(req.user, slug, dto);
+    return this.readingService.createComment(
+      await this.getFirebaseUser(req),
+      slug,
+      shareToken,
+      dto,
+    );
   }
 
   @Patch('reading/invitations/:slug/comments/:commentId')
@@ -111,17 +143,50 @@ export class ReadingController {
   }
 
   @Post('reading/invitations/:slug/storage-url')
+  @Public()
   async getSharedStorageUrl(
-    @Request() req: AuthenticatedRequest,
+    @Request() req: ExpressRequest,
     @Param('slug') slug: string,
+    @Headers('x-share-token') shareToken: string | undefined,
     @Body() dto: SharedStorageUrlDto,
   ): Promise<{ url: string }> {
     return {
       url: await this.readingService.getSharedStorageUrl(
-        req.user,
+        await this.getFirebaseUser(req),
         slug,
         dto.storageKey,
+        shareToken,
       ),
+    };
+  }
+
+  private async getFirebaseUser(request: ExpressRequest): Promise<{
+    id: string;
+    email: string;
+    emailVerified: boolean;
+    provider: string;
+  }> {
+    const [scheme, token] = request.headers.authorization?.split(' ') ?? [];
+    if (scheme !== 'Bearer' || !token) {
+      throw new UnauthorizedException('Google sign-in is required');
+    }
+
+    let decoded;
+    try {
+      decoded = await this.firebaseAdmin.verifyToken(token);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired identity token');
+    }
+
+    if (!decoded.email) {
+      throw new UnauthorizedException('An email address is required');
+    }
+
+    return {
+      id: decoded.uid,
+      email: decoded.email,
+      emailVerified: decoded.email_verified === true,
+      provider: decoded.firebase.sign_in_provider,
     };
   }
 }

@@ -22,7 +22,12 @@ async function bootstrap(): Promise<void> {
       'http://192.168.0.102:3001',
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Métodos HTTP permitidos
-    allowedHeaders: ['Accept', 'Authorization', 'Content-Type'],
+    allowedHeaders: [
+      'Accept',
+      'Authorization',
+      'Content-Type',
+      'X-Share-Token',
+    ],
     credentials: true, // Importante si tu frontend va a enviar cookies o headers de autorización
   });
 

@@ -6,6 +6,13 @@ import type {
 
 export type SnapshotContent = Record<string, unknown>;
 
+export interface ShareViewerIdentity {
+  id: string;
+  email: string;
+  emailVerified: boolean;
+  provider: string;
+}
+
 export interface SnapshotScene {
   id: string;
   title: string | null;

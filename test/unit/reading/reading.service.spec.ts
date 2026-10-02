@@ -1,9 +1,15 @@
 import { ForbiddenException } from '@nestjs/common';
-import { SharePermission, ShareStatus } from '@prisma/client';
+import {
+  ReaderCommentStatus,
+  SharePermission,
+  ShareStatus,
+} from '@prisma/client';
+import { hashToken } from '../../../src/reading/reading.helpers';
 import { ReadingService } from '../../../src/reading/reading.service';
 
 describe('ReadingService', () => {
   const now = new Date('2026-09-28T12:00:00.000Z');
+  const bookId = '20000000-0000-4000-8000-000000000001';
   const snapshot = {
     schemaVersion: 1,
     projectId: '10000000-0000-4000-8000-000000000001',
@@ -11,9 +17,22 @@ describe('ReadingService', () => {
     frozenAt: now.toISOString(),
     books: [
       {
-        id: '20000000-0000-4000-8000-000000000001',
+        id: bookId,
         title: 'Frozen book',
-        chapters: [],
+        chapters: [
+          {
+            id: '30000000-0000-4000-8000-000000000001',
+            title: 'Chapter one',
+            scenes: [
+              {
+                id: '40000000-0000-4000-8000-000000000001',
+                title: 'Scene one',
+                content: { type: 'doc', content: [] },
+                wordCount: 1,
+              },
+            ],
+          },
+        ],
       },
     ],
   };
@@ -38,6 +57,18 @@ describe('ReadingService', () => {
   };
   const storage = { generatePresignedGetUrl: jest.fn() };
   const service = new ReadingService(prisma as never, storage as never);
+  const googleReader = {
+    id: 'google-reader-id',
+    email: 'reader@example.com',
+    emailVerified: true,
+    provider: 'google.com',
+  };
+  const owner = {
+    id: 'owner-id',
+    email: 'owner@example.com',
+    emailVerified: false,
+    provider: 'password',
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -48,7 +79,7 @@ describe('ReadingService', () => {
 
   it('freezes the ordered manuscript before creating an email invitation', async () => {
     prisma.book.findFirst.mockResolvedValue({
-      id: snapshot.books[0].id,
+      id: bookId,
       title: snapshot.title,
       project: { id: snapshot.projectId, title: 'Project' },
       chapters: [
@@ -84,7 +115,7 @@ describe('ReadingService', () => {
         }),
     );
 
-    const result = await service.createShare('owner-id', snapshot.books[0].id, {
+    const result = await service.createShare('owner-id', bookId, {
       email: ' Reader@Example.com ',
       permission: SharePermission.COMMENT,
     });
@@ -130,28 +161,131 @@ describe('ReadingService', () => {
       throw new Error('Share input was not captured');
     }
     expect(shareInput.data.invitedEmail).toBe('reader@example.com');
-    expect(shareInput.data.bookId).toBe(snapshot.books[0].id);
+    expect(shareInput.data.bookId).toBe(bookId);
     expect(shareInput.data.permission).toBe(SharePermission.COMMENT);
     expect(shareInput.data.tokenHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it('does not accept an invitation from a different email', async () => {
-    prisma.shareLink.findUnique.mockResolvedValue(
-      activeShare({ permission: SharePermission.COMMENT }),
-    );
+  it('accepts an invitation for the matching verified Google account', async () => {
+    prisma.shareLink.findUnique
+      .mockResolvedValueOnce(
+        activeShare({ permission: SharePermission.COMMENT }),
+      )
+      .mockResolvedValueOnce(
+        activeShare({
+          permission: SharePermission.COMMENT,
+          status: ShareStatus.ACCEPTED,
+        }),
+      );
+
+    await expect(
+      service.acceptInvitation(googleReader, 'share-slug', 'token'),
+    ).resolves.toMatchObject({
+      viewer: { isOwner: false, canComment: true },
+    });
+    interface ShareUpdateInput {
+      where: { id: string };
+      data: {
+        status: ShareStatus;
+        acceptedAt: Date;
+        readerCount: { increment: number };
+      };
+    }
+    const updateCalls = prisma.shareLink.update.mock.calls as Array<
+      [ShareUpdateInput]
+    >;
+    const updateInput = updateCalls[0]?.[0];
+    expect(updateInput).toBeDefined();
+    if (!updateInput) {
+      throw new Error('Share update was not captured');
+    }
+    expect(updateInput.where).toEqual({ id: 'share-id' });
+    expect(updateInput.data.status).toBe(ShareStatus.ACCEPTED);
+    expect(updateInput.data.acceptedAt).toBeInstanceOf(Date);
+    expect(updateInput.data.readerCount).toEqual({ increment: 1 });
+  });
+
+  it('rejects an invitation with an invalid link token', async () => {
+    prisma.shareLink.findUnique.mockResolvedValue(activeShare());
+
+    await expect(
+      service.acceptInvitation(googleReader, 'share-slug', 'wrong-token'),
+    ).rejects.toThrow(new ForbiddenException('Invalid invitation token'));
+    expect(prisma.shareLink.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Google account that does not match the invitation email', async () => {
+    prisma.shareLink.findUnique.mockResolvedValue(activeShare());
 
     await expect(
       service.acceptInvitation(
-        { id: 'reader-id', email: 'other@example.com' },
+        { ...googleReader, email: 'other@example.com' },
         'share-slug',
         'token',
       ),
     ).rejects.toThrow(
       new ForbiddenException(
-        'This invitation belongs to a different email address',
+        'Sign in with the Google account that received this invitation',
       ),
     );
     expect(prisma.shareLink.update).not.toHaveBeenCalled();
+  });
+
+  it('creates a review comment for a Google reader without a PlumIA account', async () => {
+    prisma.shareLink.findUnique.mockResolvedValue(
+      activeShare({
+        permission: SharePermission.COMMENT,
+        status: ShareStatus.ACCEPTED,
+      }),
+    );
+    prisma.readerComment.create.mockResolvedValue({
+      id: 'comment-id',
+      snapshotSceneId: '40000000-0000-4000-8000-000000000001',
+      anchorFrom: 1,
+      anchorTo: 4,
+      selectedText: 'The',
+      body: 'Comment',
+      prefix: null,
+      suffix: null,
+      status: ReaderCommentStatus.OPEN,
+      displayName: 'reader@example.com',
+      author: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await service.createComment(
+      googleReader,
+      'share-slug',
+      'token',
+      {
+        snapshotSceneId: '40000000-0000-4000-8000-000000000001',
+        anchorFrom: 1,
+        anchorTo: 4,
+        selectedText: 'The',
+        body: 'Comment',
+      },
+    );
+
+    interface CommentCreateInput {
+      data: { authorUserId: string | null; displayName: string };
+    }
+    const createCalls = prisma.readerComment.create.mock.calls as Array<
+      [CommentCreateInput]
+    >;
+    const createInput = createCalls[0]?.[0];
+    expect(createInput?.data).toMatchObject({
+      authorUserId: null,
+      displayName: 'reader@example.com',
+    });
+    expect(result.author).toEqual({
+      id: null,
+      displayName: 'reader@example.com',
+    });
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: googleReader.id },
+      select: { id: true, displayName: true, name: true, email: true },
+    });
   });
 
   it('prevents a read-only recipient from creating comments', async () => {
@@ -164,32 +298,24 @@ describe('ReadingService', () => {
     );
 
     await expect(
-      service.createComment(
-        { id: 'reader-id', email: 'reader@example.com' },
-        'share-slug',
-        {
-          snapshotSceneId: '40000000-0000-4000-8000-000000000001',
-          anchorFrom: 1,
-          anchorTo: 4,
-          selectedText: 'The',
-          body: 'Comment',
-        },
-      ),
+      service.createComment(googleReader, 'share-slug', 'token', {
+        snapshotSceneId: '40000000-0000-4000-8000-000000000001',
+        anchorFrom: 1,
+        anchorTo: 4,
+        selectedText: 'The',
+        body: 'Comment',
+      }),
     ).rejects.toThrow(new ForbiddenException('This invitation is read-only'));
     expect(prisma.readerComment.create).not.toHaveBeenCalled();
 
     await expect(
-      service.createComment(
-        { id: 'owner-id', email: 'owner@example.com' },
-        'share-slug',
-        {
-          snapshotSceneId: '40000000-0000-4000-8000-000000000001',
-          anchorFrom: 1,
-          anchorTo: 4,
-          selectedText: 'The',
-          body: 'Owner comment',
-        },
-      ),
+      service.createComment(owner, 'share-slug', undefined, {
+        snapshotSceneId: '40000000-0000-4000-8000-000000000001',
+        anchorFrom: 1,
+        anchorTo: 4,
+        selectedText: 'The',
+        body: 'Owner comment',
+      }),
     ).rejects.toThrow(new ForbiddenException('This invitation is read-only'));
     expect(prisma.readerComment.create).not.toHaveBeenCalled();
   });
@@ -204,7 +330,7 @@ describe('ReadingService', () => {
     return {
       id: 'share-id',
       slug: 'share-slug',
-      tokenHash: '0'.repeat(64),
+      tokenHash: hashToken('token'),
       invitedEmail: 'reader@example.com',
       permission: overrides.permission ?? SharePermission.COMMENT,
       status: overrides.status ?? ShareStatus.PENDING,

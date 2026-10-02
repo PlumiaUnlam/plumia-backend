@@ -34,6 +34,7 @@ import type {
   CreatedShare,
   ManuscriptSnapshot,
   ReaderCommentView,
+  ShareViewerIdentity,
   ShareSummary,
   SharedManuscriptView,
   SnapshotContent,
@@ -247,7 +248,7 @@ export class ReadingService {
   }
 
   async acceptInvitation(
-    user: { id: string; email: string },
+    user: ShareViewerIdentity,
     slug: string,
     token: string,
   ): Promise<SharedManuscriptView> {
@@ -256,42 +257,41 @@ export class ReadingService {
     if (share.project.userId === user.id) {
       return this.getSharedManuscript(user, slug);
     }
+    if (!share.tokenHash || !tokenMatches(token, share.tokenHash)) {
+      throw new ForbiddenException('Invalid invitation token');
+    }
     if (
+      user.provider !== 'google.com' ||
+      !user.emailVerified ||
       !share.invitedEmail ||
       normalizeEmail(user.email) !== share.invitedEmail
     ) {
       throw new ForbiddenException(
-        'This invitation belongs to a different email address',
+        'Sign in with the Google account that received this invitation',
       );
     }
-    if (!share.tokenHash || !tokenMatches(token, share.tokenHash)) {
-      throw new ForbiddenException('Invalid invitation token');
-    }
-    if (share.acceptedById && share.acceptedById !== user.id) {
-      throw new ForbiddenException('Invitation already accepted');
+
+    if (share.status !== ShareStatus.ACCEPTED) {
+      await this.prisma.shareLink.update({
+        where: { id: share.id },
+        data: {
+          status: ShareStatus.ACCEPTED,
+          acceptedAt: new Date(),
+          readerCount: { increment: 1 },
+        },
+      });
     }
 
-    await this.prisma.shareLink.update({
-      where: { id: share.id },
-      data: {
-        status: ShareStatus.ACCEPTED,
-        acceptedById: user.id,
-        ...(share.status === ShareStatus.ACCEPTED
-          ? {}
-          : { acceptedAt: new Date() }),
-        ...(share.acceptedById ? {} : { readerCount: { increment: 1 } }),
-      },
-    });
-
-    return this.getSharedManuscript(user, slug);
+    return this.getSharedManuscript(user, slug, token);
   }
 
   async getSharedManuscript(
-    user: { id: string; email: string },
+    user: ShareViewerIdentity,
     slug: string,
+    token?: string,
   ): Promise<SharedManuscriptView> {
     const share = await this.findShareAccess(slug);
-    const isOwner = this.assertViewerAccess(share, user);
+    const isOwner = this.assertViewerAccess(share, user, token);
     return {
       invitation: toShareSummary(share),
       manuscript: parseSnapshot(share.version?.snapshot),
@@ -303,11 +303,12 @@ export class ReadingService {
   }
 
   async listComments(
-    user: { id: string; email: string },
+    user: ShareViewerIdentity,
     slug: string,
+    token?: string,
   ): Promise<ReaderCommentView[]> {
     const share = await this.findShareAccess(slug);
-    this.assertViewerAccess(share, user);
+    this.assertViewerAccess(share, user, token);
     if (!share.versionId) {
       return [];
     }
@@ -340,12 +341,13 @@ export class ReadingService {
   }
 
   async createComment(
-    user: { id: string; email: string },
+    user: ShareViewerIdentity,
     slug: string,
+    token: string | undefined,
     dto: CreateReaderCommentDto,
   ): Promise<ReaderCommentView> {
     const share = await this.findShareAccess(slug);
-    this.assertViewerAccess(share, user);
+    const isOwner = this.assertViewerAccess(share, user, token);
     if (share.permission !== SharePermission.COMMENT) {
       throw new ForbiddenException('This invitation is read-only');
     }
@@ -357,20 +359,30 @@ export class ReadingService {
       throw new BadRequestException('Scene does not belong to this version');
     }
 
-    const author = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      select: { id: true, displayName: true, name: true, email: true },
-    });
-    if (!author) {
-      throw new ForbiddenException('User not found');
-    }
-    const displayName = author.displayName ?? author.name ?? author.email;
+    const accountIdentityUser =
+      isOwner ||
+      (share.invitedEmail !== null &&
+        normalizeEmail(user.email) === share.invitedEmail)
+        ? user
+        : null;
+    const author = accountIdentityUser
+      ? await this.prisma.user.findUnique({
+          where: { id: accountIdentityUser.id },
+          select: { id: true, displayName: true, name: true, email: true },
+        })
+      : null;
+    const displayName =
+      author?.displayName ??
+      author?.name ??
+      author?.email ??
+      share.invitedEmail ??
+      'Lector invitado';
 
     const comment = await this.prisma.readerComment.create({
       data: {
         shareLinkId: share.id,
         snapshotSceneId: dto.snapshotSceneId,
-        authorUserId: user.id,
+        authorUserId: author?.id ?? null,
         displayName,
         body: dto.body.trim(),
         anchorFrom: dto.anchorFrom,
@@ -396,7 +408,8 @@ export class ReadingService {
     dto: UpdateReaderCommentDto,
   ): Promise<ReaderCommentView> {
     const share = await this.findShareAccess(slug);
-    const isOwner = this.assertViewerAccess(share, user);
+    this.assertShareActive(share);
+    const isOwner = share.project.userId === user.id;
     if (!isOwner) {
       throw new ForbiddenException(
         'Only the manuscript owner can resolve comments',
@@ -427,12 +440,13 @@ export class ReadingService {
   }
 
   async getSharedStorageUrl(
-    user: { id: string; email: string },
+    user: ShareViewerIdentity,
     slug: string,
     storageKey: string,
+    token?: string,
   ): Promise<string> {
     const share = await this.findShareAccess(slug);
-    this.assertViewerAccess(share, user);
+    this.assertViewerAccess(share, user, token);
     const snapshot = parseSnapshot(share.version?.snapshot);
     const match = /^scenes\/([0-9a-f-]{36})\//i.exec(storageKey);
     if (!match?.[1] || !snapshotHasScene(snapshot, match[1])) {
@@ -486,19 +500,31 @@ export class ReadingService {
 
   private assertViewerAccess(
     share: ShareAccessRecord,
-    user: { id: string; email: string },
+    user: ShareViewerIdentity,
+    token?: string,
   ): boolean {
     this.assertShareActive(share);
     const isOwner = share.project.userId === user.id;
     if (isOwner) {
       return true;
     }
-    if (
-      share.status !== ShareStatus.ACCEPTED ||
-      share.acceptedById !== user.id ||
-      !share.invitedEmail ||
-      share.invitedEmail !== normalizeEmail(user.email)
-    ) {
+
+    const hasLegacyAccountAccess =
+      share.status === ShareStatus.ACCEPTED &&
+      share.acceptedById === user.id &&
+      Boolean(share.invitedEmail) &&
+      share.invitedEmail === normalizeEmail(user.email);
+    const hasLinkAccess =
+      share.status === ShareStatus.ACCEPTED &&
+      user.provider === 'google.com' &&
+      user.emailVerified &&
+      Boolean(share.invitedEmail) &&
+      share.invitedEmail === normalizeEmail(user.email) &&
+      typeof token === 'string' &&
+      Boolean(share.tokenHash) &&
+      tokenMatches(token, share.tokenHash ?? '');
+
+    if (!hasLegacyAccountAccess && !hasLinkAccess) {
       throw new ForbiddenException('You do not have access to this version');
     }
     return false;
