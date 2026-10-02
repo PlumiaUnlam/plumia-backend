@@ -204,7 +204,7 @@ export class ExportService {
       await this.updateProgress(exportJobId, 20);
       const imageCache = new Map<
         string,
-        ReturnType<typeof imageDetails> & { buffer: Buffer }
+        Promise<ReturnType<typeof imageDetails> & { buffer: Buffer }>
       >();
       const document = await prepareExportDocument(
         source,
@@ -218,10 +218,10 @@ export class ExportService {
             return cached;
           }
 
-          const image = {
+          const image = (async () => ({
             ...imageDetails(storageKey),
             buffer: await this.storage.getBuffer(storageKey),
-          };
+          }))();
           imageCache.set(storageKey, image);
           return image;
         },

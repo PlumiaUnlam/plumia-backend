@@ -423,11 +423,11 @@ export class EntityResolutionService {
   }
 
   private cosineSimilarity(a: number[], b: number[]): number {
-    const length = Math.min(a.length, b.length);
-    if (length === 0) {
+    if (a.length === 0 || a.length !== b.length) {
       return 0;
     }
 
+    const length = a.length;
     let dot = 0;
     let normA = 0;
     let normB = 0;

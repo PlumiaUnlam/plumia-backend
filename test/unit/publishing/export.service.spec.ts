@@ -167,4 +167,216 @@ describe('ExportService', () => {
       }),
     );
   });
+
+  it('provides downloads only after a completed export exists', async () => {
+    const completed = {
+      id: 'job-id',
+      projectId: 'project-id',
+      scopeId: 'book-id',
+      format: ExportFormat.PDF,
+      status: ExportStatus.COMPLETED,
+      progress: 100,
+      errorMessage: null,
+      storageKey: 'exports/project-id/job-id.pdf',
+      fileSizeBytes: 123n,
+      createdAt: new Date(),
+      completedAt: new Date(),
+    };
+    prisma.exportJob.findFirst.mockResolvedValue(completed);
+    prisma.book.findUnique.mockResolvedValue({ title: 'L’été — À nous' });
+    storage.generatePresignedGetUrl.mockResolvedValue(
+      'https://download.example/book.pdf',
+    );
+
+    await expect(
+      service.getExportStatus('user-id', 'project-id', 'book-id', 'job-id'),
+    ).resolves.toMatchObject({
+      id: 'job-id',
+      status: ExportStatus.COMPLETED,
+      downloadUrl: 'https://download.example/book.pdf',
+    });
+    expect(storage.generatePresignedGetUrl).toHaveBeenCalledWith(
+      completed.storageKey,
+      {
+        responseContentType: 'application/pdf',
+        downloadName: 'l-ete-a-nous.pdf',
+      },
+    );
+
+    prisma.exportJob.findFirst.mockResolvedValue({
+      ...completed,
+      status: ExportStatus.PROCESSING,
+      storageKey: null,
+    });
+    await expect(
+      service.getExportStatus('user-id', 'project-id', 'book-id', 'job-id'),
+    ).resolves.toMatchObject({ downloadUrl: null });
+    expect(storage.generatePresignedGetUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips absent, completed, and unclaimable export jobs', async () => {
+    prisma.exportJob.findUnique.mockResolvedValue(null);
+    await expect(service.processExport('missing')).resolves.toBeUndefined();
+    prisma.exportJob.findUnique.mockResolvedValue({
+      status: ExportStatus.COMPLETED,
+    });
+    await expect(service.processExport('completed')).resolves.toBeUndefined();
+    expect(prisma.exportJob.updateMany).not.toHaveBeenCalled();
+
+    prisma.exportJob.findUnique.mockResolvedValue({
+      status: ExportStatus.QUEUED,
+    });
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 0 });
+    await expect(
+      service.processExport('claimed-elsewhere'),
+    ).resolves.toBeUndefined();
+    expect(source.findByIdForUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ format: 'TXT', scopeId: 'book-id' }, 'Unsupported export format: TXT'],
+    [
+      { format: ExportFormat.PDF, scopeId: null },
+      'Export job is missing a book scopeId',
+    ],
+  ])(
+    'marks invalid export jobs as failed (%j)',
+    async (jobDetails, message) => {
+      prisma.exportJob.findUnique.mockResolvedValue({
+        id: 'job-id',
+        projectId: 'project-id',
+        userId: 'user-id',
+        status: ExportStatus.QUEUED,
+        ...jobDetails,
+      });
+      prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
+
+      await expect(service.processExport('job-id')).rejects.toThrow(message);
+      expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
+        containing({
+          where: { id: 'job-id' },
+          data: containing({
+            status: ExportStatus.FAILED,
+            progress: 100,
+            errorMessage: message,
+          }),
+        }),
+      );
+    },
+  );
+
+  it('marks an export failed when its book source has been removed', async () => {
+    prisma.exportJob.findUnique.mockResolvedValue({
+      id: 'job-id',
+      projectId: 'project-id',
+      scopeId: 'book-id',
+      userId: 'user-id',
+      format: ExportFormat.PDF,
+      status: ExportStatus.QUEUED,
+    });
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
+    source.findByIdForUser.mockResolvedValue(null);
+
+    await expect(service.processExport('job-id')).rejects.toThrow(
+      'Book not found',
+    );
+    expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
+      containing({
+        data: containing({
+          status: ExportStatus.FAILED,
+          errorMessage: 'Book not found',
+        }),
+      }),
+    );
+  });
+
+  it('caches repeated image reads and rejects unsafe scene references or unsupported image formats', async () => {
+    prisma.exportJob.findUnique.mockResolvedValue({
+      id: 'job-id',
+      projectId: 'project-id',
+      scopeId: 'book-id',
+      userId: 'user-id',
+      format: ExportFormat.PDF,
+      status: ExportStatus.QUEUED,
+    });
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
+    source.findByIdForUser.mockResolvedValue({
+      id: 'book-id',
+      title: 'Book',
+      chapters: [
+        {
+          title: 'Chapter',
+          scenes: [
+            {
+              id: 'scene-1',
+              title: 'Scene',
+              content: {
+                type: 'doc',
+                content: [
+                  {
+                    type: 'image',
+                    attrs: {
+                      storageKey: 'scenes/scene-1/cover.png',
+                      alt: 'Cover',
+                    },
+                  },
+                  {
+                    type: 'image',
+                    attrs: {
+                      storageKey: 'scenes/scene-1/cover.png',
+                      alt: 'Same cover',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    storage.getBuffer.mockResolvedValue(Buffer.from('image'));
+    renderer.render.mockResolvedValue({
+      buffer: Buffer.from('pdf'),
+      contentType: 'application/pdf',
+      extension: 'PDF',
+    });
+
+    await service.processExport('job-id');
+    expect(storage.getBuffer).toHaveBeenCalledTimes(1);
+    expect(storage.getBuffer).toHaveBeenCalledWith('scenes/scene-1/cover.png');
+
+    for (const storageKey of [
+      'entities/entity-1/cover.png',
+      'scenes/scene-1/cover.webp',
+    ]) {
+      prisma.exportJob.update.mockClear();
+      source.findByIdForUser.mockResolvedValue({
+        id: 'book-id',
+        title: 'Book',
+        chapters: [
+          {
+            title: 'Chapter',
+            scenes: [
+              {
+                id: 'scene-1',
+                title: 'Scene',
+                content: {
+                  type: 'doc',
+                  content: [{ type: 'image', attrs: { storageKey } }],
+                },
+              },
+            ],
+          },
+        ],
+      });
+      await expect(service.processExport('job-id')).rejects.toThrow(
+        storageKey.endsWith('.webp')
+          ? 'Las exportaciones actualmente requieren imágenes JPG o PNG'
+          : 'Invalid image reference in export',
+      );
+      expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
+        containing({ data: containing({ status: ExportStatus.FAILED }) }),
+      );
+    }
+  });
 });
