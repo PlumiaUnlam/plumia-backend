@@ -28,6 +28,16 @@ export class UserService {
     });
   }
 
+  updateProfile(
+    id: string,
+    profile: { displayName: string; avatarUrl: string | null },
+  ): Promise<UserEntity> {
+    return this.prisma.user.update({
+      where: { id },
+      data: profile,
+    });
+  }
+
   createFromFirebase(params: CreateFromFirebaseParams): Promise<UserEntity> {
     return this.prisma.user.create({
       data: {
