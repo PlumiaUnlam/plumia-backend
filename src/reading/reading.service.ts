@@ -1,6 +1,532 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  GoneException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  Prisma,
+  ReaderCommentStatus,
+  SharePermission,
+  ShareStatus,
+} from '@prisma/client';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createContentHash } from '../manuscript/domain/json-content';
+import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
+import { CreateReaderCommentDto } from './dto/create-reader-comment.dto';
+import { CreateShareDto } from './dto/create-share.dto';
+import { UpdateReaderCommentDto } from './dto/update-reader-comment.dto';
+import { UpdateShareDto } from './dto/update-share.dto';
+import {
+  hashToken,
+  isSnapshotContent,
+  normalizeEmail,
+  parseSnapshot,
+  shareSummarySelect,
+  snapshotHasScene,
+  tokenMatches,
+  toCommentView,
+  toShareSummary,
+} from './reading.helpers';
+import type {
+  CreatedShare,
+  ManuscriptSnapshot,
+  ReaderCommentView,
+  ShareViewerIdentity,
+  ShareSummary,
+  SharedManuscriptView,
+  SnapshotContent,
+} from './reading.types';
 
-// Contexto Lectura: ShareLink, ReaderComment.
-// TODO: inyectar PrismaService e implementar la logica de negocio (CRUD).
+const snapshotBookSelect = {
+  id: true,
+  title: true,
+  project: { select: { id: true, title: true } },
+  chapters: {
+    where: { deletedAt: null },
+    orderBy: { sortKey: 'asc' },
+    select: {
+      id: true,
+      title: true,
+      scenes: {
+        where: { deletedAt: null },
+        orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
+        select: {
+          id: true,
+          title: true,
+          content: true,
+          wordCount: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.BookSelect;
+
+const shareAccessSelect = {
+  id: true,
+  slug: true,
+  tokenHash: true,
+  invitedEmail: true,
+  permission: true,
+  status: true,
+  acceptedById: true,
+  expiresAt: true,
+  isActive: true,
+  createdAt: true,
+  versionId: true,
+  project: { select: { id: true, userId: true, deletedAt: true } },
+  version: { select: { snapshot: true, createdAt: true } },
+} satisfies Prisma.ShareLinkSelect;
+
+type ShareAccessRecord = Prisma.ShareLinkGetPayload<{
+  select: typeof shareAccessSelect;
+}>;
+
 @Injectable()
-export class ReadingService {}
+export class ReadingService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
+
+  async createShare(
+    userId: string,
+    bookId: string,
+    dto: CreateShareDto,
+  ): Promise<CreatedShare> {
+    const book = await this.prisma.book.findFirst({
+      where: {
+        id: bookId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
+      select: snapshotBookSelect,
+    });
+
+    if (!book) {
+      throw new NotFoundException('Book not found');
+    }
+
+    const invitedEmail = normalizeEmail(dto.email);
+    const expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Expiration must be in the future');
+    }
+
+    const frozenAt = new Date();
+    const snapshot: ManuscriptSnapshot = {
+      schemaVersion: 1,
+      projectId: book.project.id,
+      title: book.title,
+      frozenAt: frozenAt.toISOString(),
+      books: [
+        {
+          id: book.id,
+          title: book.title,
+          chapters: book.chapters.map((chapter) => ({
+            id: chapter.id,
+            title: chapter.title,
+            scenes: chapter.scenes.map((scene) => ({
+              id: scene.id,
+              title: scene.title,
+              content: isSnapshotContent(scene.content)
+                ? (scene.content as SnapshotContent)
+                : null,
+              wordCount: scene.wordCount,
+            })),
+          })),
+        },
+      ],
+    };
+
+    const scenes = snapshot.books.flatMap((book) =>
+      book.chapters.flatMap((chapter) => chapter.scenes),
+    );
+    const token = randomBytes(32).toString('base64url');
+    const slug = randomUUID();
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const version = await tx.version.create({
+        data: {
+          projectId: book.project.id,
+          label: `${book.title} · versión compartida ${frozenAt.toISOString()}`,
+          type: 'shared',
+          snapshot: snapshot as unknown as Prisma.InputJsonValue,
+          checksumSha256: createContentHash(
+            snapshot as unknown as Record<string, unknown>,
+          ),
+          wordCount: scenes.reduce(
+            (total, scene) => total + scene.wordCount,
+            0,
+          ),
+          sceneCount: scenes.length,
+        },
+      });
+
+      return tx.shareLink.create({
+        data: {
+          projectId: book.project.id,
+          bookId,
+          versionId: version.id,
+          slug,
+          tokenHash: hashToken(token),
+          invitedEmail,
+          permission: dto.permission,
+          status: ShareStatus.PENDING,
+          createdById: userId,
+          expiresAt,
+          allowComments: dto.permission === SharePermission.COMMENT,
+        },
+        select: shareSummarySelect,
+      });
+    });
+
+    return { ...toShareSummary(created), token };
+  }
+
+  async listBookShares(
+    userId: string,
+    bookId: string,
+  ): Promise<ShareSummary[]> {
+    await this.assertBookOwner(userId, bookId);
+    const shares = await this.prisma.shareLink.findMany({
+      where: { bookId },
+      orderBy: { createdAt: 'desc' },
+      select: shareSummarySelect,
+    });
+    return shares.flatMap((share) =>
+      share.invitedEmail && share.version ? [toShareSummary(share)] : [],
+    );
+  }
+
+  async updateShare(
+    userId: string,
+    bookId: string,
+    shareId: string,
+    dto: UpdateShareDto,
+  ): Promise<ShareSummary> {
+    await this.assertBookOwner(userId, bookId);
+    const result = await this.prisma.shareLink.updateMany({
+      where: { id: shareId, bookId, status: { not: ShareStatus.REVOKED } },
+      data: {
+        permission: dto.permission,
+        allowComments: dto.permission === SharePermission.COMMENT,
+      },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Share invitation not found');
+    }
+    const share = await this.prisma.shareLink.findUnique({
+      where: { id: shareId },
+      select: shareSummarySelect,
+    });
+    if (!share) {
+      throw new NotFoundException('Share invitation not found');
+    }
+    return toShareSummary(share);
+  }
+
+  async revokeShare(
+    userId: string,
+    bookId: string,
+    shareId: string,
+  ): Promise<void> {
+    await this.assertBookOwner(userId, bookId);
+    const result = await this.prisma.shareLink.updateMany({
+      where: { id: shareId, bookId, status: { not: ShareStatus.REVOKED } },
+      data: {
+        status: ShareStatus.REVOKED,
+        isActive: false,
+        revokedAt: new Date(),
+      },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Share invitation not found');
+    }
+  }
+
+  async acceptInvitation(
+    user: ShareViewerIdentity,
+    slug: string,
+    token: string,
+  ): Promise<SharedManuscriptView> {
+    const share = await this.findShareAccess(slug);
+    this.assertShareActive(share);
+    if (share.project.userId === user.id) {
+      return this.getSharedManuscript(user, slug);
+    }
+    if (!share.tokenHash || !tokenMatches(token, share.tokenHash)) {
+      throw new ForbiddenException('Invalid invitation token');
+    }
+    if (
+      user.provider !== 'google.com' ||
+      !user.emailVerified ||
+      !share.invitedEmail ||
+      normalizeEmail(user.email) !== share.invitedEmail
+    ) {
+      throw new ForbiddenException(
+        'Sign in with the Google account that received this invitation',
+      );
+    }
+
+    if (share.status !== ShareStatus.ACCEPTED) {
+      await this.prisma.shareLink.update({
+        where: { id: share.id },
+        data: {
+          status: ShareStatus.ACCEPTED,
+          acceptedAt: new Date(),
+          readerCount: { increment: 1 },
+        },
+      });
+    }
+
+    return this.getSharedManuscript(user, slug, token);
+  }
+
+  async getSharedManuscript(
+    user: ShareViewerIdentity,
+    slug: string,
+    token?: string,
+  ): Promise<SharedManuscriptView> {
+    const share = await this.findShareAccess(slug);
+    const isOwner = this.assertViewerAccess(share, user, token);
+    return {
+      invitation: toShareSummary(share),
+      manuscript: parseSnapshot(share.version?.snapshot),
+      viewer: {
+        isOwner,
+        canComment: share.permission === SharePermission.COMMENT,
+      },
+    };
+  }
+
+  async listComments(
+    user: ShareViewerIdentity,
+    slug: string,
+    token?: string,
+  ): Promise<ReaderCommentView[]> {
+    const share = await this.findShareAccess(slug);
+    this.assertViewerAccess(share, user, token);
+    if (!share.versionId) {
+      return [];
+    }
+
+    const comments = await this.prisma.readerComment.findMany({
+      where: {
+        isVisible: true,
+        snapshotSceneId: { not: null },
+        shareLink: { versionId: share.versionId },
+      },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        author: {
+          select: { id: true, displayName: true, name: true, email: true },
+        },
+      },
+    });
+
+    return comments.flatMap((comment) => {
+      if (
+        !comment.snapshotSceneId ||
+        comment.anchorFrom === null ||
+        comment.anchorTo === null ||
+        comment.selectedText === null
+      ) {
+        return [];
+      }
+      return [toCommentView(comment)];
+    });
+  }
+
+  async createComment(
+    user: ShareViewerIdentity,
+    slug: string,
+    token: string | undefined,
+    dto: CreateReaderCommentDto,
+  ): Promise<ReaderCommentView> {
+    const share = await this.findShareAccess(slug);
+    const isOwner = this.assertViewerAccess(share, user, token);
+    if (share.permission !== SharePermission.COMMENT) {
+      throw new ForbiddenException('This invitation is read-only');
+    }
+    if (dto.anchorTo <= dto.anchorFrom) {
+      throw new BadRequestException('Invalid text selection');
+    }
+    const snapshot = parseSnapshot(share.version?.snapshot);
+    if (!snapshotHasScene(snapshot, dto.snapshotSceneId)) {
+      throw new BadRequestException('Scene does not belong to this version');
+    }
+
+    const accountIdentityUser =
+      isOwner ||
+      (share.invitedEmail !== null &&
+        normalizeEmail(user.email) === share.invitedEmail)
+        ? user
+        : null;
+    const author = accountIdentityUser
+      ? await this.prisma.user.findUnique({
+          where: { id: accountIdentityUser.id },
+          select: { id: true, displayName: true, name: true, email: true },
+        })
+      : null;
+    const displayName =
+      author?.displayName ??
+      author?.name ??
+      author?.email ??
+      share.invitedEmail ??
+      'Lector invitado';
+
+    const comment = await this.prisma.readerComment.create({
+      data: {
+        shareLinkId: share.id,
+        snapshotSceneId: dto.snapshotSceneId,
+        authorUserId: author?.id ?? null,
+        displayName,
+        body: dto.body.trim(),
+        anchorFrom: dto.anchorFrom,
+        anchorTo: dto.anchorTo,
+        selectedText: dto.selectedText.trim(),
+        prefix: dto.prefix?.trim() ?? null,
+        suffix: dto.suffix?.trim() ?? null,
+        isVisible: true,
+      },
+      include: {
+        author: {
+          select: { id: true, displayName: true, name: true, email: true },
+        },
+      },
+    });
+    return toCommentView(comment);
+  }
+
+  async updateComment(
+    user: { id: string; email: string },
+    slug: string,
+    commentId: string,
+    dto: UpdateReaderCommentDto,
+  ): Promise<ReaderCommentView> {
+    const share = await this.findShareAccess(slug);
+    this.assertShareActive(share);
+    const isOwner = share.project.userId === user.id;
+    if (!isOwner) {
+      throw new ForbiddenException(
+        'Only the manuscript owner can resolve comments',
+      );
+    }
+    const existing = await this.prisma.readerComment.findFirst({
+      where: { id: commentId, shareLink: { versionId: share.versionId } },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Comment not found');
+    }
+
+    const comment = await this.prisma.readerComment.update({
+      where: { id: commentId },
+      data: {
+        status: dto.status,
+        resolvedAt:
+          dto.status === ReaderCommentStatus.RESOLVED ? new Date() : null,
+      },
+      include: {
+        author: {
+          select: { id: true, displayName: true, name: true, email: true },
+        },
+      },
+    });
+    return toCommentView(comment);
+  }
+
+  async getSharedStorageUrl(
+    user: ShareViewerIdentity,
+    slug: string,
+    storageKey: string,
+    token?: string,
+  ): Promise<string> {
+    const share = await this.findShareAccess(slug);
+    this.assertViewerAccess(share, user, token);
+    const snapshot = parseSnapshot(share.version?.snapshot);
+    const match = /^scenes\/([0-9a-f-]{36})\//i.exec(storageKey);
+    if (!match?.[1] || !snapshotHasScene(snapshot, match[1])) {
+      throw new ForbiddenException(
+        'Storage object is not part of this version',
+      );
+    }
+    return this.storage.generatePresignedGetUrl(storageKey);
+  }
+
+  private async assertBookOwner(userId: string, bookId: string): Promise<void> {
+    const book = await this.prisma.book.findFirst({
+      where: {
+        id: bookId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
+      select: { id: true },
+    });
+    if (!book) {
+      throw new NotFoundException('Book not found');
+    }
+  }
+
+  private async findShareAccess(slug: string): Promise<ShareAccessRecord> {
+    const share = await this.prisma.shareLink.findUnique({
+      where: { slug },
+      select: shareAccessSelect,
+    });
+    if (!share) {
+      throw new NotFoundException('Share invitation not found');
+    }
+    return share;
+  }
+
+  private assertShareActive(share: ShareAccessRecord): void {
+    if (
+      !share.isActive ||
+      share.status === ShareStatus.REVOKED ||
+      share.project.deletedAt
+    ) {
+      throw new GoneException('Share invitation is no longer active');
+    }
+    if (share.expiresAt && share.expiresAt.getTime() <= Date.now()) {
+      throw new GoneException('Share invitation has expired');
+    }
+    if (!share.version?.snapshot) {
+      throw new GoneException('Shared version is not available');
+    }
+  }
+
+  private assertViewerAccess(
+    share: ShareAccessRecord,
+    user: ShareViewerIdentity,
+    token?: string,
+  ): boolean {
+    this.assertShareActive(share);
+    const isOwner = share.project.userId === user.id;
+    if (isOwner) {
+      return true;
+    }
+
+    const hasLegacyAccountAccess =
+      share.status === ShareStatus.ACCEPTED &&
+      share.acceptedById === user.id &&
+      Boolean(share.invitedEmail) &&
+      share.invitedEmail === normalizeEmail(user.email);
+    const hasLinkAccess =
+      share.status === ShareStatus.ACCEPTED &&
+      user.provider === 'google.com' &&
+      user.emailVerified &&
+      Boolean(share.invitedEmail) &&
+      share.invitedEmail === normalizeEmail(user.email) &&
+      typeof token === 'string' &&
+      Boolean(share.tokenHash) &&
+      tokenMatches(token, share.tokenHash ?? '');
+
+    if (!hasLegacyAccountAccess && !hasLinkAccess) {
+      throw new ForbiddenException('You do not have access to this version');
+    }
+    return false;
+  }
+}
