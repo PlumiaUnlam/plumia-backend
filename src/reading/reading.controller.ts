@@ -18,6 +18,7 @@ import { Public } from '../common/decorators/public.decorator';
 import type { AuthenticatedRequest } from '../manuscript/controllers/authenticated-request';
 import { AcceptShareDto } from './dto/accept-share.dto';
 import { CreateReaderCommentDto } from './dto/create-reader-comment.dto';
+import { CreateReaderCommentReplyDto } from './dto/create-reader-comment-reply.dto';
 import { CreateShareDto } from './dto/create-share.dto';
 import { SharedStorageUrlDto } from './dto/shared-storage-url.dto';
 import { UpdateReaderCommentDto } from './dto/update-reader-comment.dto';
@@ -127,6 +128,24 @@ export class ReadingController {
     return this.readingService.createComment(
       await this.getFirebaseUser(req),
       slug,
+      shareToken,
+      dto,
+    );
+  }
+
+  @Post('reading/invitations/:slug/comments/:commentId/replies')
+  @Public()
+  async replyToComment(
+    @Request() req: ExpressRequest,
+    @Param('slug') slug: string,
+    @Param('commentId', ParseUUIDPipe) commentId: string,
+    @Headers('x-share-token') shareToken: string | undefined,
+    @Body() dto: CreateReaderCommentReplyDto,
+  ): Promise<ReaderCommentView> {
+    return this.readingService.replyToComment(
+      await this.getFirebaseUser(req),
+      slug,
+      commentId,
       shareToken,
       dto,
     );

@@ -8,6 +8,7 @@ import { PrismaProjectRepository } from './adapters/prisma-project-repository.ad
 import { PrismaSceneRepository } from './adapters/prisma-scene-repository.adapter';
 import { PrismaStoryboardCardRepository } from './adapters/prisma-storyboard-card-repository.adapter';
 import { BooksController } from './controllers/books.controller';
+import { AuthorAnnotationsController } from './controllers/author-annotations.controller';
 import { ChaptersController } from './controllers/chapters.controller';
 import { EditorTextStylesController } from './controllers/editor-text-styles.controller';
 import { ProjectsController } from './controllers/projects.controller';
@@ -21,6 +22,7 @@ import { PROJECT_REPOSITORY } from './ports/project-repository.port';
 import { SCENE_REPOSITORY } from './ports/scene-repository.port';
 import { STORYBOARD_CARD_REPOSITORY } from './ports/storyboard-card-repository.port';
 import { BookService } from './services/book.service';
+import { AuthorAnnotationsService } from './services/author-annotations.service';
 import { ChapterService } from './services/chapter.service';
 import { EditorTextStylesService } from './services/editor-text-styles.service';
 import { ProjectService } from './services/project.service';
@@ -39,6 +41,7 @@ import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup
     ScenesController,
     StoryboardCardsController,
     StoryboardMatrixController,
+    AuthorAnnotationsController,
   ],
   providers: [
     ProjectService,
@@ -48,6 +51,7 @@ import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup
     SceneService,
     StoryboardCardService,
     StoryboardMatrixService,
+    AuthorAnnotationsService,
     StoryboardAudioCleanupPoller,
     { provide: PROJECT_REPOSITORY, useClass: PrismaProjectRepository },
     { provide: BOOK_REPOSITORY, useClass: PrismaBookRepository },

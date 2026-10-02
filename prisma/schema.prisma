@@ -177,16 +177,20 @@ model User {
   tokenLedgers                  TokenLedger[]
   subscription                  Subscription?
   projects                      Project[]
-  reviewedProposals             EntityProposal[]       @relation("ProposalReviewer")
-  reviewedRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalReviewer")
-  resolvedAlerts                AuditAlert[]           @relation("AlertResolver")
+  reviewedProposals             EntityProposal[]           @relation("ProposalReviewer")
+  reviewedRelationshipProposals RelationshipProposal[]     @relation("RelationshipProposalReviewer")
+  resolvedAlerts                AuditAlert[]               @relation("AlertResolver")
   exportJobs                    ExportJob[]
   writingSessions               WritingSession[]
   writingGoals                  WritingGoal[]
   imageGenerationJobs           ImageGenerationJob[]
-  createdShareLinks             ShareLink[]            @relation("ShareCreator")
-  acceptedShareLinks            ShareLink[]            @relation("ShareRecipient")
-  readerComments                ReaderComment[]        @relation("ReaderCommentAuthor")
+  createdShareLinks             ShareLink[]                @relation("ShareCreator")
+  acceptedShareLinks            ShareLink[]                @relation("ShareRecipient")
+  readerComments                ReaderComment[]            @relation("ReaderCommentAuthor")
+  resolvedReaderComments        ReaderComment[]            @relation("ReaderCommentResolver")
+  authorAnnotations             AuthorAnnotation[]
+  readerCommentReplies          ReaderCommentReply[]
+  readerCommentStatusEvents     ReaderCommentStatusEvent[]
 }
 
 model UserApiKey {
@@ -292,14 +296,14 @@ model Project {
 }
 
 model EditorTextStyle {
-  id         String   @id @default(uuid()) @db.Uuid
-  projectId  String   @map("project_id") @db.Uuid
-  name       String   @db.VarChar(80)
-  kind       String   @db.VarChar(20)
-  definition Json     @db.JsonB
-  isActive   Boolean  @default(true) @map("is_active")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id         String    @id @default(uuid()) @db.Uuid
+  projectId  String    @map("project_id") @db.Uuid
+  name       String    @db.VarChar(80)
+  kind       String    @db.VarChar(20)
+  definition Json      @db.JsonB
+  isActive   Boolean   @default(true) @map("is_active")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -377,6 +381,7 @@ model Scene {
   entityProposals       EntityProposal[]
   relationshipProposals RelationshipProposal[]
   readerComments        ReaderComment[]
+  authorAnnotations     AuthorAnnotation[]
   writingSessions       WritingSession[]
   versions              SceneVersion[]
   sourceTimelineEvents  TimelineEvent[]        @relation("TimelineEventSourceScene")
@@ -823,8 +828,9 @@ model Version {
   sceneCount     Int?     @map("scene_count")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  project    Project     @relation(fields: [projectId], references: [id])
-  shareLinks ShareLink[]
+  project        Project         @relation(fields: [projectId], references: [id])
+  shareLinks     ShareLink[]
+  readerComments ReaderComment[]
 
   @@index([projectId], map: "idx_version_project")
   @@index([type], map: "idx_version_type")
@@ -1040,6 +1046,7 @@ model ShareLink {
 model ReaderComment {
   id              String              @id @default(uuid()) @db.Uuid
   shareLinkId     String              @map("share_link_id") @db.Uuid
+  versionId       String?             @map("version_id") @db.Uuid
   sceneId         String?             @map("scene_id") @db.Uuid
   chapterId       String?             @map("chapter_id") @db.Uuid
   snapshotSceneId String?             @map("snapshot_scene_id") @db.Uuid
@@ -1056,17 +1063,76 @@ model ReaderComment {
   createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   resolvedAt      DateTime?           @map("resolved_at") @db.Timestamptz(6)
+  resolvedById    String?             @map("resolved_by_id")
 
-  shareLink ShareLink @relation(fields: [shareLinkId], references: [id], onDelete: Cascade)
-  scene     Scene?    @relation(fields: [sceneId], references: [id])
-  chapter   Chapter?  @relation(fields: [chapterId], references: [id])
-  author    User?     @relation("ReaderCommentAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  shareLink    ShareLink                  @relation(fields: [shareLinkId], references: [id], onDelete: Cascade)
+  version      Version?                   @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  scene        Scene?                     @relation(fields: [sceneId], references: [id])
+  chapter      Chapter?                   @relation(fields: [chapterId], references: [id])
+  author       User?                      @relation("ReaderCommentAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  resolvedBy   User?                      @relation("ReaderCommentResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  replies      ReaderCommentReply[]
+  statusEvents ReaderCommentStatusEvent[]
 
   @@index([shareLinkId], map: "idx_comment_share")
+  @@index([versionId], map: "idx_comment_version")
   @@index([isVisible], map: "idx_comment_visible")
   @@index([snapshotSceneId], map: "idx_comment_snapshot_scene")
   @@index([authorUserId], map: "idx_comment_author")
   @@map("reader_comment")
+}
+
+model AuthorAnnotation {
+  id            String    @id @default(uuid()) @db.Uuid
+  sceneId       String    @map("scene_id") @db.Uuid
+  authorId      String    @map("author_id")
+  body          String
+  quote         String?
+  anchorFrom    Int?      @map("anchor_from")
+  anchorTo      Int?      @map("anchor_to")
+  contextBefore String?   @map("context_before") @db.VarChar(200)
+  contextAfter  String?   @map("context_after") @db.VarChar(200)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz(6)
+  resolvedAt    DateTime? @map("resolved_at") @db.Timestamptz(6)
+
+  scene  Scene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  author User  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([sceneId, deletedAt, createdAt], map: "idx_author_annotation_scene")
+  @@index([authorId], map: "idx_author_annotation_author")
+  @@map("author_annotation")
+}
+
+model ReaderCommentReply {
+  id          String   @id @default(uuid()) @db.Uuid
+  commentId   String   @map("comment_id") @db.Uuid
+  authorId    String?  @map("author_id")
+  displayName String   @map("display_name") @db.VarChar(100)
+  body        String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  comment ReaderComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  author  User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([commentId, createdAt], map: "idx_reader_comment_reply_thread")
+  @@map("reader_comment_reply")
+}
+
+model ReaderCommentStatusEvent {
+  id            String              @id @default(uuid()) @db.Uuid
+  commentId     String              @map("comment_id") @db.Uuid
+  status        ReaderCommentStatus
+  changedById   String?             @map("changed_by_id")
+  changedByName String              @map("changed_by_name") @db.VarChar(100)
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  comment   ReaderComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  changedBy User?         @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([commentId, createdAt], map: "idx_reader_comment_status_history")
+  @@map("reader_comment_status_event")
 }
 
 model WritingSession {

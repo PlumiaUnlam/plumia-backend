@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -28,6 +29,7 @@ export class CreateReaderCommentDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(10_000)
+  @Matches(/\S/)
   body!: string;
 
   @IsString()
