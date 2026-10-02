@@ -5,7 +5,7 @@ import { UserService, type UserEntity } from '../../../src/user/user.service';
 describe('UserService', () => {
   let userService: UserService;
   let prisma: {
-    user: { findUnique: jest.Mock; create: jest.Mock };
+    user: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
   };
 
   const mockUser: UserEntity = {
@@ -34,6 +34,7 @@ describe('UserService', () => {
             user: {
               findUnique: jest.fn(),
               create: jest.fn(),
+              update: jest.fn(),
             },
           },
         },
@@ -108,6 +109,25 @@ describe('UserService', () => {
         },
       });
       expect(result).toEqual(mockUser);
+    });
+  });
+
+  describe('updateProfile', () => {
+    it('persists the display name and avatar', async () => {
+      prisma.user.update.mockResolvedValue(mockUser);
+
+      await userService.updateProfile('firebase-uid-1', {
+        displayName: 'Ailen',
+        avatarUrl: 'https://cdn.example/avatar.png',
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'firebase-uid-1' },
+        data: {
+          displayName: 'Ailen',
+          avatarUrl: 'https://cdn.example/avatar.png',
+        },
+      });
     });
   });
 });
