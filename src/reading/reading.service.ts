@@ -16,6 +16,7 @@ import { createContentHash } from '../manuscript/domain/json-content';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateReaderCommentDto } from './dto/create-reader-comment.dto';
+import { CreateReaderCommentReplyDto } from './dto/create-reader-comment-reply.dto';
 import { CreateShareDto } from './dto/create-share.dto';
 import { UpdateReaderCommentDto } from './dto/update-reader-comment.dto';
 import { UpdateShareDto } from './dto/update-share.dto';
@@ -79,6 +80,21 @@ const shareAccessSelect = {
   project: { select: { id: true, userId: true, deletedAt: true } },
   version: { select: { snapshot: true, createdAt: true } },
 } satisfies Prisma.ShareLinkSelect;
+
+const commentThreadInclude = {
+  author: {
+    select: { id: true, displayName: true, name: true, email: true },
+  },
+  replies: {
+    orderBy: { createdAt: 'asc' },
+    include: {
+      author: {
+        select: { id: true, displayName: true, name: true, email: true },
+      },
+    },
+  },
+  statusEvents: { orderBy: { createdAt: 'asc' } },
+} satisfies Prisma.ReaderCommentInclude;
 
 type ShareAccessRecord = Prisma.ShareLinkGetPayload<{
   select: typeof shareAccessSelect;
@@ -253,10 +269,10 @@ export class ReadingService {
     token: string,
   ): Promise<SharedManuscriptView> {
     const share = await this.findShareAccess(slug);
-    this.assertShareActive(share);
     if (share.project.userId === user.id) {
       return this.getSharedManuscript(user, slug);
     }
+    this.assertShareActive(share);
     if (!share.tokenHash || !tokenMatches(token, share.tokenHash)) {
       throw new ForbiddenException('Invalid invitation token');
     }
@@ -308,23 +324,19 @@ export class ReadingService {
     token?: string,
   ): Promise<ReaderCommentView[]> {
     const share = await this.findShareAccess(slug);
-    this.assertViewerAccess(share, user, token);
+    const isOwner = this.assertViewerAccess(share, user, token);
     if (!share.versionId) {
       return [];
     }
 
     const comments = await this.prisma.readerComment.findMany({
       where: {
-        isVisible: true,
+        versionId: share.versionId,
+        ...(isOwner ? {} : { isVisible: true }),
         snapshotSceneId: { not: null },
-        shareLink: { versionId: share.versionId },
       },
       orderBy: { createdAt: 'asc' },
-      include: {
-        author: {
-          select: { id: true, displayName: true, name: true, email: true },
-        },
-      },
+      include: commentThreadInclude,
     });
 
     return comments.flatMap((comment) => {
@@ -348,8 +360,12 @@ export class ReadingService {
   ): Promise<ReaderCommentView> {
     const share = await this.findShareAccess(slug);
     const isOwner = this.assertViewerAccess(share, user, token);
+    this.assertShareActive(share);
     if (share.permission !== SharePermission.COMMENT) {
       throw new ForbiddenException('This invitation is read-only');
+    }
+    if (!share.versionId) {
+      throw new GoneException('Shared version is not available');
     }
     if (dto.anchorTo <= dto.anchorFrom) {
       throw new BadRequestException('Invalid text selection');
@@ -378,25 +394,89 @@ export class ReadingService {
       share.invitedEmail ??
       'Lector invitado';
 
-    const comment = await this.prisma.readerComment.create({
-      data: {
+    const commentId = await this.prisma.$transaction(async (tx) => {
+      const comment = await tx.readerComment.create({
+        data: {
+          shareLinkId: share.id,
+          versionId: share.versionId,
+          snapshotSceneId: dto.snapshotSceneId,
+          authorUserId: author?.id ?? null,
+          displayName,
+          body: dto.body.trim(),
+          anchorFrom: dto.anchorFrom,
+          anchorTo: dto.anchorTo,
+          selectedText: dto.selectedText.trim(),
+          prefix: dto.prefix?.trim() ?? null,
+          suffix: dto.suffix?.trim() ?? null,
+          isVisible: true,
+        },
+        select: { id: true },
+      });
+
+      await tx.readerCommentStatusEvent.create({
+        data: {
+          commentId: comment.id,
+          status: ReaderCommentStatus.OPEN,
+          changedById: author?.id ?? null,
+          changedByName: displayName,
+        },
+      });
+      return comment.id;
+    });
+    const comment = await this.prisma.readerComment.findUniqueOrThrow({
+      where: { id: commentId },
+      include: commentThreadInclude,
+    });
+    return toCommentView(comment);
+  }
+
+  async replyToComment(
+    user: ShareViewerIdentity,
+    slug: string,
+    commentId: string,
+    token: string | undefined,
+    dto: CreateReaderCommentReplyDto,
+  ): Promise<ReaderCommentView> {
+    const share = await this.findShareAccess(slug);
+    const isOwner = this.assertViewerAccess(share, user, token);
+    if (!isOwner && share.permission !== SharePermission.COMMENT) {
+      throw new ForbiddenException('This invitation is read-only');
+    }
+    if (!share.versionId) {
+      throw new GoneException('Shared version is not available');
+    }
+
+    const existing = await this.prisma.readerComment.findFirst({
+      where: {
+        id: commentId,
         shareLinkId: share.id,
-        snapshotSceneId: dto.snapshotSceneId,
-        authorUserId: author?.id ?? null,
+        versionId: share.versionId,
+        ...(isOwner ? {} : { isVisible: true }),
+      },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Comment not found');
+    }
+
+    const author = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, displayName: true, name: true, email: true },
+    });
+    const displayName =
+      author?.displayName ?? author?.name ?? author?.email ?? user.email;
+
+    await this.prisma.readerCommentReply.create({
+      data: {
+        commentId,
+        authorId: author?.id ?? null,
         displayName,
         body: dto.body.trim(),
-        anchorFrom: dto.anchorFrom,
-        anchorTo: dto.anchorTo,
-        selectedText: dto.selectedText.trim(),
-        prefix: dto.prefix?.trim() ?? null,
-        suffix: dto.suffix?.trim() ?? null,
-        isVisible: true,
       },
-      include: {
-        author: {
-          select: { id: true, displayName: true, name: true, email: true },
-        },
-      },
+    });
+    const comment = await this.prisma.readerComment.findUniqueOrThrow({
+      where: { id: commentId },
+      include: commentThreadInclude,
     });
     return toCommentView(comment);
   }
@@ -408,33 +488,59 @@ export class ReadingService {
     dto: UpdateReaderCommentDto,
   ): Promise<ReaderCommentView> {
     const share = await this.findShareAccess(slug);
-    this.assertShareActive(share);
     const isOwner = share.project.userId === user.id;
     if (!isOwner) {
+      this.assertShareActive(share);
       throw new ForbiddenException(
         'Only the manuscript owner can resolve comments',
       );
     }
-    const existing = await this.prisma.readerComment.findFirst({
-      where: { id: commentId, shareLink: { versionId: share.versionId } },
-      select: { id: true },
-    });
-    if (!existing) {
-      throw new NotFoundException('Comment not found');
+    if (!share.versionId) {
+      throw new GoneException('Shared version is not available');
     }
-
-    const comment = await this.prisma.readerComment.update({
-      where: { id: commentId },
-      data: {
-        status: dto.status,
-        resolvedAt:
-          dto.status === ReaderCommentStatus.RESOLVED ? new Date() : null,
-      },
-      include: {
-        author: {
-          select: { id: true, displayName: true, name: true, email: true },
+    const owner = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { displayName: true, name: true, email: true },
+    });
+    const changedByName =
+      owner?.displayName ?? owner?.name ?? owner?.email ?? user.email;
+    const comment = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.readerComment.findFirst({
+        where: {
+          id: commentId,
+          shareLinkId: share.id,
+          versionId: share.versionId,
         },
-      },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new NotFoundException('Comment not found');
+      }
+
+      const changed = await tx.readerComment.updateMany({
+        where: { id: commentId, status: { not: dto.status } },
+        data: {
+          status: dto.status,
+          resolvedAt:
+            dto.status === ReaderCommentStatus.RESOLVED ? new Date() : null,
+          resolvedById:
+            dto.status === ReaderCommentStatus.RESOLVED ? user.id : null,
+        },
+      });
+      if (changed.count > 0) {
+        await tx.readerCommentStatusEvent.create({
+          data: {
+            commentId,
+            status: dto.status,
+            changedById: user.id,
+            changedByName,
+          },
+        });
+      }
+      return tx.readerComment.findUniqueOrThrow({
+        where: { id: commentId },
+        include: commentThreadInclude,
+      });
     });
     return toCommentView(comment);
   }
@@ -503,11 +609,11 @@ export class ReadingService {
     user: ShareViewerIdentity,
     token?: string,
   ): boolean {
-    this.assertShareActive(share);
     const isOwner = share.project.userId === user.id;
     if (isOwner) {
       return true;
     }
+    this.assertShareActive(share);
 
     const hasLegacyAccountAccess =
       share.status === ShareStatus.ACCEPTED &&

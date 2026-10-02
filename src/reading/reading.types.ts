@@ -74,10 +74,29 @@ export interface ReaderCommentView {
   prefix: string | null;
   suffix: string | null;
   status: ReaderCommentStatus;
+  isVisible: boolean;
+  replies: ReaderCommentReplyView[];
+  statusHistory: ReaderCommentStatusEventView[];
   author: {
     id: string | null;
     displayName: string;
   };
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ReaderCommentReplyView {
+  id: string;
+  body: string;
+  author: {
+    id: string | null;
+    displayName: string;
+  };
+  createdAt: string;
+}
+
+export interface ReaderCommentStatusEventView {
+  status: ReaderCommentStatus;
+  changedByName: string;
+  createdAt: string;
 }

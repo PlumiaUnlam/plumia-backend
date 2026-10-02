@@ -107,6 +107,7 @@ export function toCommentView(comment: {
   prefix: string | null;
   suffix: string | null;
   status: ReaderCommentStatus;
+  isVisible: boolean;
   displayName: string;
   author: {
     id: string;
@@ -114,6 +115,23 @@ export function toCommentView(comment: {
     name: string;
     email: string;
   } | null;
+  replies: Array<{
+    id: string;
+    body: string;
+    displayName: string;
+    author: {
+      id: string;
+      displayName: string | null;
+      name: string;
+      email: string;
+    } | null;
+    createdAt: Date;
+  }>;
+  statusEvents: Array<{
+    status: ReaderCommentStatus;
+    changedByName: string;
+    createdAt: Date;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }): ReaderCommentView {
@@ -135,6 +153,7 @@ export function toCommentView(comment: {
     prefix: comment.prefix,
     suffix: comment.suffix,
     status: comment.status,
+    isVisible: comment.isVisible,
     author: {
       id: comment.author?.id ?? null,
       displayName:
@@ -143,6 +162,24 @@ export function toCommentView(comment: {
         comment.author?.email ??
         comment.displayName,
     },
+    replies: comment.replies.map((reply) => ({
+      id: reply.id,
+      body: reply.body,
+      author: {
+        id: reply.author?.id ?? null,
+        displayName:
+          reply.author?.displayName ??
+          reply.author?.name ??
+          reply.author?.email ??
+          reply.displayName,
+      },
+      createdAt: reply.createdAt.toISOString(),
+    })),
+    statusHistory: comment.statusEvents.map((event) => ({
+      status: event.status,
+      changedByName: event.changedByName,
+      createdAt: event.createdAt.toISOString(),
+    })),
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
   };
