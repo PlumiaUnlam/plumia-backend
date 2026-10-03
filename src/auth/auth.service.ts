@@ -18,7 +18,10 @@ export class AuthService {
       decoded = await this.firebaseAdmin.verifyToken(idToken);
     } catch (error) {
       const code = firebaseErrorCode(error);
-      this.logger.warn(`Firebase ID token rejected${code ? ` (${code})` : ''}`);
+      const message = firebaseErrorMessage(error);
+      this.logger.warn(
+        `Firebase ID token rejected${code ? ` (${code})` : ''}${message ? `: ${message}` : ''}`,
+      );
       throw new UnauthorizedException('Invalid or expired token');
     }
 
@@ -52,6 +55,27 @@ export class AuthService {
       avatarUrl: firebaseUser.picture ?? null,
     });
   }
+
+  async resolveExistingUserId(firebaseUser: {
+    uid: string;
+    email?: string;
+  }): Promise<string> {
+    const existing = await this.userService.findById(firebaseUser.uid);
+    if (existing) {
+      return existing.id;
+    }
+
+    if (firebaseUser.email) {
+      const existingByEmail = await this.userService.findByEmail(
+        firebaseUser.email,
+      );
+      if (existingByEmail) {
+        return existingByEmail.id;
+      }
+    }
+
+    return firebaseUser.uid;
+  }
 }
 
 function firebaseErrorCode(error: unknown): string | null {
@@ -60,4 +84,12 @@ function firebaseErrorCode(error: unknown): string | null {
   }
   const code = (error as { code?: unknown }).code;
   return typeof code === 'string' ? code : null;
+}
+
+function firebaseErrorMessage(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('message' in error)) {
+    return null;
+  }
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : null;
 }

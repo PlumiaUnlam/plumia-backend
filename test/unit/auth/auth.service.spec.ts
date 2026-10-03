@@ -100,4 +100,39 @@ describe('AuthService', () => {
       expect(userService.findById).not.toHaveBeenCalled();
     });
   });
+
+  describe('resolveExistingUserId', () => {
+    it('maps a Firebase identity to an existing user with the same email', async () => {
+      userService.findById.mockResolvedValue(null);
+      userService.findByEmail.mockResolvedValue({
+        ...mockUser,
+        id: 'legacy-owner-id',
+      });
+
+      await expect(
+        authService.resolveExistingUserId({
+          uid: 'new-firebase-uid',
+          email: mockUser.email,
+        }),
+      ).resolves.toBe('legacy-owner-id');
+
+      expect(userService.findById).toHaveBeenCalledWith('new-firebase-uid');
+      expect(userService.findByEmail).toHaveBeenCalledWith(mockUser.email);
+      expect(userService.createFromFirebase).not.toHaveBeenCalled();
+    });
+
+    it('keeps the Firebase uid for an invited reader without a local account', async () => {
+      userService.findById.mockResolvedValue(null);
+      userService.findByEmail.mockResolvedValue(null);
+
+      await expect(
+        authService.resolveExistingUserId({
+          uid: 'reader-firebase-uid',
+          email: 'reader@example.com',
+        }),
+      ).resolves.toBe('reader-firebase-uid');
+
+      expect(userService.createFromFirebase).not.toHaveBeenCalled();
+    });
+  });
 });
