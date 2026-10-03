@@ -224,6 +224,39 @@ describe('PublishingService', () => {
     ).toBe('https://old.example/mara.png');
   });
 
+  it('supports a first image without a reference and a one-time visual identity override', async () => {
+    const job = {
+      id: 'job-1',
+      entityId: 'entity-1',
+      userId: 'user-1',
+      status: 'QUEUED',
+      progress: 0,
+      errorMessage: null,
+      createdAt: now,
+      startedAt: null,
+      completedAt: null,
+    };
+    prisma.tx.imageGenerationJob.create.mockResolvedValue(job);
+
+    await service.requestImageGeneration('user-1', {
+      entityId: 'entity-1',
+      skipReferenceImage: true,
+      visualIdentity: 'Sombrero ancho y una brújula de cobre.',
+    });
+
+    const createData =
+      prisma.tx.imageGenerationJob.create.mock.calls[0]?.[0].data;
+    expect(prisma.generatedImage.findFirst).not.toHaveBeenCalled();
+    expect(createData).toMatchObject({
+      referenceImageId: null,
+      referenceImageUrl: null,
+      prompt: expect.stringContaining(
+        'Identidad visual prioritaria: Sombrero ancho y una brújula de cobre.',
+      ),
+    });
+    expect(createData.prompt).toContain('Crear la imagen base de la entidad');
+  });
+
   it('rejects image generation when the entity or selected reference is not available', async () => {
     prisma.entity.findFirst.mockResolvedValue(null);
     await expect(

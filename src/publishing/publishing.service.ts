@@ -45,9 +45,13 @@ export class PublishingService {
     const reference = await this.resolveReferenceImage(
       entity,
       dto.referenceImageId,
+      dto.skipReferenceImage,
     );
     const instructions = this.toInstructions(dto);
-    const prompt = buildSpanishPrompt(entity, instructions, dto.prompt);
+    const prompt = buildSpanishPrompt(entity, instructions, dto.prompt, {
+      generationMode: reference.url ? 'variant' : 'initial',
+      ...(dto.visualIdentity ? { visualIdentity: dto.visualIdentity } : {}),
+    });
     const jobId = randomUUID();
     const width =
       dto.width ?? Number(this.config.get<string>('IMAGE_WIDTH', '512'));
@@ -284,7 +288,11 @@ export class PublishingService {
   private async resolveReferenceImage(
     entity: { id: string; imageUrl: string | null },
     referenceImageId?: string,
+    skipReferenceImage = false,
   ): Promise<{ id: string | null; url: string | null }> {
+    if (skipReferenceImage) {
+      return { id: null, url: null };
+    }
     if (referenceImageId) {
       const image = await this.prisma.generatedImage.findFirst({
         where: { id: referenceImageId, entityId: entity.id },
