@@ -1,5 +1,4 @@
 import type { ExportFormat, ExportStatus } from '@prisma/client';
-import type { SceneDividerVariant } from './scene-divider';
 
 export const EXPORT_FORMATS = ['PDF', 'DOCX', 'EPUB'] as const;
 export type SupportedExportFormat = (typeof EXPORT_FORMATS)[number];
@@ -7,6 +6,7 @@ export type SupportedExportFormat = (typeof EXPORT_FORMATS)[number];
 export interface ExportJobRecord {
   id: string;
   projectId: string;
+  bookId: string | null;
   format: ExportFormat;
   status: ExportStatus;
   progress: number;
@@ -21,14 +21,6 @@ export interface ExportImage {
   buffer: Buffer;
   mimeType: string;
   extension: string;
-}
-
-export interface ExportTocEntry {
-  id: string;
-  kind: 'project' | 'book' | 'chapter' | 'scene';
-  title: string;
-  level: number;
-  anchor: string;
 }
 
 export type ExportInline =
@@ -64,33 +56,22 @@ export type ExportBlock =
   | (ExportTextBlock & { kind: 'codeBlock' })
   | (ExportListBlock & { kind: 'bulletList' })
   | (ExportListBlock & { kind: 'orderedList' })
-  | { kind: 'sceneDivider'; variant: SceneDividerVariant }
-  | { kind: 'horizontalRule' }
+  | { kind: 'sceneDivider' }
   | { kind: 'image'; image: ExportImage; alt: string };
 
 export interface ExportScene {
-  id: string;
   title: string | null;
   content: ExportBlock[];
 }
 
 export interface ExportChapter {
-  id: string;
   title: string;
   scenes: ExportScene[];
 }
 
-export interface ExportBook {
-  id: string;
+export interface ExportDocument {
   title: string;
   chapters: ExportChapter[];
-}
-
-export interface ExportDocument {
-  id: string;
-  title: string;
-  books: ExportBook[];
-  toc: ExportTocEntry[];
 }
 
 export interface RenderedExport {

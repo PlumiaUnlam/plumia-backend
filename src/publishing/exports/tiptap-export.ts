@@ -5,13 +5,6 @@ import type {
   ExportInline,
 } from './export.types';
 import type { ExportSourceRecord } from './export-source.port';
-import { normalizeExportIndentation } from './export-indentation';
-import { buildExportToc } from './export-toc';
-import {
-  normalizeSceneDividerVariant,
-  sceneDividerSvg,
-  type SceneDividerVariant,
-} from './scene-divider';
 
 type JsonRecord = Record<string, unknown>;
 type ImageResolver = (
@@ -74,31 +67,30 @@ async function parseInlines(
   resolveImage: ImageResolver,
   sceneId?: string,
 ): Promise<ExportInline[]> {
-  const inlines: ExportInline[] = [];
+  const parsed = await Promise.all(
+    nodes.map((value) => parseInline(value, resolveImage, sceneId)),
+  );
+  return parsed.flat();
+}
 
-  for (const value of nodes) {
-    if (!isRecord(value)) {
-      continue;
-    }
-
-    if (value['type'] === 'text') {
-      inlines.push(textMarks(value));
-      continue;
-    }
-
-    if (value['type'] === 'hardBreak') {
-      inlines.push({ kind: 'break' });
-      continue;
-    }
-
-    if (value['type'] === 'paragraph' || value['type'] === 'inline') {
-      inlines.push(
-        ...(await parseInlines(childNodes(value), resolveImage, sceneId)),
-      );
-    }
+async function parseInline(
+  value: unknown,
+  resolveImage: ImageResolver,
+  sceneId?: string,
+): Promise<ExportInline[]> {
+  if (!isRecord(value)) {
+    return [];
   }
-
-  return inlines;
+  if (value['type'] === 'text') {
+    return [textMarks(value)];
+  }
+  if (value['type'] === 'hardBreak') {
+    return [{ kind: 'break' }];
+  }
+  if (value['type'] === 'paragraph' || value['type'] === 'inline') {
+    return parseInlines(childNodes(value), resolveImage, sceneId);
+  }
+  return [];
 }
 
 function imageStorageKey(node: JsonRecord): string | undefined {
@@ -121,150 +113,147 @@ async function parseBlocks(
   resolveImage: ImageResolver,
   sceneId?: string,
 ): Promise<ExportBlock[]> {
-  const blocks: ExportBlock[] = [];
+  const parsed = await Promise.all(
+    nodes.map((value) => parseBlock(value, resolveImage, sceneId)),
+  );
+  return parsed.flat();
+}
 
-  for (const value of nodes) {
-    if (!isRecord(value)) {
-      continue;
-    }
+async function parseBlock(
+  value: unknown,
+  resolveImage: ImageResolver,
+  sceneId?: string,
+): Promise<ExportBlock[]> {
+  if (!isRecord(value)) {
+    return [];
+  }
 
-    const type = value['type'];
-    if (type === 'doc') {
-      blocks.push(
-        ...(await parseBlocks(childNodes(value), resolveImage, sceneId)),
-      );
-      continue;
-    }
-
-    if (type === 'paragraph' || type === 'heading') {
-      const attrs = nodeAttributes(value);
-      const block: ExportBlock = {
-        kind: type,
-        inlines: await parseInlines(childNodes(value), resolveImage, sceneId),
-        ...(type === 'heading'
-          ? { level: typeof attrs['level'] === 'number' ? attrs['level'] : 1 }
-          : {}),
-        ...(typeof attrs['textAlign'] === 'string'
-          ? { textAlign: attrs['textAlign'] }
-          : {}),
-        ...(typeof attrs['lineHeight'] === 'string'
-          ? { lineHeight: attrs['lineHeight'] }
-          : {}),
-        ...(typeof attrs['indentLeft'] === 'number'
-          ? { indentLeft: attrs['indentLeft'] }
-          : {}),
-        ...(typeof attrs['indentRight'] === 'number'
-          ? { indentRight: attrs['indentRight'] }
-          : {}),
-        ...(typeof attrs['firstLineIndent'] === 'number'
-          ? { firstLineIndent: attrs['firstLineIndent'] }
-          : {}),
-      };
-      blocks.push(block);
-      continue;
-    }
-
-    if (type === 'blockquote' || type === 'codeBlock') {
-      const inlines = await parseInlines(
-        childNodes(value),
-        resolveImage,
-        sceneId,
-      );
-      blocks.push({ kind: type, inlines });
-      continue;
-    }
-
-    if (type === 'bulletList' || type === 'orderedList') {
-      const items: ExportBlock[][] = [];
-      for (const item of childNodes(value)) {
-        if (!isRecord(item)) {
-          continue;
-        }
-        items.push(await parseBlocks(childNodes(item), resolveImage, sceneId));
-      }
-      blocks.push({ kind: type, items });
-      continue;
-    }
-
-    if (type === 'horizontalRule') {
-      blocks.push({ kind: 'horizontalRule' });
-      continue;
-    }
-
-    if (type === 'sceneDivider') {
-      const attrs = nodeAttributes(value);
-      blocks.push({
-        kind: 'sceneDivider',
-        variant: normalizeSceneDividerVariant(attrs['variant']),
-      });
-      continue;
-    }
-
-    if (type === 'image') {
-      const key = imageStorageKey(value);
-      if (!key) {
-        continue;
-      }
-      const image = await resolveImage(key, sceneId);
-      const attrs = nodeAttributes(value);
-      blocks.push({
-        kind: 'image',
-        image,
-        alt: stringValue(attrs['alt']) ?? 'Imagen de la obra',
-      });
-      continue;
-    }
-
-    const nestedBlocks = await parseBlocks(
+  const type = value['type'];
+  if (type === 'doc') {
+    return parseBlocks(childNodes(value), resolveImage, sceneId);
+  }
+  if (type === 'paragraph' || type === 'heading') {
+    return [await parseTextBlock(value, type, resolveImage, sceneId)];
+  }
+  if (type === 'blockquote' || type === 'codeBlock') {
+    const inlines = await parseInlines(
       childNodes(value),
       resolveImage,
       sceneId,
     );
-    if (nestedBlocks.length > 0) {
-      blocks.push(...nestedBlocks);
-    } else if (typeof value['text'] === 'string') {
-      blocks.push({
-        kind: 'paragraph',
-        inlines: [textMarks(value)],
-      });
-    }
+    return [{ kind: type, inlines }];
+  }
+  if (type === 'bulletList' || type === 'orderedList') {
+    return [await parseListBlock(value, type, resolveImage, sceneId)];
+  }
+  if (type === 'horizontalRule' || type === 'sceneDivider') {
+    return [{ kind: 'sceneDivider' }];
+  }
+  if (type === 'image') {
+    const image = await parseImageBlock(value, resolveImage, sceneId);
+    return image ? [image] : [];
   }
 
-  return blocks;
+  const nestedBlocks = await parseBlocks(
+    childNodes(value),
+    resolveImage,
+    sceneId,
+  );
+  if (nestedBlocks.length > 0) {
+    return nestedBlocks;
+  }
+  return typeof value['text'] === 'string'
+    ? [{ kind: 'paragraph', inlines: [textMarks(value)] }]
+    : [];
+}
+
+async function parseTextBlock(
+  value: JsonRecord,
+  type: 'paragraph' | 'heading',
+  resolveImage: ImageResolver,
+  sceneId?: string,
+): Promise<ExportBlock> {
+  const attrs = nodeAttributes(value);
+  return {
+    kind: type,
+    inlines: await parseInlines(childNodes(value), resolveImage, sceneId),
+    ...(type === 'heading'
+      ? { level: typeof attrs['level'] === 'number' ? attrs['level'] : 1 }
+      : {}),
+    ...(typeof attrs['textAlign'] === 'string'
+      ? { textAlign: attrs['textAlign'] }
+      : {}),
+    ...(typeof attrs['lineHeight'] === 'string'
+      ? { lineHeight: attrs['lineHeight'] }
+      : {}),
+    ...(typeof attrs['indentLeft'] === 'number'
+      ? { indentLeft: attrs['indentLeft'] }
+      : {}),
+    ...(typeof attrs['indentRight'] === 'number'
+      ? { indentRight: attrs['indentRight'] }
+      : {}),
+    ...(typeof attrs['firstLineIndent'] === 'number'
+      ? { firstLineIndent: attrs['firstLineIndent'] }
+      : {}),
+  };
+}
+
+async function parseListBlock(
+  value: JsonRecord,
+  type: 'bulletList' | 'orderedList',
+  resolveImage: ImageResolver,
+  sceneId?: string,
+): Promise<ExportBlock> {
+  const items = await Promise.all(
+    childNodes(value).map((item) =>
+      isRecord(item)
+        ? parseBlocks(childNodes(item), resolveImage, sceneId)
+        : Promise.resolve([]),
+    ),
+  );
+  return { kind: type, items };
+}
+
+async function parseImageBlock(
+  value: JsonRecord,
+  resolveImage: ImageResolver,
+  sceneId?: string,
+): Promise<Extract<ExportBlock, { kind: 'image' }> | null> {
+  const key = imageStorageKey(value);
+  if (!key) {
+    return null;
+  }
+
+  const image = await resolveImage(key, sceneId);
+  const attrs = nodeAttributes(value);
+  return {
+    kind: 'image',
+    image,
+    alt: stringValue(attrs['alt']) ?? 'Imagen de la obra',
+  };
 }
 
 export async function prepareExportDocument(
   source: ExportSourceRecord,
   resolveImage: ImageResolver,
 ): Promise<ExportDocument> {
-  const books = [];
-
-  for (const book of source.books) {
-    const chapters = [];
-    for (const chapter of book.chapters) {
-      const scenes = [];
-      for (const scene of chapter.scenes) {
-        scenes.push({
-          id: scene.id,
+  const chapters = await Promise.all(
+    source.chapters.map(async (chapter) => ({
+      title: chapter.title,
+      scenes: await Promise.all(
+        chapter.scenes.map(async (scene) => ({
           title: scene.title,
           content: await parseBlocks(
             scene.content && isRecord(scene.content) ? [scene.content] : [],
             resolveImage,
             scene.id,
           ),
-        });
-      }
-      chapters.push({ id: chapter.id, title: chapter.title, scenes });
-    }
-    books.push({ id: book.id, title: book.title, chapters });
-  }
+        })),
+      ),
+    })),
+  );
 
-  return {
-    id: source.id,
-    title: source.title,
-    books,
-    toc: buildExportToc(source.id, source.title, books),
-  };
+  return { title: source.title, chapters };
 }
 
 function escapeHtml(value: string): string {
@@ -297,80 +286,69 @@ function inlineHtml(inline: ExportInline): string {
 function blocksHtml(
   blocks: ExportBlock[],
   imageSrc: (image: ExportImage) => string,
-  dividerSrc?: (variant: SceneDividerVariant) => string,
 ): string {
-  return blocks
-    .map((block) => {
-      if (
-        block.kind === 'paragraph' ||
-        block.kind === 'heading' ||
-        block.kind === 'blockquote' ||
-        block.kind === 'codeBlock'
-      ) {
-        const content = block.inlines.map(inlineHtml).join('');
-        const indentation = normalizeExportIndentation(block);
-        const style = [
-          block.textAlign ? `text-align:${block.textAlign}` : '',
-          block.lineHeight ? `line-height:${block.lineHeight}` : '',
-          indentation.indentLeft
-            ? `margin-left:${indentation.indentLeft}cm`
-            : '',
-          indentation.indentRight
-            ? `margin-right:${indentation.indentRight}cm`
-            : '',
-          indentation.firstLineIndent
-            ? `text-indent:${indentation.firstLineIndent}cm`
-            : '',
-        ]
-          .filter(Boolean)
-          .join(';');
-        const styleAttribute = style ? ` style="${style}"` : '';
+  return blocks.map((block) => blockHtml(block, imageSrc)).join('\n');
+}
 
-        if (block.kind === 'heading') {
-          const level = Math.min(6, Math.max(1, block.level ?? 1));
-          return `<h${level}${styleAttribute}>${content}</h${level}>`;
-        }
-        if (block.kind === 'blockquote') {
-          return `<blockquote${styleAttribute}>${content}</blockquote>`;
-        }
-        if (block.kind === 'codeBlock') {
-          return `<pre${styleAttribute}><code>${content}</code></pre>`;
-        }
-        return `<p${styleAttribute}>${content}</p>`;
-      }
+function blockHtml(
+  block: ExportBlock,
+  imageSrc: (image: ExportImage) => string,
+): string {
+  if (
+    block.kind === 'paragraph' ||
+    block.kind === 'heading' ||
+    block.kind === 'blockquote' ||
+    block.kind === 'codeBlock'
+  ) {
+    return textBlockHtml(block);
+  }
+  if (block.kind === 'bulletList' || block.kind === 'orderedList') {
+    const tag = block.kind === 'bulletList' ? 'ul' : 'ol';
+    const items = block.items
+      .map((item) => `<li>${blocksHtml(item, imageSrc)}</li>`)
+      .join('');
+    return `<${tag}>${items}</${tag}>`;
+  }
+  if (block.kind === 'sceneDivider') {
+    return '<hr />';
+  }
+  return `<p class="image"><img src="${escapeHtml(imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
+}
 
-      if (block.kind === 'bulletList' || block.kind === 'orderedList') {
-        const tag = block.kind === 'bulletList' ? 'ul' : 'ol';
-        return `<${tag}>${block.items
-          .map((item) => `<li>${blocksHtml(item, imageSrc, dividerSrc)}</li>`)
-          .join('')}</${tag}>`;
-      }
+function textBlockHtml(
+  block: Extract<ExportBlock, { inlines: ExportInline[] }>,
+): string {
+  const content = block.inlines.map(inlineHtml).join('');
+  const style = [
+    block.textAlign ? `text-align:${block.textAlign}` : '',
+    block.lineHeight ? `line-height:${block.lineHeight}` : '',
+    block.indentLeft ? `margin-left:${block.indentLeft}cm` : '',
+    block.indentRight ? `margin-right:${block.indentRight}cm` : '',
+    block.firstLineIndent ? `text-indent:${block.firstLineIndent}cm` : '',
+  ]
+    .filter(Boolean)
+    .join(';');
+  const styleAttribute = style ? ` style="${style}"` : '';
 
-      if (block.kind === 'sceneDivider') {
-        const source = dividerSrc
-          ? dividerSrc(block.variant)
-          : `data:image/svg+xml;base64,${Buffer.from(
-              sceneDividerSvg(block.variant),
-            ).toString('base64')}`;
-        return `<p class="scene-divider"><img src="${escapeHtml(source)}" alt="Separador ornamental" /></p>`;
-      }
-
-      if (block.kind === 'horizontalRule') {
-        return '<hr />';
-      }
-
-      return `<p class="image"><img src="${escapeHtml(imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
-    })
-    .join('\n');
+  if (block.kind === 'heading') {
+    const level = Math.min(6, Math.max(1, block.level ?? 1));
+    return `<h${level}${styleAttribute}>${content}</h${level}>`;
+  }
+  if (block.kind === 'blockquote') {
+    return `<blockquote${styleAttribute}>${content}</blockquote>`;
+  }
+  if (block.kind === 'codeBlock') {
+    return `<pre${styleAttribute}><code>${content}</code></pre>`;
+  }
+  return `<p${styleAttribute}>${content}</p>`;
 }
 
 export function blocksToHtml(
   blocks: ExportBlock[],
   imageSrc: (image: ExportImage) => string = (image) =>
     `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
-  dividerSrc?: (variant: SceneDividerVariant) => string,
 ): string {
-  return blocksHtml(blocks, imageSrc, dividerSrc);
+  return blocksHtml(blocks, imageSrc);
 }
 
 export function inlineText(inlines: ExportInline[]): string {

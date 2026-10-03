@@ -5,6 +5,7 @@ import type {
   ProposalDataLike,
   PendingProposalLike,
 } from './entity-extraction.types';
+import { forEachSequentially } from './for-each-sequentially';
 
 const TRIGRAM_THRESHOLD = 0.82;
 const EMBEDDING_THRESHOLD = 0.88;
@@ -343,21 +344,12 @@ export class EntityResolutionService {
     entities: ConfirmedEntityLike[],
     compareEmbedding: (text: string) => Promise<number[] | null>,
   ): Promise<ConfirmedEntityLike | null> {
-    let best: { entity: ConfirmedEntityLike; score: number } | null = null;
-
-    for (const entity of entities) {
-      const embedding = (await compareEmbedding(entity.canonicalName)) ?? [];
-      if (!embedding.length) {
-        continue;
-      }
-
-      const score = this.cosineSimilarity(candidateEmbedding, embedding);
-      if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
-        best = { entity, score };
-      }
-    }
-
-    return best?.entity ?? null;
+    return this.findBestEmbeddingMatch(
+      candidateEmbedding,
+      entities,
+      (entity) => entity.canonicalName,
+      compareEmbedding,
+    );
   }
 
   private async findEmbeddingProposalMatch(
@@ -365,23 +357,39 @@ export class EntityResolutionService {
     proposals: PendingProposalLike[],
     compareEmbedding: (text: string) => Promise<number[] | null>,
   ): Promise<PendingProposalLike | null> {
-    let best: { proposal: PendingProposalLike; score: number } | null = null;
+    return this.findBestEmbeddingMatch(
+      candidateEmbedding,
+      proposals,
+      (proposal) =>
+        (proposal.proposedData as ProposalDataLike).canonicalName ?? '',
+      compareEmbedding,
+    );
+  }
 
-    for (const proposal of proposals) {
-      const data = proposal.proposedData as ProposalDataLike;
-      const embedding =
-        (await compareEmbedding(data.canonicalName ?? '')) ?? [];
-      if (!embedding.length) {
-        continue;
+  private async findBestEmbeddingMatch<T>(
+    candidateEmbedding: number[],
+    candidates: T[],
+    getName: (candidate: T) => string,
+    compareEmbedding: (text: string) => Promise<number[] | null>,
+  ): Promise<T | null> {
+    const best: { match: { candidate: T; score: number } | null } = {
+      match: null,
+    };
+    await forEachSequentially(candidates, async (candidate) => {
+      const embedding = (await compareEmbedding(getName(candidate))) ?? [];
+      if (embedding.length === 0) {
+        return;
       }
 
       const score = this.cosineSimilarity(candidateEmbedding, embedding);
-      if (score >= EMBEDDING_THRESHOLD && (!best || score > best.score)) {
-        best = { proposal, score };
+      if (
+        score >= EMBEDDING_THRESHOLD &&
+        (!best.match || score > best.match.score)
+      ) {
+        best.match = { candidate, score };
       }
-    }
-
-    return best?.proposal ?? null;
+    });
+    return best.match?.candidate ?? null;
   }
 
   private trigramSimilarity(a: string, b: string): number {
@@ -415,11 +423,11 @@ export class EntityResolutionService {
   }
 
   private cosineSimilarity(a: number[], b: number[]): number {
-    const length = Math.min(a.length, b.length);
-    if (length === 0) {
+    if (a.length === 0 || a.length !== b.length) {
       return 0;
     }
 
+    const length = a.length;
     let dot = 0;
     let normA = 0;
     let normB = 0;

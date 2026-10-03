@@ -16,6 +16,7 @@ declare module 'epub-gen' {
     version?: 2 | 3;
     css?: string;
     tempDir?: string;
+    appendChapterTitles?: boolean;
     content: EpubChapter[];
   }
 

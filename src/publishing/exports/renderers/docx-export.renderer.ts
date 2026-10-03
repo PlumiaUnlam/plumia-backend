@@ -1,21 +1,26 @@
 import { Injectable } from '@nestjs/common';
 import {
   AlignmentType,
-  Bookmark,
-  BorderStyle,
   Document,
   ExternalHyperlink,
+  Footer,
+  Header,
   HeadingLevel,
   ImageRun,
-  InternalHyperlink,
   Packer,
   PageBreak,
+  PageNumber,
   Paragraph,
   TextRun,
   type IParagraphOptions,
   type ParagraphChild,
 } from 'docx';
 import type { ExportRenderer } from '../export-renderer.port';
+import type {
+  ExportHeaderFooterConfig,
+  ExportSettingsConfig,
+} from '../export-settings.types';
+import { resolveTemplate } from '../export-settings.defaults';
 import type {
   ExportBlock,
   ExportDocument,
@@ -24,9 +29,66 @@ import type {
   ExportTextBlock,
   RenderedExport,
 } from '../export.types';
-import { normalizeExportIndentation } from '../export-indentation';
-import { exportAnchor } from '../export-toc';
-import { sceneDividerPngFallback, sceneDividerSvg } from '../scene-divider';
+
+const CM_TO_TWIPS = 567;
+// Distancia fija (en twips) desde el borde de la página al header/footer,
+// independiente del margen configurado — mismo valor que PDF (24pt) para
+// consistencia visual entre formatos. Sin esto, Word usa su propio default
+// implícito (~1.25cm), que puede variar según el visor (Word/LibreOffice).
+const HEADER_FOOTER_DISTANCE_TWIPS = 480;
+
+function bandChildren(
+  config: ExportHeaderFooterConfig,
+  vars: Record<string, string>,
+): ParagraphChild[] {
+  const children: ParagraphChild[] = [];
+
+  if (config.text) {
+    children.push(new TextRun(resolveTemplate(config.text, vars)));
+  }
+
+  if (config.pageNumber.enabled) {
+    if (children.length > 0) {
+      children.push(new TextRun('  '));
+    }
+    const [before, afterTotal] =
+      config.pageNumber.format.split('{{totalPaginas}}');
+    const [beforeCurrent, afterCurrent] = (before ?? '').split('{{pagina}}');
+    if (beforeCurrent) {
+      children.push(new TextRun(resolveTemplate(beforeCurrent, vars)));
+    }
+    children.push(new TextRun({ children: [PageNumber.CURRENT] }));
+    if (afterTotal !== undefined) {
+      if (afterCurrent) {
+        children.push(new TextRun(resolveTemplate(afterCurrent, vars)));
+      }
+      children.push(
+        new TextRun({ children: [PageNumber.TOTAL_PAGES_IN_SECTION] }),
+      );
+      if (afterTotal) {
+        children.push(new TextRun(resolveTemplate(afterTotal, vars)));
+      }
+    } else if (afterCurrent) {
+      children.push(new TextRun(resolveTemplate(afterCurrent, vars)));
+    }
+  }
+
+  return children;
+}
+
+function buildBand(
+  config: ExportHeaderFooterConfig | null,
+  vars: Record<string, string>,
+): Paragraph | undefined {
+  if (!config || (!config.text && !config.pageNumber.enabled)) {
+    return undefined;
+  }
+  const paragraphAlignment = alignment(config.alignment);
+  return new Paragraph({
+    ...(paragraphAlignment ? { alignment: paragraphAlignment } : {}),
+    children: bandChildren(config, vars),
+  });
+}
 
 function imageType(image: ExportImage): 'jpg' | 'png' | 'gif' | 'bmp' {
   if (image.extension === 'png') {
@@ -102,35 +164,27 @@ function paragraphOptions(
   block: ExportTextBlock,
   children: ParagraphChild[] = inlineRuns(block.inlines),
   bullet?: boolean,
-  additionalLeftCm = 0,
 ): IParagraphOptions {
   const blockHeading = heading(block.level);
   const blockAlignment = alignment(block.textAlign);
-  const lineHeight = block.lineHeight ? Number(block.lineHeight) : NaN;
-  const indentation = normalizeExportIndentation({
-    indentLeft: (block.indentLeft ?? 0) + additionalLeftCm,
-    indentRight: block.indentRight,
-    firstLineIndent: block.firstLineIndent,
-  });
+  const lineHeight = block.lineHeight ? Number(block.lineHeight) : Number.NaN;
 
   return {
     children,
     ...(blockHeading ? { heading: blockHeading } : {}),
     ...(blockAlignment ? { alignment: blockAlignment } : {}),
     ...(bullet ? { bullet: { level: 0 } } : {}),
-    ...(indentation.indentLeft ||
-    indentation.indentRight ||
-    indentation.firstLineIndent
+    ...(block.indentLeft || block.indentRight || block.firstLineIndent
       ? {
           indent: {
-            ...(indentation.indentLeft
-              ? { left: Math.round(indentation.indentLeft * 567) }
+            ...(block.indentLeft
+              ? { left: Math.round(block.indentLeft * 567) }
               : {}),
-            ...(indentation.indentRight
-              ? { right: Math.round(indentation.indentRight * 567) }
+            ...(block.indentRight
+              ? { right: Math.round(block.indentRight * 567) }
               : {}),
-            ...(indentation.firstLineIndent
-              ? { firstLine: Math.round(indentation.firstLineIndent * 567) }
+            ...(block.firstLineIndent
+              ? { firstLine: Math.round(block.firstLineIndent * 567) }
               : {}),
           },
         }
@@ -162,7 +216,8 @@ function textBlockParagraph(block: ExportTextBlock): Paragraph {
           }),
     );
     return new Paragraph({
-      ...paragraphOptions(block, children, undefined, 720 / 567),
+      ...paragraphOptions(block, children),
+      indent: { left: 720 },
     });
   }
 
@@ -170,136 +225,73 @@ function textBlockParagraph(block: ExportTextBlock): Paragraph {
 }
 
 function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
-  const paragraphs: Paragraph[] = [];
-
-  for (const block of blocks) {
-    if (
-      block.kind === 'paragraph' ||
-      block.kind === 'heading' ||
-      block.kind === 'blockquote' ||
-      block.kind === 'codeBlock'
-    ) {
-      paragraphs.push(textBlockParagraph(block));
-      continue;
-    }
-
-    if (block.kind === 'image') {
-      paragraphs.push(
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [
-            new ImageRun({
-              type: imageType(block.image),
-              data: block.image.buffer,
-              transformation: { width: 450, height: 300 },
-              altText: {
-                title: block.alt,
-                description: block.alt,
-                name: block.alt,
-              },
-            }),
-          ],
-        }),
-      );
-      continue;
-    }
-
-    if (block.kind === 'sceneDivider') {
-      paragraphs.push(
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 120, after: 120 },
-          children: [
-            new ImageRun({
-              type: 'svg',
-              data: Buffer.from(sceneDividerSvg(block.variant), 'utf8'),
-              fallback: {
-                type: 'png',
-                data: sceneDividerPngFallback(block.variant),
-              },
-              transformation: { width: 360, height: 90 },
-              altText: {
-                title: 'Separador ornamental',
-                description: 'Separador ornamental',
-                name: 'Separador ornamental',
-              },
-            }),
-          ],
-        }),
-      );
-      continue;
-    }
-
-    if (block.kind === 'horizontalRule') {
-      paragraphs.push(
-        new Paragraph({
-          spacing: { before: 120, after: 120 },
-          border: {
-            bottom: {
-              color: '808080',
-              style: BorderStyle.SINGLE,
-              size: 6,
-              space: 1,
-            },
-          },
-        }),
-      );
-      continue;
-    }
-
-    const bullet = block.kind === 'bulletList';
-    for (const item of block.items) {
-      const firstParagraph = item.find(
-        (
-          child,
-        ): child is Extract<ExportBlock, { kind: 'paragraph' | 'heading' }> =>
-          child.kind === 'paragraph' || child.kind === 'heading',
-      );
-
-      if (firstParagraph) {
-        paragraphs.push(
-          new Paragraph(paragraphOptions(firstParagraph, undefined, bullet)),
-        );
-        paragraphs.push(
-          ...blocksToParagraphs(
-            item.filter((child) => child !== firstParagraph),
-          ),
-        );
-      } else {
-        paragraphs.push(new Paragraph({ text: bullet ? '•' : '1.' }));
-        paragraphs.push(...blocksToParagraphs(item));
-      }
-    }
-  }
-
-  return paragraphs;
+  return blocks.flatMap((block) => blockToParagraphs(block));
 }
 
-function bookmarkedHeading(
-  title: string,
-  headingLevel: IParagraphOptions['heading'],
-  anchor: string,
+function blockToParagraphs(block: ExportBlock): Paragraph[] {
+  if (
+    block.kind === 'paragraph' ||
+    block.kind === 'heading' ||
+    block.kind === 'blockquote' ||
+    block.kind === 'codeBlock'
+  ) {
+    return [textBlockParagraph(block)];
+  }
+  if (block.kind === 'image') {
+    return [imageParagraph(block)];
+  }
+  if (block.kind === 'sceneDivider') {
+    // Línea horizontal nativa de Word (borde inferior de un párrafo
+    // vacío) — el mismo mecanismo que usa Word al escribir "---" y
+    // presionar Enter. Consistente con el <hr/> de EPUB.
+    return [new Paragraph({ thematicBreak: true })];
+  }
+  return listParagraphs(block);
+}
+
+function imageParagraph(
+  block: Extract<ExportBlock, { kind: 'image' }>,
 ): Paragraph {
   return new Paragraph({
-    ...(headingLevel ? { heading: headingLevel } : {}),
+    alignment: AlignmentType.CENTER,
     children: [
-      new Bookmark({
-        id: anchor,
-        children: [new TextRun({ text: title })],
+      new ImageRun({
+        type: imageType(block.image),
+        data: block.image.buffer,
+        transformation: { width: 450, height: 300 },
+        altText: {
+          title: block.alt,
+          description: block.alt,
+          name: block.alt,
+        },
       }),
     ],
   });
 }
 
-function tocParagraph(entry: ExportDocument['toc'][number]): Paragraph {
-  return new Paragraph({
-    indent: { left: entry.level * 360 },
-    children: [
-      new InternalHyperlink({
-        anchor: entry.anchor,
-        children: [new TextRun({ text: entry.title, style: 'Hyperlink' })],
-      }),
-    ],
+function listParagraphs(
+  block: Extract<ExportBlock, { kind: 'bulletList' | 'orderedList' }>,
+): Paragraph[] {
+  const bullet = block.kind === 'bulletList';
+  return block.items.flatMap((item) => {
+    const firstParagraph = item.find(
+      (
+        child,
+      ): child is Extract<ExportBlock, { kind: 'paragraph' | 'heading' }> =>
+        child.kind === 'paragraph' || child.kind === 'heading',
+    );
+
+    if (!firstParagraph) {
+      return [
+        new Paragraph({ text: bullet ? '•' : '1.' }),
+        ...blocksToParagraphs(item),
+      ];
+    }
+
+    return [
+      new Paragraph(paragraphOptions(firstParagraph, undefined, bullet)),
+      ...blocksToParagraphs(item.filter((child) => child !== firstParagraph)),
+    ];
   });
 }
 
@@ -307,59 +299,88 @@ function tocParagraph(entry: ExportDocument['toc'][number]): Paragraph {
 export class DocxExportRenderer implements ExportRenderer {
   readonly format = 'DOCX' as const;
 
-  async render(document: ExportDocument): Promise<RenderedExport> {
-    const children: Paragraph[] = [
-      bookmarkedHeading(
-        document.title,
-        HeadingLevel.TITLE,
-        exportAnchor('project', document.id),
-      ),
-      new Paragraph({
-        text: 'Índice',
-        heading: HeadingLevel.HEADING_1,
-      }),
-      ...document.toc.map(tocParagraph),
-      new Paragraph({ children: [new PageBreak()] }),
-    ];
+  async render(
+    document: ExportDocument,
+    settings: ExportSettingsConfig,
+  ): Promise<RenderedExport> {
+    const children: Paragraph[] = [];
 
-    document.books.forEach((book, bookIndex) => {
-      if (bookIndex > 0) {
+    document.chapters.forEach((chapter, chapterIndex) => {
+      if (chapterIndex > 0) {
         children.push(new Paragraph({ children: [new PageBreak()] }));
       }
       children.push(
-        bookmarkedHeading(
-          book.title,
-          HeadingLevel.HEADING_1,
-          exportAnchor('book', book.id),
-        ),
+        new Paragraph({
+          text: chapter.title,
+          heading: HeadingLevel.HEADING_2,
+        }),
       );
-      book.chapters.forEach((chapter, chapterIndex) => {
-        if (chapterIndex > 0) {
-          children.push(new Paragraph({ children: [new PageBreak()] }));
+      chapter.scenes.forEach((scene, sceneIndex) => {
+        if (scene.title) {
+          children.push(
+            new Paragraph({
+              text: scene.title,
+              heading: HeadingLevel.HEADING_3,
+            }),
+          );
         }
-        children.push(
-          bookmarkedHeading(
-            chapter.title,
-            HeadingLevel.HEADING_2,
-            exportAnchor('chapter', chapter.id),
-          ),
-        );
-        for (const scene of chapter.scenes) {
-          if (scene.title) {
-            children.push(
-              bookmarkedHeading(
-                scene.title,
-                HeadingLevel.HEADING_3,
-                exportAnchor('scene', scene.id),
-              ),
-            );
-          }
-          children.push(...blocksToParagraphs(scene.content));
+        children.push(...blocksToParagraphs(scene.content));
+        if (sceneIndex < chapter.scenes.length - 1) {
+          children.push(new Paragraph({ children: [new PageBreak()] }));
         }
       });
     });
 
-    const file = new Document({ sections: [{ children }] });
+    const vars = {
+      tituloLibro: document.title,
+      fecha: new Date().toLocaleDateString('es'),
+    };
+    const headerParagraph = buildBand(settings.header, vars);
+    const footerParagraph = buildBand(settings.footer, vars);
+    const margin = {
+      top: Math.round(settings.margins.topCm * CM_TO_TWIPS),
+      bottom: Math.round(settings.margins.bottomCm * CM_TO_TWIPS),
+      left: Math.round(settings.margins.leftCm * CM_TO_TWIPS),
+      right: Math.round(settings.margins.rightCm * CM_TO_TWIPS),
+      header: HEADER_FOOTER_DISTANCE_TWIPS,
+      footer: HEADER_FOOTER_DISTANCE_TWIPS,
+    };
+
+    const file = new Document({
+      sections: [
+        {
+          // Portada: sin headers/footers y sin entrar en la numeración de
+          // página de la sección de contenido (section break = página nueva).
+          properties: { page: { margin } },
+          children: [
+            new Paragraph({
+              text: document.title,
+              heading: HeadingLevel.TITLE,
+            }),
+          ],
+        },
+        {
+          properties: {
+            page: { margin, pageNumbers: { start: 1 } },
+          },
+          ...(headerParagraph
+            ? {
+                headers: {
+                  default: new Header({ children: [headerParagraph] }),
+                },
+              }
+            : {}),
+          ...(footerParagraph
+            ? {
+                footers: {
+                  default: new Footer({ children: [footerParagraph] }),
+                },
+              }
+            : {}),
+          children,
+        },
+      ],
+    });
     return {
       buffer: await Packer.toBuffer(file),
       contentType:

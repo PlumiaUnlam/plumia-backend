@@ -1,21 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Epub from 'epub-gen';
 import type { ExportRenderer } from '../export-renderer.port';
+import type { ExportSettingsConfig } from '../export-settings.types';
 import type {
   ExportBlock,
   ExportDocument,
   ExportImage,
   RenderedExport,
 } from '../export.types';
-import { exportAnchor } from '../export-toc';
-import {
-  SCENE_DIVIDER_VARIANTS,
-  sceneDividerSvg,
-  type SceneDividerVariant,
-} from '../scene-divider';
 import { blocksToHtml } from '../tiptap-export';
 
 function escapeHtml(value: string): string {
@@ -45,144 +40,86 @@ function imageFileUrl(path: string): string {
   return `file://${path.replaceAll('\\', '/')}`;
 }
 
-function bookFilename(index: number): string {
-  return `book-${index}.xhtml`;
-}
-
-function chapterFilename(bookIndex: number, chapterIndex: number): string {
-  return `book-${bookIndex}-chapter-${chapterIndex}.xhtml`;
-}
-
-function tocHtml(
-  document: ExportDocument,
-  locations: ReadonlyMap<string, string>,
-): string {
-  const entries = document.toc
-    .map((entry) => {
-      const href = locations.get(entry.anchor);
-      if (!href) {
-        return '';
-      }
-
-      return `<li class="toc-entry toc-level-${entry.level}"><a href="${escapeHtml(href)}">${escapeHtml(entry.title)}</a></li>`;
-    })
-    .join('\n');
-
-  return `<h1>Índice</h1><ul class="toc">${entries}</ul>`;
-}
-
 @Injectable()
 export class EpubExportRenderer implements ExportRenderer {
   readonly format = 'EPUB' as const;
+  private readonly logger = new Logger(EpubExportRenderer.name);
 
-  async render(document: ExportDocument): Promise<RenderedExport> {
+  async render(
+    document: ExportDocument,
+    settings: ExportSettingsConfig,
+  ): Promise<RenderedExport> {
+    if (settings.header || settings.footer) {
+      this.logger.warn(
+        'La configuración de encabezado/pie de página no aplica a EPUB (formato reflowable); se ignora.',
+      );
+    }
+
     const workDir = await mkdtemp(join(tmpdir(), 'plumia-epub-'));
     const outputPath = join(workDir, 'export.epub');
 
     try {
       const images: ExportImage[] = [];
-      for (const book of document.books) {
-        for (const chapter of book.chapters) {
-          for (const scene of chapter.scenes) {
-            collectImages(scene.content, images);
-          }
+      for (const chapter of document.chapters) {
+        for (const scene of chapter.scenes) {
+          collectImages(scene.content, images);
         }
       }
 
       const imagePaths = new Map<ExportImage, string>();
-      for (const [index, image] of images.entries()) {
+      const writes = images.map(async (image, index) => {
         const imagePath = join(workDir, `image-${index}.${image.extension}`);
         await writeFile(imagePath, image.buffer);
         imagePaths.set(image, imagePath);
+      });
+      try {
+        await Promise.all(writes);
+      } catch (error) {
+        await Promise.allSettled(writes);
+        throw error;
       }
 
-      const dividerPaths = new Map<SceneDividerVariant, string>();
-      for (const variant of SCENE_DIVIDER_VARIANTS) {
-        const dividerPath = join(workDir, `scene-divider-${variant}.svg`);
-        await writeFile(dividerPath, sceneDividerSvg(variant), 'utf8');
-        dividerPaths.set(variant, dividerPath);
-      }
+      // Cada entrada de `content` se escribe como su propio archivo XHTML
+      // (spine item), que es el único salto de página que un lector EPUB
+      // garantiza de verdad — por eso una escena por entrada, no un solo
+      // bloque de HTML por libro con `page-break-after` (que la mayoría de
+      // los lectores ignora dentro de un mismo archivo).
+      const titlePage = {
+        title: document.title,
+        data: `<h1>${escapeHtml(document.title)}</h1>`,
+      };
 
-      const locations = new Map<string, string>([
-        [
-          exportAnchor('project', document.id),
-          `cover.xhtml#${exportAnchor('project', document.id)}`,
-        ],
-      ]);
-
-      document.books.forEach((book, bookIndex) => {
-        const filename = book.chapters.length
-          ? chapterFilename(bookIndex, 0)
-          : bookFilename(bookIndex);
-        locations.set(
-          exportAnchor('book', book.id),
-          `${filename}#${exportAnchor('book', book.id)}`,
-        );
-        book.chapters.forEach((chapter, chapterIndex) => {
-          const chapterFile = chapterFilename(bookIndex, chapterIndex);
-          locations.set(
-            exportAnchor('chapter', chapter.id),
-            `${chapterFile}#${exportAnchor('chapter', chapter.id)}`,
-          );
-          for (const scene of chapter.scenes) {
-            if (scene.title) {
-              locations.set(
-                exportAnchor('scene', scene.id),
-                `${chapterFile}#${exportAnchor('scene', scene.id)}`,
-              );
-            }
+      const content: Array<{
+        title: string;
+        data: string;
+        excludeFromToc?: boolean;
+      }> = [titlePage];
+      document.chapters.forEach((chapter) => {
+        chapter.scenes.forEach((scene, sceneIndex) => {
+          const parts: string[] = [];
+          if (sceneIndex === 0) {
+            parts.push(`<h2>${escapeHtml(chapter.title)}</h2>`);
           }
+          if (scene.title) {
+            parts.push(`<h3>${escapeHtml(scene.title)}</h3>`);
+          }
+          parts.push(
+            blocksToHtml(scene.content, (image) =>
+              imageFileUrl(imagePaths.get(image) ?? ''),
+            ),
+          );
+
+          content.push({
+            // Una entrada de TOC visible por capítulo; el resto de escenas
+            // siguen siendo archivos separados (salto real), solo ocultas
+            // del índice.
+            title:
+              sceneIndex === 0 ? chapter.title : (scene.title ?? chapter.title),
+            data: parts.join('\n'),
+            excludeFromToc: sceneIndex !== 0,
+          });
         });
       });
-
-      const bookContent = document.books.flatMap((book, bookIndex) => {
-        if (book.chapters.length === 0) {
-          return [
-            {
-              title: book.title,
-              filename: bookFilename(bookIndex),
-              data: `<h1 id="${exportAnchor('book', book.id)}">${escapeHtml(book.title)}</h1>`,
-            },
-          ];
-        }
-
-        return book.chapters.map((chapter, chapterIndex) => ({
-          title: chapterIndex === 0 ? book.title : chapter.title,
-          filename: chapterFilename(bookIndex, chapterIndex),
-          data: [
-            chapterIndex === 0
-              ? `<h1 id="${exportAnchor('book', book.id)}">${escapeHtml(book.title)}</h1>`
-              : '',
-            `<h2 id="${exportAnchor('chapter', chapter.id)}">${escapeHtml(chapter.title)}</h2>`,
-            ...chapter.scenes.flatMap((scene) => [
-              scene.title
-                ? `<h3 id="${exportAnchor('scene', scene.id)}">${escapeHtml(scene.title)}</h3>`
-                : '',
-              blocksToHtml(
-                scene.content,
-                (image) => imageFileUrl(imagePaths.get(image) ?? ''),
-                (variant) => imageFileUrl(dividerPaths.get(variant) ?? ''),
-              ),
-            ]),
-          ].join('\n'),
-        }));
-      });
-
-      const content = [
-        {
-          title: 'Portada',
-          filename: 'cover.xhtml',
-          excludeFromToc: true,
-          data: `<h1 id="${exportAnchor('project', document.id)}">${escapeHtml(document.title)}</h1>`,
-        },
-        {
-          title: 'Índice',
-          filename: 'index.xhtml',
-          excludeFromToc: true,
-          data: tocHtml(document, locations),
-        },
-        ...bookContent,
-      ];
 
       await new Epub(
         {
@@ -190,21 +127,11 @@ export class EpubExportRenderer implements ExportRenderer {
           author: 'PlumIA',
           publisher: 'PlumIA',
           lang: 'es',
-          tocTitle: 'Índice',
+          tocTitle: 'Contenido',
           appendChapterTitles: false,
           content,
           tempDir: workDir,
-          css: [
-            'body { font-family: serif; }',
-            'img { max-width: 100%; }',
-            '.scene-divider { text-align: center; margin: 1.5em 0; }',
-            '.scene-divider img { width: 100%; max-width: 16em; height: auto; }',
-            '.toc { list-style: none; padding: 0; }',
-            '.toc-entry { margin: 0.35em 0; }',
-            '.toc-level-1 { margin-left: 1em; }',
-            '.toc-level-2 { margin-left: 2em; }',
-            '.toc-level-3 { margin-left: 3em; }',
-          ].join(' '),
+          css: `body { font-family: serif; padding: ${settings.margins.topCm}cm ${settings.margins.rightCm}cm ${settings.margins.bottomCm}cm ${settings.margins.leftCm}cm; } img { max-width: 100%; }`,
         },
         outputPath,
       ).promise;

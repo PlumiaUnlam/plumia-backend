@@ -206,4 +206,111 @@ describe('Manuscript child services', () => {
       currentWordCount: 25,
     });
   });
+
+  it('supports book reads, updates, and soft deletes with not-found errors', async () => {
+    bookRepository.findByIdForUser.mockResolvedValue(book);
+    await expect(bookService.getById('user-1', 'book-1')).resolves.toEqual(
+      book,
+    );
+    expect(bookRepository.findByIdForUser).toHaveBeenCalledWith(
+      'user-1',
+      'book-1',
+    );
+
+    bookRepository.updateForUser.mockResolvedValue(book);
+    await expect(
+      bookService.update('user-1', 'book-1', { title: 'Renamed' }),
+    ).resolves.toEqual(book);
+    expect(bookRepository.updateForUser).toHaveBeenCalledWith(
+      'user-1',
+      'book-1',
+      { title: 'Renamed' },
+    );
+
+    bookRepository.softDeleteForUser.mockResolvedValue({
+      ...book,
+      deletedAt: now,
+    });
+    await expect(bookService.remove('user-1', 'book-1')).resolves.toMatchObject(
+      { deletedAt: now },
+    );
+    expect(bookRepository.softDeleteForUser).toHaveBeenCalledWith(
+      'user-1',
+      'book-1',
+      expect.any(Date),
+    );
+
+    bookRepository.findByIdForUser.mockResolvedValue(null);
+    bookRepository.updateForUser.mockResolvedValue(null);
+    bookRepository.softDeleteForUser.mockResolvedValue(null);
+    await expect(bookService.getById('user-1', 'missing')).rejects.toThrow(
+      new NotFoundException('Book not found'),
+    );
+    await expect(bookService.update('user-1', 'missing', {})).rejects.toThrow(
+      new NotFoundException('Book not found'),
+    );
+    await expect(bookService.remove('user-1', 'missing')).rejects.toThrow(
+      new NotFoundException('Book not found'),
+    );
+  });
+
+  it('supports chapter reads, updates, and soft deletes with not-found errors', async () => {
+    chapterRepository.createForUser.mockResolvedValue(chapter);
+    await chapterService.create('user-1', 'book-1', {
+      title: chapter.title,
+      sortKey: chapter.sortKey,
+      status: SceneStatus.REVIEW,
+    });
+    expect(chapterRepository.createForUser).toHaveBeenCalledWith('user-1', {
+      bookId: 'book-1',
+      title: chapter.title,
+      sortKey: chapter.sortKey,
+      status: SceneStatus.REVIEW,
+    });
+
+    chapterRepository.findByIdForUser.mockResolvedValue(chapter);
+    await expect(
+      chapterService.getById('user-1', 'chapter-1'),
+    ).resolves.toEqual(chapter);
+    expect(chapterRepository.findByIdForUser).toHaveBeenCalledWith(
+      'user-1',
+      'chapter-1',
+    );
+
+    chapterRepository.updateForUser.mockResolvedValue(chapter);
+    await expect(
+      chapterService.update('user-1', 'chapter-1', { title: 'Renamed' }),
+    ).resolves.toEqual(chapter);
+    expect(chapterRepository.updateForUser).toHaveBeenCalledWith(
+      'user-1',
+      'chapter-1',
+      { title: 'Renamed' },
+    );
+
+    chapterRepository.softDeleteForUser.mockResolvedValue({
+      ...chapter,
+      deletedAt: now,
+    });
+    await expect(
+      chapterService.remove('user-1', 'chapter-1'),
+    ).resolves.toMatchObject({ deletedAt: now });
+    expect(chapterRepository.softDeleteForUser).toHaveBeenCalledWith(
+      'user-1',
+      'chapter-1',
+      expect.any(Date),
+    );
+
+    chapterRepository.findByIdForUser.mockResolvedValue(null);
+    chapterRepository.updateForUser.mockResolvedValue(null);
+    chapterRepository.softDeleteForUser.mockResolvedValue(null);
+    await expect(chapterService.getById('user-1', 'missing')).rejects.toThrow(
+      new NotFoundException('Chapter not found'),
+    );
+    await expect(
+      chapterService.update('user-1', 'missing', {}),
+    ).rejects.toThrow(new NotFoundException('Chapter not found'));
+    await expect(chapterService.remove('user-1', 'missing')).rejects.toThrow(
+      new NotFoundException('Chapter not found'),
+    );
+  });
 });

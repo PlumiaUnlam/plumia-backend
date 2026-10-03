@@ -14,7 +14,7 @@ import { CreateExportDto } from './dto/create-export.dto';
 import { ExportJobResponseDto } from './dto/export-job-response.dto';
 import { ExportService } from './export.service';
 
-@Controller('projects/:projectId/exports')
+@Controller('projects/:projectId/books/:bookId/exports')
 export class ExportController {
   constructor(private readonly exportService: ExportService) {}
 
@@ -23,17 +23,29 @@ export class ExportController {
   create(
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('bookId', ParseUUIDPipe) bookId: string,
     @Body() dto: CreateExportDto,
   ): Promise<ExportJobResponseDto> {
-    return this.exportService.requestExport(req.user.id, projectId, dto.format);
+    return this.exportService.requestExport(
+      req.user.id,
+      projectId,
+      bookId,
+      dto.format,
+    );
   }
 
   @Get(':exportId')
   getStatus(
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('bookId', ParseUUIDPipe) bookId: string,
     @Param('exportId', ParseUUIDPipe) exportId: string,
   ): Promise<ExportJobResponseDto> {
-    return this.exportService.getExportStatus(req.user.id, projectId, exportId);
+    return this.exportService.getExportStatus(
+      req.user.id,
+      projectId,
+      bookId,
+      exportId,
+    );
   }
 }

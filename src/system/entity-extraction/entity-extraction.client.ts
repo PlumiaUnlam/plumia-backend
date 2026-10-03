@@ -232,9 +232,10 @@ export class EntityExtractionClient {
     try {
       return JSON.parse(value) as T;
     } catch {
-      const match = value.match(/\{[\s\S]*\}/);
-      if (match) {
-        return JSON.parse(match[0]) as T;
+      const start = value.indexOf('{');
+      const end = value.lastIndexOf('}');
+      if (start !== -1 && end > start) {
+        return JSON.parse(value.slice(start, end + 1)) as T;
       }
 
       throw new Error('Entity extraction returned invalid JSON');

@@ -8,6 +8,10 @@ import type {
   RelationshipRepository,
   UpdateRelationshipData,
 } from '../ports/relationship-repository.port';
+import {
+  countActiveEntitiesForProject,
+  findProjectForUser,
+} from './prisma-knowledge-access';
 
 @Injectable()
 export class PrismaRelationshipRepository implements RelationshipRepository {
@@ -36,22 +40,21 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
     userId: string,
     data: CreateRelationshipData,
   ): Promise<RelationshipRecord | null> {
-    const project = await this.prisma.project.findFirst({
-      where: { id: data.projectId, userId, deletedAt: null },
-      select: { id: true },
-    });
+    const project = await findProjectForUser(
+      this.prisma,
+      userId,
+      data.projectId,
+    );
 
     if (!project) {
       return null;
     }
 
-    const entityCount = await this.prisma.entity.count({
-      where: {
-        id: { in: [data.sourceEntityId, data.targetEntityId] },
-        projectId: data.projectId,
-        deletedAt: null,
-      },
-    });
+    const entityCount = await countActiveEntitiesForProject(
+      this.prisma,
+      data.projectId,
+      [data.sourceEntityId, data.targetEntityId],
+    );
 
     if (entityCount !== 2) {
       return null;
@@ -102,13 +105,11 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
       return null;
     }
 
-    const entityCount = await this.prisma.entity.count({
-      where: {
-        id: { in: [sourceEntityId, targetEntityId] },
-        projectId: existingRelationship.projectId,
-        deletedAt: null,
-      },
-    });
+    const entityCount = await countActiveEntitiesForProject(
+      this.prisma,
+      existingRelationship.projectId,
+      [sourceEntityId, targetEntityId],
+    );
 
     if (entityCount !== 2) {
       return null;

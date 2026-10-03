@@ -63,6 +63,7 @@ export interface UpdateProjectData {
 export interface ProjectRepository {
   listByUser(userId: string): Promise<ProjectRecord[]>;
   create(data: CreateProjectData): Promise<ProjectRecord>;
+  existsByIdForUser(userId: string, projectId: string): Promise<boolean>;
   findByIdForUser(
     userId: string,
     projectId: string,

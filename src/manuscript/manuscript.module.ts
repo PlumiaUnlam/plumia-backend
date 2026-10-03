@@ -3,22 +3,28 @@ import { AnalyticsModule } from '../analytics/analytics.module';
 import { StorageModule } from '../storage/storage.module';
 import { PrismaBookRepository } from './adapters/prisma-book-repository.adapter';
 import { PrismaChapterRepository } from './adapters/prisma-chapter-repository.adapter';
+import { PrismaEditorTextStyleRepository } from './adapters/prisma-editor-text-style-repository.adapter';
 import { PrismaProjectRepository } from './adapters/prisma-project-repository.adapter';
 import { PrismaSceneRepository } from './adapters/prisma-scene-repository.adapter';
 import { PrismaStoryboardCardRepository } from './adapters/prisma-storyboard-card-repository.adapter';
 import { BooksController } from './controllers/books.controller';
+import { AuthorAnnotationsController } from './controllers/author-annotations.controller';
 import { ChaptersController } from './controllers/chapters.controller';
+import { EditorTextStylesController } from './controllers/editor-text-styles.controller';
 import { ProjectsController } from './controllers/projects.controller';
 import { ScenesController } from './controllers/scenes.controller';
 import { StoryboardCardsController } from './controllers/storyboard-cards.controller';
 import { StoryboardMatrixController } from './controllers/storyboard-matrix.controller';
 import { BOOK_REPOSITORY } from './ports/book-repository.port';
 import { CHAPTER_REPOSITORY } from './ports/chapter-repository.port';
+import { EDITOR_TEXT_STYLE_REPOSITORY } from './ports/editor-text-style-repository.port';
 import { PROJECT_REPOSITORY } from './ports/project-repository.port';
 import { SCENE_REPOSITORY } from './ports/scene-repository.port';
 import { STORYBOARD_CARD_REPOSITORY } from './ports/storyboard-card-repository.port';
 import { BookService } from './services/book.service';
+import { AuthorAnnotationsService } from './services/author-annotations.service';
 import { ChapterService } from './services/chapter.service';
+import { EditorTextStylesService } from './services/editor-text-styles.service';
 import { ProjectService } from './services/project.service';
 import { SceneService } from './services/scene.service';
 import { StoryboardCardService } from './services/storyboard-card.service';
@@ -31,21 +37,29 @@ import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup
     ProjectsController,
     BooksController,
     ChaptersController,
+    EditorTextStylesController,
     ScenesController,
     StoryboardCardsController,
     StoryboardMatrixController,
+    AuthorAnnotationsController,
   ],
   providers: [
     ProjectService,
     BookService,
     ChapterService,
+    EditorTextStylesService,
     SceneService,
     StoryboardCardService,
     StoryboardMatrixService,
+    AuthorAnnotationsService,
     StoryboardAudioCleanupPoller,
     { provide: PROJECT_REPOSITORY, useClass: PrismaProjectRepository },
     { provide: BOOK_REPOSITORY, useClass: PrismaBookRepository },
     { provide: CHAPTER_REPOSITORY, useClass: PrismaChapterRepository },
+    {
+      provide: EDITOR_TEXT_STYLE_REPOSITORY,
+      useClass: PrismaEditorTextStyleRepository,
+    },
     { provide: SCENE_REPOSITORY, useClass: PrismaSceneRepository },
     {
       provide: STORYBOARD_CARD_REPOSITORY,

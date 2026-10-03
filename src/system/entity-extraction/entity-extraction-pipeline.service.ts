@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { toEntityType } from '../../knowledge/domain/entity-type';
 import { EntityExtractionClient } from './entity-extraction.client';
 import { EntityResolutionService } from './entity-resolution.service';
+import { forEachSequentially } from './for-each-sequentially';
 import type {
   ChunkEvidence,
   ConfirmedEntityLike,
@@ -66,6 +67,43 @@ interface ProposalRow {
   status: ProposalStatus;
   sourceChunkId?: string | null;
   sourceChunkHash?: string | null;
+}
+
+type ResolvedEntityReferences = Map<
+  string,
+  { entityId: string | null; proposalId: string | null }
+>;
+
+interface DirtyChunkInput {
+  scene: { id: string; title: string | null };
+  projectId: string;
+  confirmedEntities: ConfirmedEntityLike[];
+  chunk: ChunkRow;
+  proposalsById: Map<string, ProposalRecord>;
+  relationshipProposals: RelationshipProposalRecord[];
+  rejectedRelationshipProposals: RelationshipProposalRecord[];
+  compareEmbedding: (text: string) => Promise<number[] | null>;
+}
+
+interface RelationshipCandidateInput {
+  projectId: string;
+  sceneId: string;
+  chunk: ChunkRow;
+  confirmedEntities: ConfirmedEntityLike[];
+  proposals: Map<string, ProposalRecord>;
+  resolvedEntityReferences: ResolvedEntityReferences;
+  relationshipProposals: RelationshipProposalRecord[];
+  rejectedRelationshipProposals: RelationshipProposalRecord[];
+}
+
+interface RelationshipProposalDraft {
+  relationship: ExtractedRelationship;
+  relationType: ReturnType<typeof toRelationType>;
+  source: { entityId: string | null; proposalId: string | null };
+  target: { entityId: string | null; proposalId: string | null };
+  relationshipId: string | null;
+  intensity: number;
+  evidence: string[];
 }
 
 const confirmedEntitySelect = {
@@ -296,8 +334,8 @@ export class EntityExtractionPipelineService {
     const hasSceneText = sceneText.trim().length > 0;
 
     if (hasSceneText) {
-      for (const chunk of dirtyChunks) {
-        await this.processDirtyChunk({
+      await forEachSequentially(dirtyChunks, (chunk) =>
+        this.processDirtyChunk({
           scene,
           projectId,
           confirmedEntities,
@@ -306,28 +344,16 @@ export class EntityExtractionPipelineService {
           relationshipProposals: pendingRelationshipProposals,
           rejectedRelationshipProposals,
           compareEmbedding,
-        });
-      }
+        }),
+      );
     } else {
-      for (const chunk of dirtyChunks) {
-        await this.clearChunkDirtyFlag(chunk.id);
-      }
+      await forEachSequentially(dirtyChunks, (chunk) =>
+        this.clearChunkDirtyFlag(chunk.id),
+      );
     }
   }
 
-  private async processDirtyChunk(input: {
-    scene: {
-      id: string;
-      title: string | null;
-    };
-    projectId: string;
-    confirmedEntities: ConfirmedEntityLike[];
-    chunk: ChunkRow;
-    proposalsById: Map<string, ProposalRecord>;
-    relationshipProposals: RelationshipProposalRecord[];
-    rejectedRelationshipProposals: RelationshipProposalRecord[];
-    compareEmbedding: (text: string) => Promise<number[] | null>;
-  }): Promise<void> {
+  private async processDirtyChunk(input: DirtyChunkInput): Promise<void> {
     const chunkText = input.chunk.content.trim();
     if (!chunkText) {
       await this.clearChunkDirtyFlag(input.chunk.id);
@@ -353,158 +379,11 @@ export class EntityExtractionPipelineService {
       confirmedEntities: input.confirmedEntities,
     });
 
-    const candidates = this.resolution.dedupeCandidates(extracted.entities);
-    const resolvedEntityReferences = new Map<
-      string,
-      { entityId: string | null; proposalId: string | null }
-    >();
-    if (
-      !this.extractionClient.hasEmbeddingModel() &&
-      !this.embeddingWarningShown
-    ) {
-      this.logger.warn(
-        'ENTITY_EXTRACTION_EMBEDDING_MODEL is not configured; skipping embedding similarity stage',
-      );
-      this.embeddingWarningShown = true;
-    }
-
-    for (const candidate of candidates) {
-      const resolution = await this.resolution.resolveCandidate(
-        candidate,
-        input.confirmedEntities,
-        [...input.proposalsById.values()],
-        input.compareEmbedding,
-      );
-
-      if (resolution.confirmedEntityId) {
-        const confirmedEntity = input.confirmedEntities.find(
-          (entity) => entity.id === resolution.confirmedEntityId,
-        );
-        if (!confirmedEntity) {
-          continue;
-        }
-
-        const proposedUpdate = this.createEntityUpdateProposalData(
-          confirmedEntity,
-          resolution.candidate,
-          input.chunk,
-        );
-        if (!proposedUpdate) {
-          continue;
-        }
-
-        const existingProposal = [...input.proposalsById.values()].find(
-          (proposal) => proposal.entityId === confirmedEntity.id,
-        );
-        const updateProposal = existingProposal
-          ? await this.updateExistingEntityProposal(
-              existingProposal,
-              proposedUpdate,
-            )
-          : await this.createEntityUpdateProposal({
-              projectId: input.projectId,
-              sceneId: input.scene.id,
-              entityId: confirmedEntity.id,
-              confidenceScore: resolution.candidate.confidenceScore ?? 0,
-              proposedData: proposedUpdate,
-            });
-
-        input.proposalsById.set(updateProposal.id, updateProposal);
-        this.addResolvedEntityReference(
-          resolvedEntityReferences,
-          resolution.candidate,
-          { entityId: confirmedEntity.id, proposalId: null },
-        );
-        continue;
-      }
-
-      if (resolution.proposalId) {
-        const currentProposal = input.proposalsById.get(resolution.proposalId);
-        if (!currentProposal) {
-          continue;
-        }
-
-        const mergedData = this.resolution.mergeProposalData(
-          currentProposal.proposedData,
-          resolution.candidate,
-          {
-            chunkId: input.chunk.id,
-            chunkHash: input.chunk.contentHash ?? '',
-            chunkIndex: input.chunk.chunkIndex,
-          },
-        );
-
-        const updatedProposal = (await this.prisma.entityProposal.update({
-          where: { id: currentProposal.id },
-          data: {
-            proposedData: this.toInputJsonValue(mergedData),
-            confidenceScore: Math.max(
-              Number(currentProposal.confidenceScore),
-              resolution.candidate.confidenceScore ?? 0,
-            ),
-            sourceChunkId: mergedData.sourceChunkId ?? null,
-            sourceChunkHash: mergedData.sourceChunkHash ?? null,
-          },
-          select: proposalSelect,
-        })) as ProposalRow;
-
-        input.proposalsById.set(updatedProposal.id, {
-          id: updatedProposal.id,
-          sceneId: updatedProposal.sceneId,
-          entityId: updatedProposal.entityId,
-          proposedData: this.normalizeProposalData(
-            updatedProposal.proposedData,
-          ),
-          confidenceScore: Number(updatedProposal.confidenceScore),
-          status: updatedProposal.status,
-          sourceChunkId: updatedProposal.sourceChunkId ?? null,
-          sourceChunkHash: updatedProposal.sourceChunkHash ?? null,
-        });
-        this.addResolvedEntityReference(
-          resolvedEntityReferences,
-          resolution.candidate,
-          { entityId: null, proposalId: currentProposal.id },
-        );
-        continue;
-      }
-
-      if (resolution.shouldCreateProposal) {
-        const proposedData = this.createProposalData(
-          resolution.candidate,
-          input.chunk,
-        );
-
-        const proposal = (await this.prisma.entityProposal.create({
-          data: {
-            projectId: input.projectId,
-            sceneId: input.scene.id,
-            sourceChunkId: input.chunk.id,
-            sourceChunkHash: input.chunk.contentHash,
-            proposedData: this.toInputJsonValue(proposedData),
-            confidenceScore: new Prisma.Decimal(
-              resolution.candidate.confidenceScore ?? 0,
-            ),
-          },
-          select: proposalSelect,
-        })) as ProposalRow;
-
-        input.proposalsById.set(proposal.id, {
-          id: proposal.id,
-          sceneId: proposal.sceneId,
-          entityId: proposal.entityId,
-          proposedData: this.normalizeProposalData(proposal.proposedData),
-          confidenceScore: Number(proposal.confidenceScore),
-          status: proposal.status,
-          sourceChunkId: proposal.sourceChunkId ?? null,
-          sourceChunkHash: proposal.sourceChunkHash ?? null,
-        });
-        this.addResolvedEntityReference(
-          resolvedEntityReferences,
-          resolution.candidate,
-          { entityId: null, proposalId: proposal.id },
-        );
-      }
-    }
+    this.warnIfEmbeddingIsUnavailable();
+    const resolvedEntityReferences = await this.processEntityCandidates(
+      input,
+      this.resolution.dedupeCandidates(extracted.entities),
+    );
 
     await this.processRelationshipCandidates({
       projectId: input.projectId,
@@ -521,6 +400,191 @@ export class EntityExtractionPipelineService {
     await this.clearChunkDirtyFlag(input.chunk.id);
   }
 
+  private warnIfEmbeddingIsUnavailable(): void {
+    if (
+      this.extractionClient.hasEmbeddingModel() ||
+      this.embeddingWarningShown
+    ) {
+      return;
+    }
+    this.logger.warn(
+      'ENTITY_EXTRACTION_EMBEDDING_MODEL is not configured; skipping embedding similarity stage',
+    );
+    this.embeddingWarningShown = true;
+  }
+
+  private async processEntityCandidates(
+    input: DirtyChunkInput,
+    candidates: ExtractionCandidate[],
+  ): Promise<ResolvedEntityReferences> {
+    const references: ResolvedEntityReferences = new Map();
+    await forEachSequentially(candidates, (candidate) =>
+      this.processEntityCandidate(input, candidate, references),
+    );
+    return references;
+  }
+
+  private async processEntityCandidate(
+    input: DirtyChunkInput,
+    candidate: ExtractionCandidate,
+    references: ResolvedEntityReferences,
+  ): Promise<void> {
+    const resolution = await this.resolution.resolveCandidate(
+      candidate,
+      input.confirmedEntities,
+      [...input.proposalsById.values()],
+      input.compareEmbedding,
+    );
+
+    if (resolution.confirmedEntityId) {
+      await this.processConfirmedEntityCandidate(input, resolution, references);
+      return;
+    }
+    if (resolution.proposalId) {
+      await this.processExistingProposalCandidate(
+        input,
+        resolution,
+        references,
+      );
+      return;
+    }
+    if (resolution.shouldCreateProposal) {
+      await this.createCandidateProposal(
+        input,
+        resolution.candidate,
+        references,
+      );
+    }
+  }
+
+  private async processConfirmedEntityCandidate(
+    input: DirtyChunkInput,
+    resolution: Awaited<
+      ReturnType<EntityResolutionService['resolveCandidate']>
+    >,
+    references: ResolvedEntityReferences,
+  ): Promise<void> {
+    const entity = input.confirmedEntities.find(
+      (item) => item.id === resolution.confirmedEntityId,
+    );
+    if (!entity) {
+      return;
+    }
+
+    const proposedData = this.createEntityUpdateProposalData(
+      entity,
+      resolution.candidate,
+      input.chunk,
+    );
+    if (!proposedData) {
+      return;
+    }
+
+    const existingProposal = [...input.proposalsById.values()].find(
+      (proposal) => proposal.entityId === entity.id,
+    );
+    const updateProposal = existingProposal
+      ? await this.updateExistingEntityProposal(existingProposal, proposedData)
+      : await this.createEntityUpdateProposal({
+          projectId: input.projectId,
+          sceneId: input.scene.id,
+          entityId: entity.id,
+          confidenceScore: resolution.candidate.confidenceScore ?? 0,
+          proposedData,
+        });
+
+    input.proposalsById.set(updateProposal.id, updateProposal);
+    this.addResolvedEntityReference(references, resolution.candidate, {
+      entityId: entity.id,
+      proposalId: null,
+    });
+  }
+
+  private async processExistingProposalCandidate(
+    input: DirtyChunkInput,
+    resolution: Awaited<
+      ReturnType<EntityResolutionService['resolveCandidate']>
+    >,
+    references: ResolvedEntityReferences,
+  ): Promise<void> {
+    const current = input.proposalsById.get(resolution.proposalId!);
+    if (!current) {
+      return;
+    }
+
+    const mergedData = this.resolution.mergeProposalData(
+      current.proposedData,
+      resolution.candidate,
+      {
+        chunkId: input.chunk.id,
+        chunkHash: input.chunk.contentHash ?? '',
+        chunkIndex: input.chunk.chunkIndex,
+      },
+    );
+    const updated = (await this.prisma.entityProposal.update({
+      where: { id: current.id },
+      data: {
+        proposedData: this.toInputJsonValue(mergedData),
+        confidenceScore: Math.max(
+          Number(current.confidenceScore),
+          resolution.candidate.confidenceScore ?? 0,
+        ),
+        sourceChunkId: mergedData.sourceChunkId ?? null,
+        sourceChunkHash: mergedData.sourceChunkHash ?? null,
+      },
+      select: proposalSelect,
+    })) as ProposalRow;
+
+    input.proposalsById.set(updated.id, {
+      id: updated.id,
+      sceneId: updated.sceneId,
+      entityId: updated.entityId,
+      proposedData: this.normalizeProposalData(updated.proposedData),
+      confidenceScore: Number(updated.confidenceScore),
+      status: updated.status,
+      sourceChunkId: updated.sourceChunkId ?? null,
+      sourceChunkHash: updated.sourceChunkHash ?? null,
+    });
+    this.addResolvedEntityReference(references, resolution.candidate, {
+      entityId: null,
+      proposalId: current.id,
+    });
+  }
+
+  private async createCandidateProposal(
+    input: DirtyChunkInput,
+    candidate: ExtractionCandidate,
+    references: ResolvedEntityReferences,
+  ): Promise<void> {
+    const proposedData = this.createProposalData(candidate, input.chunk);
+    const proposal = (await this.prisma.entityProposal.create({
+      data: {
+        projectId: input.projectId,
+        sceneId: input.scene.id,
+        sourceChunkId: input.chunk.id,
+        sourceChunkHash: input.chunk.contentHash,
+        proposedData: this.toInputJsonValue(proposedData),
+        confidenceScore: new Prisma.Decimal(candidate.confidenceScore ?? 0),
+      },
+      select: proposalSelect,
+    })) as ProposalRow;
+
+    input.proposalsById.set(proposal.id, {
+      id: proposal.id,
+      sceneId: proposal.sceneId,
+      entityId: proposal.entityId,
+      proposedData: this.normalizeProposalData(proposal.proposedData),
+      confidenceScore: Number(proposal.confidenceScore),
+      status: proposal.status,
+      sourceChunkId: proposal.sourceChunkId ?? null,
+      sourceChunkHash: proposal.sourceChunkHash ?? null,
+    });
+    this.addResolvedEntityReference(references, candidate, {
+      entityId: null,
+      proposalId: proposal.id,
+    });
+  }
+
   private async processInconsistencyCandidates(input: {
     projectId: string;
     sceneId: string;
@@ -529,6 +593,10 @@ export class EntityExtractionPipelineService {
     confirmedEntities: ConfirmedEntityLike[];
   }): Promise<void> {
     const activeFingerprints = new Set<string>();
+    const alerts = new Map<
+      string,
+      Parameters<AuditService['createEntityContinuityAlert']>[0]
+    >();
 
     for (const inconsistency of input.inconsistencies ?? []) {
       const entity = this.findConfirmedEntityByName(
@@ -564,8 +632,7 @@ export class EntityExtractionPipelineService {
         observedValue,
       });
       activeFingerprints.add(fingerprint);
-
-      await this.auditService.createEntityContinuityAlert({
+      alerts.set(fingerprint, {
         projectId: input.projectId,
         sceneId: input.sceneId,
         sourceChunkId: input.chunk.id,
@@ -582,6 +649,12 @@ export class EntityExtractionPipelineService {
         severity: this.toAuditSeverity(inconsistency.severity),
       });
     }
+
+    await Promise.all(
+      [...alerts.values()].map((alert) =>
+        this.auditService.createEntityContinuityAlert(alert),
+      ),
+    );
 
     await this.auditService.obsoleteContinuityAlertsForChunk({
       sceneId: input.sceneId,
@@ -656,52 +729,66 @@ export class EntityExtractionPipelineService {
     chunksById: Map<string, ChunkRow>,
     sceneId: string,
   ): Promise<void> {
-    for (const proposal of proposalsById.values()) {
-      if (proposal.sceneId !== sceneId) {
-        continue;
-      }
-      const currentData = proposal.proposedData;
-      const evidence = this.getChunkEvidence(currentData);
-
-      if (evidence.length === 0 && !currentData.sourceChunkId) {
-        continue;
-      }
-
-      const nextData = this.pruneProposalDataEvidence(
-        currentData,
+    await forEachSequentially(proposalsById.values(), (proposal) =>
+      this.pruneProposalWithoutActiveSupport(
+        proposal,
+        proposalsById,
         activeChunkIds,
         chunksById,
-      );
+        sceneId,
+      ),
+    );
+  }
 
-      if (!nextData) {
-        await this.markProposalObsolete(proposal.id);
-        proposalsById.delete(proposal.id);
-        continue;
-      }
-
-      if (!this.areProposalDataEqual(currentData, nextData)) {
-        const updated = (await this.prisma.entityProposal.update({
-          where: { id: proposal.id },
-          data: {
-            proposedData: this.toInputJsonValue(nextData),
-            sourceChunkId: nextData.sourceChunkId ?? null,
-            sourceChunkHash: nextData.sourceChunkHash ?? null,
-          },
-          select: proposalSelect,
-        })) as ProposalRow;
-
-        proposalsById.set(updated.id, {
-          id: updated.id,
-          sceneId: updated.sceneId,
-          entityId: updated.entityId,
-          proposedData: this.normalizeProposalData(updated.proposedData),
-          confidenceScore: Number(updated.confidenceScore),
-          status: updated.status,
-          sourceChunkId: updated.sourceChunkId ?? null,
-          sourceChunkHash: updated.sourceChunkHash ?? null,
-        });
-      }
+  private async pruneProposalWithoutActiveSupport(
+    proposal: ProposalRecord,
+    proposalsById: Map<string, ProposalRecord>,
+    activeChunkIds: Set<string>,
+    chunksById: Map<string, ChunkRow>,
+    sceneId: string,
+  ): Promise<void> {
+    if (proposal.sceneId !== sceneId) {
+      return;
     }
+    const currentData = proposal.proposedData;
+    const evidence = this.getChunkEvidence(currentData);
+    if (evidence.length === 0 && !currentData.sourceChunkId) {
+      return;
+    }
+
+    const nextData = this.pruneProposalDataEvidence(
+      currentData,
+      activeChunkIds,
+      chunksById,
+    );
+    if (!nextData) {
+      await this.markProposalObsolete(proposal.id);
+      proposalsById.delete(proposal.id);
+      return;
+    }
+    if (this.areProposalDataEqual(currentData, nextData)) {
+      return;
+    }
+
+    const updated = (await this.prisma.entityProposal.update({
+      where: { id: proposal.id },
+      data: {
+        proposedData: this.toInputJsonValue(nextData),
+        sourceChunkId: nextData.sourceChunkId ?? null,
+        sourceChunkHash: nextData.sourceChunkHash ?? null,
+      },
+      select: proposalSelect,
+    })) as ProposalRow;
+    proposalsById.set(updated.id, {
+      id: updated.id,
+      sceneId: updated.sceneId,
+      entityId: updated.entityId,
+      proposedData: this.normalizeProposalData(updated.proposedData),
+      confidenceScore: Number(updated.confidenceScore),
+      status: updated.status,
+      sourceChunkId: updated.sourceChunkId ?? null,
+      sourceChunkHash: updated.sourceChunkHash ?? null,
+    });
   }
 
   private addResolvedEntityReference(
@@ -730,120 +817,161 @@ export class EntityExtractionPipelineService {
     relationships: ExtractedRelationship[];
     confirmedEntities: ConfirmedEntityLike[];
     proposals: Map<string, ProposalRecord>;
-    resolvedEntityReferences: Map<
-      string,
-      { entityId: string | null; proposalId: string | null }
-    >;
+    resolvedEntityReferences: ResolvedEntityReferences;
     relationshipProposals: RelationshipProposalRecord[];
     rejectedRelationshipProposals: RelationshipProposalRecord[];
   }): Promise<void> {
-    for (const relationship of input.relationships ?? []) {
-      const relationType = toRelationType(relationship.relationType);
-      const source = this.resolveRelationshipEntity(
-        relationship.sourceEntity,
-        input,
-      );
-      const target = this.resolveRelationshipEntity(
-        relationship.targetEntity,
-        input,
-      );
+    await forEachSequentially(input.relationships ?? [], (relationship) =>
+      this.processRelationshipCandidate(relationship, input),
+    );
+  }
 
-      if (!source || !target || this.sameEntityReference(source, target)) {
-        continue;
-      }
-
-      const existingRelationship =
-        source.entityId && target.entityId
-          ? await this.prisma.relationship.findFirst({
-              where: {
-                projectId: input.projectId,
-                sourceEntityId: source.entityId,
-                targetEntityId: target.entityId,
-                relationType,
-              },
-              select: { id: true, description: true, confidenceScore: true },
-            })
-          : null;
-      const intensity = this.normalizeRelationshipIntensity(
-        relationship.intensity,
-      );
-
-      if (
-        existingRelationship &&
-        !this.relationshipHasNewInformation(
-          existingRelationship,
-          relationship.description,
-          intensity,
-        )
-      ) {
-        continue;
-      }
-
-      const current = input.relationshipProposals.find((proposal) =>
-        this.matchesRelationshipProposal(
-          proposal,
-          existingRelationship?.id ?? null,
-          source,
-          target,
-          relationType,
-        ),
-      );
-      const evidence = [...new Set(relationship.evidence ?? [])];
-
-      const wasRejectedWithSameEvidence =
-        input.rejectedRelationshipProposals.some(
-          (proposal) =>
-            this.matchesRelationshipProposal(
-              proposal,
-              existingRelationship?.id ?? null,
-              source,
-              target,
-              relationType,
-            ) && this.hasSharedEvidence(proposal.evidence, evidence),
-        );
-      if (wasRejectedWithSameEvidence) {
-        continue;
-      }
-
-      if (current) {
-        const updated = await this.prisma.relationshipProposal.update({
-          where: { id: current.id },
-          data: {
-            description: this.mergeRelationshipDescriptions(
-              current.description,
-              relationship.description,
-            ),
-            intensity: Math.max(current.intensity, intensity),
-            evidence: [...new Set([...current.evidence, ...evidence])],
-            sourceChunkId: input.chunk.id,
-          },
-          select: relationshipProposalSelect,
-        });
-        Object.assign(current, this.toRelationshipProposalRecord(updated));
-        continue;
-      }
-
-      const created = await this.prisma.relationshipProposal.create({
-        data: {
-          projectId: input.projectId,
-          sceneId: input.sceneId,
-          sourceChunkId: input.chunk.id,
-          relationshipId: existingRelationship?.id ?? null,
-          sourceEntityId: source.entityId,
-          targetEntityId: target.entityId,
-          sourceEntityProposalId: source.proposalId,
-          targetEntityProposalId: target.proposalId,
-          relationType,
-          description: relationship.description ?? null,
-          intensity,
-          evidence,
-        },
-        select: relationshipProposalSelect,
-      });
-      input.relationshipProposals.push(
-        this.toRelationshipProposalRecord(created),
-      );
+  private async processRelationshipCandidate(
+    relationship: ExtractedRelationship,
+    input: RelationshipCandidateInput,
+  ): Promise<void> {
+    const relationType = toRelationType(relationship.relationType);
+    const source = this.resolveRelationshipEntity(
+      relationship.sourceEntity,
+      input,
+    );
+    const target = this.resolveRelationshipEntity(
+      relationship.targetEntity,
+      input,
+    );
+    if (!source || !target || this.sameEntityReference(source, target)) {
+      return;
     }
+
+    const existingRelationship =
+      source.entityId && target.entityId
+        ? await this.prisma.relationship.findFirst({
+            where: {
+              projectId: input.projectId,
+              sourceEntityId: source.entityId,
+              targetEntityId: target.entityId,
+              relationType,
+            },
+            select: { id: true, description: true, confidenceScore: true },
+          })
+        : null;
+    const intensity = this.normalizeRelationshipIntensity(
+      relationship.intensity,
+    );
+    if (
+      existingRelationship &&
+      !this.relationshipHasNewInformation(
+        existingRelationship,
+        relationship.description,
+        intensity,
+      )
+    ) {
+      return;
+    }
+
+    const current = input.relationshipProposals.find((proposal) =>
+      this.matchesRelationshipProposal(
+        proposal,
+        existingRelationship?.id ?? null,
+        source,
+        target,
+        relationType,
+      ),
+    );
+    const evidence = [...new Set(relationship.evidence ?? [])];
+    const wasRejectedWithSameEvidence =
+      input.rejectedRelationshipProposals.some(
+        (proposal) =>
+          this.matchesRelationshipProposal(
+            proposal,
+            existingRelationship?.id ?? null,
+            source,
+            target,
+            relationType,
+          ) && this.hasSharedEvidence(proposal.evidence, evidence),
+      );
+    if (wasRejectedWithSameEvidence) {
+      return;
+    }
+
+    if (current) {
+      await this.updateRelationshipProposal(
+        current,
+        relationship,
+        evidence,
+        input.chunk.id,
+      );
+      return;
+    }
+    await this.createRelationshipProposal(input, {
+      relationship,
+      relationType,
+      source,
+      target,
+      relationshipId: existingRelationship?.id ?? null,
+      intensity,
+      evidence,
+    });
+  }
+
+  private async updateRelationshipProposal(
+    current: RelationshipProposalRecord,
+    relationship: ExtractedRelationship,
+    evidence: string[],
+    chunkId: string,
+  ): Promise<void> {
+    const updated = await this.prisma.relationshipProposal.update({
+      where: { id: current.id },
+      data: {
+        description: this.mergeRelationshipDescriptions(
+          current.description,
+          relationship.description,
+        ),
+        intensity: Math.max(
+          current.intensity,
+          this.normalizeRelationshipIntensity(relationship.intensity),
+        ),
+        evidence: [...new Set([...current.evidence, ...evidence])],
+        sourceChunkId: chunkId,
+      },
+      select: relationshipProposalSelect,
+    });
+    Object.assign(current, this.toRelationshipProposalRecord(updated));
+  }
+
+  private async createRelationshipProposal(
+    input: RelationshipCandidateInput,
+    draft: RelationshipProposalDraft,
+  ): Promise<void> {
+    const {
+      relationship,
+      relationType,
+      source,
+      target,
+      relationshipId,
+      intensity,
+      evidence,
+    } = draft;
+    const created = await this.prisma.relationshipProposal.create({
+      data: {
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        sourceChunkId: input.chunk.id,
+        relationshipId,
+        sourceEntityId: source.entityId,
+        targetEntityId: target.entityId,
+        sourceEntityProposalId: source.proposalId,
+        targetEntityProposalId: target.proposalId,
+        relationType,
+        description: relationship.description ?? null,
+        intensity,
+        evidence,
+      },
+      select: relationshipProposalSelect,
+    });
+    input.relationshipProposals.push(
+      this.toRelationshipProposalRecord(created),
+    );
   }
 
   private resolveRelationshipEntity(
@@ -1142,12 +1270,14 @@ export class EntityExtractionPipelineService {
     candidate: ExtractionCandidate,
     chunk: ChunkRow,
   ): ProposalDataLike | null {
-    const entityLabels = [entity.canonicalName, ...entity.aliases].map(
-      (label) => this.resolution.normalize(label),
+    const entityLabels = new Set(
+      [entity.canonicalName, ...entity.aliases].map((label) =>
+        this.resolution.normalize(label),
+      ),
     );
     const aliases = (candidate.aliases ?? []).filter((alias) => {
       const normalizedAlias = this.resolution.normalize(alias);
-      return normalizedAlias && !entityLabels.includes(normalizedAlias);
+      return normalizedAlias && !entityLabels.has(normalizedAlias);
     });
     const description = this.getSuggestedDescription(
       entity.description,
@@ -1278,8 +1408,8 @@ export class EntityExtractionPipelineService {
         incoming.description,
       ),
       attributes: {
-        ...(current.attributes ?? {}),
-        ...(incoming.attributes ?? {}),
+        ...current.attributes,
+        ...incoming.attributes,
       },
       confidenceScore: Math.max(
         current.confidenceScore ?? 0,

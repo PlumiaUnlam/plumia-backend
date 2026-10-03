@@ -9,32 +9,24 @@ import {
 const exportSourceSelect = {
   id: true,
   title: true,
-  books: {
+  chapters: {
     where: { deletedAt: null },
     orderBy: { sortKey: 'asc' },
     select: {
       id: true,
       title: true,
-      chapters: {
+      scenes: {
         where: { deletedAt: null },
-        orderBy: { sortKey: 'asc' },
+        orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
         select: {
           id: true,
           title: true,
-          scenes: {
-            where: { deletedAt: null },
-            orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
-            select: {
-              id: true,
-              title: true,
-              content: true,
-            },
-          },
+          content: true,
         },
       },
     },
   },
-} satisfies Prisma.ProjectSelect;
+} satisfies Prisma.BookSelect;
 
 @Injectable()
 export class PrismaExportSourceAdapter implements ExportSourceRepository {
@@ -42,13 +34,17 @@ export class PrismaExportSourceAdapter implements ExportSourceRepository {
 
   async findByIdForUser(
     userId: string,
-    projectId: string,
+    bookId: string,
   ): Promise<ExportSourceRecord | null> {
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, userId, deletedAt: null },
+    const book = await this.prisma.book.findFirst({
+      where: {
+        id: bookId,
+        deletedAt: null,
+        project: { userId, deletedAt: null },
+      },
       select: exportSourceSelect,
     });
 
-    return project;
+    return book;
   }
 }

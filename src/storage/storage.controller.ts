@@ -52,7 +52,7 @@ const ALLOWED_MIME = new Set([
   'audio/mp4',
 ]);
 const STORAGE_KEY_PATTERN =
-  /^(entities|scenes|storyboard-audio)\/([^/]+)\/[^/]+$/;
+  /^(entities|scenes|storyboard-audio|profiles)\/([^/]+)\/[^/]+$/;
 
 @ValidatorConstraint({ name: 'allowedMimeType', async: false })
 class AllowedMimeTypeConstraint implements ValidatorConstraintInterface {
@@ -148,6 +148,13 @@ export class StorageController {
     resourceId: string,
     storageFolder: StorageFolder = 'entities',
   ): Promise<void> {
+    if (storageFolder === 'profiles') {
+      if (resourceId !== userId) {
+        throw new ForbiddenException('Forbidden');
+      }
+      return;
+    }
+
     if (storageFolder !== 'storyboard-audio') {
       return;
     }
@@ -228,6 +235,10 @@ export class StorageController {
       }
 
       if (scene.chapter.book.project.userId !== req.user.id) {
+        throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+      }
+    } else if (scope === 'profiles') {
+      if (resourceId !== req.user.id) {
         throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
       }
     } else {
@@ -323,6 +334,35 @@ export class StorageController {
     const url = await this.storageService.generatePresignedGetUrl(key);
 
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.redirect(302, url);
+  }
+
+  @Get('profile-image/:userId')
+  async getProfileImage(
+    @Param('userId') userId: string,
+    @Request() req: AuthenticatedRequest,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    if (req.user.id !== userId) {
+      throw new ForbiddenException();
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { avatarUrl: true },
+    });
+
+    if (!user?.avatarUrl) {
+      throw new NotFoundException('Profile image not found');
+    }
+
+    const key = this.storageService.extractKeyFromUrl(user.avatarUrl);
+    if (!key.startsWith(`profiles/${userId}/`)) {
+      throw new ForbiddenException();
+    }
+
+    const url = await this.storageService.generatePresignedGetUrl(key);
+    res.setHeader('Cache-Control', 'private, no-cache');
     res.redirect(302, url);
   }
 }

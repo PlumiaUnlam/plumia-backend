@@ -35,7 +35,11 @@
     "test:e2e": "node ./scripts/test-e2e.js",
     "pretest:e2e:jest": "pnpm prisma:generate",
     "test:e2e:jest": "jest --config ./test/jest-e2e.config.js",
+    "seed:demo": "node ./scripts/seed-timeline-demo.js",
     "seed:timeline-demo": "node ./scripts/seed-timeline-demo.js"
+  },
+  "prisma": {
+    "seed": "node ./scripts/seed-timeline-demo.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",
@@ -71,9 +75,9 @@
     "@types/jest": "^30.0.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.0.0",
-    "@types/pdfkit": "^0.13.9",
     "@types/passport": "^1.0.17",
     "@types/passport-http-bearer": "^1.0.42",
+    "@types/pdfkit": "^0.13.9",
     "@types/supertest": "^7.0.0",
     "dotenv": "^17.4.2",
     "eslint": "^9.18.0",
@@ -81,6 +85,7 @@
     "eslint-plugin-prettier": "^5.2.2",
     "globals": "^17.0.0",
     "jest": "^30.0.0",
+    "jszip": "^3.10.2",
     "prettier": "^3.4.2",
     "prisma": "^5.22.0",
     "source-map-support": "^0.5.21",
