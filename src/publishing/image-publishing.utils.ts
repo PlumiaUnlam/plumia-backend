@@ -50,7 +50,6 @@ const PROMPT_ATTRIBUTE_LABELS: Record<string, Record<string, string>> = {
     occupation: 'ocupación',
     age: 'edad',
     species: 'especie',
-    abilities: 'habilidades',
   },
   LOCATION: {
     terrain: 'terreno',
@@ -224,20 +223,42 @@ export function buildSpanishPrompt(
     TYPE_TO_IMAGE_SUBJECT[entity.type] ??
     `una representación visual de ${noun}`;
   const parts: string[] = [`Crear ${subject} ${entity.canonicalName}`];
+  const visualIdentity = getVisualIdentity(entity.attributes);
   const visualIdentityOverride = options.visualIdentity?.trim();
-  const visualIdentity =
-    visualIdentityOverride && visualIdentityOverride.length > 0
-      ? visualIdentityOverride
-      : getVisualIdentity(entity.attributes);
   if (visualIdentity) {
-    parts.push(`Identidad visual prioritaria: ${visualIdentity}`);
+    parts.push(`Identidad visual de la ficha: ${visualIdentity}`);
   }
-  if (entity.description) {
-    parts.push(`Descripción de la ficha: ${entity.description}`);
+  if (
+    visualIdentityOverride &&
+    !isCoveredBy(visualIdentityOverride, visualIdentity)
+  ) {
+    parts.push(`Ajuste visual para esta imagen: ${visualIdentityOverride}`);
+  }
+  const visualDescription =
+    entity.type === 'CHARACTER'
+      ? extractCharacterVisualDescription(entity.description)
+      : (entity.description?.trim() ?? '');
+  const uncoveredVisualDescription =
+    entity.type === 'CHARACTER'
+      ? visualDescription
+          .split(/\s*,\s*/)
+          .filter((detail) => !isCoveredBy(detail, visualIdentity))
+          .join(', ')
+      : visualDescription;
+  if (
+    uncoveredVisualDescription &&
+    !isCoveredBy(uncoveredVisualDescription, visualIdentity)
+  ) {
+    parts.push(
+      entity.type === 'CHARACTER'
+        ? `Rasgos físicos descritos: ${uncoveredVisualDescription}`
+        : `Descripción de la ficha: ${uncoveredVisualDescription}`,
+    );
   }
   const attributes = serializeRelevantAttributes(
     entity.type,
     entity.attributes,
+    [visualIdentity, visualDescription],
   );
   if (attributes) {
     parts.push(`Datos relevantes de la ficha: ${attributes}`);
@@ -287,6 +308,7 @@ function getVisualIdentity(attributes: unknown): string {
 function serializeRelevantAttributes(
   type: string,
   attributes: unknown,
+  existingVisualText: string[] = [],
 ): string {
   if (!isRecord(attributes)) {
     return '';
@@ -294,12 +316,58 @@ function serializeRelevantAttributes(
   const labels = PROMPT_ATTRIBUTE_LABELS[type] ?? {};
   return Object.entries(labels)
     .filter(
-      ([key]) => key !== 'visualIdentity' && isDisplayValue(attributes[key]),
+      ([key]) =>
+        key !== 'visualIdentity' &&
+        isDisplayValue(attributes[key]) &&
+        !existingVisualText.some((text) =>
+          isCoveredBy(serializeAttributeValue(attributes[key]), text),
+        ),
     )
     .map(
       ([key, label]) => `${label}: ${serializeAttributeValue(attributes[key])}`,
     )
     .join(', ');
+}
+
+function extractCharacterVisualDescription(description: string | null): string {
+  if (!description?.trim()) {
+    return '';
+  }
+
+  const patterns = [
+    /\b(?:ojos?|mirada|cabello|pelo|piel|tono de piel|complexión|estatura|altura|rostro|cara|barba|bigote|pecas|canas|cicatrices?|vestimenta|ropa)\b(?:\s+(?:de|color|muy))?(?:\s+(?!y\b|pero\b|aunque\b|es\b|tiene\b|conoce\b)[\p{L}\p{M}\d-]+){1,3}/giu,
+    /\b(?:viste|lleva)\s+(?:un[oa]s?\s+)?[\p{L}\p{M}\d-]+(?:\s+(?!y\b|pero\b|aunque\b|es\b|tiene\b|conoce\b)[\p{L}\p{M}\d-]+){0,3}/giu,
+    /\b(?:es|mide)\s+(?:alto|alta|bajo|baja|delgado|delgada|robusto|robusta|musculoso|musculosa|\d+(?:[,.]\d+)?\s*(?:cm|m))\b/giu,
+  ];
+  const matches = patterns.flatMap((pattern) =>
+    [...description.matchAll(pattern)].map((match) => match[0].trim()),
+  );
+  return [...new Set(matches)].join(', ');
+}
+
+function isCoveredBy(text: string, source: string): boolean {
+  const normalize = (value: string): string =>
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const normalizedText = normalize(text);
+  const significantWords = normalizedText
+    .split(' ')
+    .filter(
+      (word) =>
+        word.length > 2 && !['una', 'unos', 'con', 'sobre'].includes(word),
+    );
+  const normalizedSource = normalize(source);
+  return (
+    normalizedText.length > 4 &&
+    (normalizedSource.includes(normalizedText) ||
+      (significantWords.length > 0 &&
+        significantWords.every((word) => normalizedSource.includes(word))))
+  );
 }
 
 function isDisplayValue(value: unknown): boolean {

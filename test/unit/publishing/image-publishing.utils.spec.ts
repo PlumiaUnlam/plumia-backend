@@ -26,7 +26,7 @@ describe('image publishing prompts', () => {
 
     expect(prompt).toContain('Maren Solís');
     expect(prompt).toContain(
-      'Identidad visual prioritaria: Cabello negro y una cicatriz en la ceja.',
+      'Identidad visual de la ficha: Cabello negro y una cicatriz en la ceja.',
     );
     expect(prompt).toContain(
       'Datos relevantes de la ficha: apariencia: Ojos verdes, edad: 29',
@@ -80,8 +80,53 @@ describe('image publishing prompts', () => {
     });
 
     expect(prompt).toContain(
-      'Identidad visual prioritaria: Cabello negro, ojos verdes y una cicatriz en la ceja.',
+      'Identidad visual de la ficha: Cabello negro, ojos verdes y una cicatriz en la ceja.',
     );
+    expect(prompt).not.toContain('Archivista del valle');
+  });
+
+  it('sends only described physical traits for characters, not personality or plot', () => {
+    const prompt = buildSpanishPromptFromData({
+      name: 'Maren Solís',
+      type: 'CHARACTER',
+      description:
+        'Archivista paciente. Tiene ojos verdes y cabello negro. Conoce los documentos censurados del valle.',
+      attributes: {
+        personality: 'reservada',
+        motivations: 'proteger el archivo',
+        eyes: 'verdes',
+      },
+    });
+
+    expect(prompt).toContain(
+      'Rasgos físicos descritos: ojos verdes, cabello negro',
+    );
+    expect(prompt).not.toMatch(
+      /paciente|reservada|proteger el archivo|documentos censurados|archivista/i,
+    );
+    expect(prompt).not.toContain('personalidad');
+  });
+
+  it('adds image-specific visual adjustments while retaining the ficha identity once', () => {
+    const prompt = buildSpanishPrompt(
+      {
+        canonicalName: 'Maren Solís',
+        type: 'CHARACTER',
+        description: 'Tiene ojos verdes.',
+        attributes: { visualIdentity: 'Ojos verdes y cabello negro.' },
+      },
+      {},
+      undefined,
+      { visualIdentity: 'Llevar un abrigo rojo.' },
+    );
+
+    expect(prompt).toContain(
+      'Identidad visual de la ficha: Ojos verdes y cabello negro.',
+    );
+    expect(prompt).toContain(
+      'Ajuste visual para esta imagen: Llevar un abrigo rojo.',
+    );
+    expect(prompt).not.toContain('Rasgos físicos descritos: ojos verdes');
   });
 
   it('distingue una primera imagen y omite rasgos de rostro en entidades no humanas', () => {

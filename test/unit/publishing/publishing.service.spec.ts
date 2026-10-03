@@ -224,7 +224,7 @@ describe('PublishingService', () => {
     ).toBe('https://old.example/mara.png');
   });
 
-  it('supports a first image without a reference and a one-time visual identity override', async () => {
+  it('supports a first image without a reference and a one-time visual adjustment', async () => {
     const job = {
       id: 'job-1',
       entityId: 'entity-1',
@@ -251,9 +251,12 @@ describe('PublishingService', () => {
       referenceImageId: null,
       referenceImageUrl: null,
       prompt: expect.stringContaining(
-        'Identidad visual prioritaria: Sombrero ancho y una brújula de cobre.',
+        'Ajuste visual para esta imagen: Sombrero ancho y una brújula de cobre.',
       ),
     });
+    expect(createData.prompt).toContain(
+      'Datos relevantes de la ficha: cabello: black',
+    );
     expect(createData.prompt).toContain('Crear la imagen base de la entidad');
   });
 
