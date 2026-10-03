@@ -3,11 +3,15 @@ import PDFDocument from 'pdfkit';
 import type { ExportBlock, ExportInline } from '../export.types';
 import type { ExportDocument, RenderedExport } from '../export.types';
 import type { ExportRenderer } from '../export-renderer.port';
+import { normalizeExportIndentation } from '../export-indentation';
 import { exportAnchor } from '../export-toc';
 import {
   SCENE_DIVIDER_COLOR,
   type SceneDividerVariant,
 } from '../scene-divider';
+
+const PDF_POINTS_PER_CM = 28.35;
+const PDF_BODY_WIDTH_CM = (595.28 - 120) / PDF_POINTS_PER_CM;
 
 function plainText(inlines: ExportInline[]): string {
   return inlines
@@ -17,12 +21,25 @@ function plainText(inlines: ExportInline[]): string {
 
 function textOptions(
   block: Extract<ExportBlock, { inlines: ExportInline[] }>,
+  additionalLeftCm = 0,
 ): {
   align: 'left' | 'center' | 'right' | 'justify';
   indent: number;
+  indentAllLines: boolean;
+  width: number;
   paragraphGap: number;
   lineGap: number;
 } {
+  const indentation = normalizeExportIndentation(
+    {
+      indentLeft: (block.indentLeft ?? 0) + additionalLeftCm,
+      indentRight: block.indentRight,
+      firstLineIndent:
+        block.indentLeft || additionalLeftCm ? 0 : block.firstLineIndent,
+    },
+    PDF_BODY_WIDTH_CM,
+  );
+
   return {
     align:
       block.textAlign === 'center' ||
@@ -30,7 +47,12 @@ function textOptions(
       block.textAlign === 'justify'
         ? block.textAlign
         : 'left',
-    indent: (block.indentLeft ?? 0) * 28.35,
+    indent:
+      (indentation.indentLeft +
+        (indentation.indentLeft === 0 ? indentation.firstLineIndent : 0)) *
+      PDF_POINTS_PER_CM,
+    indentAllLines: indentation.indentLeft > 0,
+    width: (PDF_BODY_WIDTH_CM - indentation.indentRight) * PDF_POINTS_PER_CM,
     paragraphGap: 6,
     lineGap: block.lineHeight
       ? Math.max(0, (Number(block.lineHeight) - 1) * 6)
@@ -49,15 +71,20 @@ function renderInlineRuns(
   }
 
   inlines.forEach((inline, index) => {
+    const runOptions =
+      index === 0 ? options : { ...options, indent: 0, indentAllLines: true };
     if (inline.kind === 'break') {
-      pdf.text('\n', { continued: index < inlines.length - 1 });
+      pdf.text('\n', {
+        ...runOptions,
+        continued: index < inlines.length - 1,
+      });
       return;
     }
     pdf.font(
       inline.bold || inline.italic ? 'Helvetica-BoldOblique' : 'Helvetica',
     );
     pdf.text(inline.text, {
-      ...options,
+      ...runOptions,
       link: inline.href,
       continued: index < inlines.length - 1,
     });
@@ -191,11 +218,11 @@ function renderBlocks(
       if (block.kind === 'blockquote') {
         pdf.font('Helvetica-Oblique');
       }
+      const paragraphStartX = (pdf as unknown as { x: number }).x;
       renderInlineRuns(pdf, block.inlines, {
-        ...textOptions(block),
-        indent:
-          textOptions(block).indent + (block.kind === 'blockquote' ? 20 : 0),
+        ...textOptions(block, block.kind === 'blockquote' ? 20 / 28.35 : 0),
       });
+      (pdf as unknown as { x: number }).x = paragraphStartX;
       pdf.font('Helvetica');
       continue;
     }

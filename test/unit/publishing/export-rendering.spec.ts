@@ -11,6 +11,7 @@ import {
   normalizeSceneDividerVariant,
   sceneDividerSvg,
 } from '../../../src/publishing/exports/scene-divider';
+import { normalizeExportIndentation } from '../../../src/publishing/exports/export-indentation';
 
 const imageBuffer = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -328,6 +329,85 @@ describe('export rendering', () => {
         kind: 'sceneDivider',
         variant,
       })),
+    );
+  });
+
+  it('keeps large paragraph indents within the exportable page width', async () => {
+    expect(
+      normalizeExportIndentation({
+        indentLeft: 12,
+        indentRight: 12,
+        firstLineIndent: 12,
+      }),
+    ).toEqual({
+      indentLeft: 12,
+      indentRight: 3.5,
+      firstLineIndent: 0,
+    });
+
+    const document = await prepareExportDocument(
+      {
+        id: 'indentation-project',
+        title: 'Indentation',
+        books: [
+          {
+            id: 'indentation-book',
+            title: 'Book',
+            chapters: [
+              {
+                id: 'indentation-chapter',
+                title: 'Chapter',
+                scenes: [
+                  {
+                    id: 'indentation-scene',
+                    title: 'Scene',
+                    content: {
+                      type: 'doc',
+                      content: [
+                        {
+                          type: 'paragraph',
+                          attrs: {
+                            indentLeft: 12,
+                            indentRight: 12,
+                            firstLineIndent: 12,
+                          },
+                          content: [
+                            {
+                              type: 'text',
+                              text: 'A long paragraph with enough content to wrap safely inside the available export width.',
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      () =>
+        Promise.resolve({
+          buffer: imageBuffer,
+          mimeType: 'image/png',
+          extension: 'png',
+        }),
+    );
+
+    const [docx, pdf, epub] = await Promise.all([
+      new DocxExportRenderer().render(document),
+      new PdfExportRenderer().render(document),
+      new EpubExportRenderer().render(document),
+    ]);
+
+    expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
+    expect(zipEntryText(docx.buffer, 'word/document.xml')).toContain(
+      'w:left="6804"',
+    );
+    expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
+    expect(zipEntryText(epub.buffer, 'OEBPS/book-0-chapter-0.xhtml')).toContain(
+      'margin-left:12cm;margin-right:3.5cm',
     );
   });
 });

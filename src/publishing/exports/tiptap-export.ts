@@ -5,6 +5,7 @@ import type {
   ExportInline,
 } from './export.types';
 import type { ExportSourceRecord } from './export-source.port';
+import { normalizeExportIndentation } from './export-indentation';
 import { buildExportToc } from './export-toc';
 import {
   normalizeSceneDividerVariant,
@@ -307,12 +308,19 @@ function blocksHtml(
         block.kind === 'codeBlock'
       ) {
         const content = block.inlines.map(inlineHtml).join('');
+        const indentation = normalizeExportIndentation(block);
         const style = [
           block.textAlign ? `text-align:${block.textAlign}` : '',
           block.lineHeight ? `line-height:${block.lineHeight}` : '',
-          block.indentLeft ? `margin-left:${block.indentLeft}cm` : '',
-          block.indentRight ? `margin-right:${block.indentRight}cm` : '',
-          block.firstLineIndent ? `text-indent:${block.firstLineIndent}cm` : '',
+          indentation.indentLeft
+            ? `margin-left:${indentation.indentLeft}cm`
+            : '',
+          indentation.indentRight
+            ? `margin-right:${indentation.indentRight}cm`
+            : '',
+          indentation.firstLineIndent
+            ? `text-indent:${indentation.firstLineIndent}cm`
+            : '',
         ]
           .filter(Boolean)
           .join(';');

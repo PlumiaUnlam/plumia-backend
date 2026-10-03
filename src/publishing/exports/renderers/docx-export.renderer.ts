@@ -24,6 +24,7 @@ import type {
   ExportTextBlock,
   RenderedExport,
 } from '../export.types';
+import { normalizeExportIndentation } from '../export-indentation';
 import { exportAnchor } from '../export-toc';
 import { sceneDividerPngFallback, sceneDividerSvg } from '../scene-divider';
 
@@ -101,27 +102,35 @@ function paragraphOptions(
   block: ExportTextBlock,
   children: ParagraphChild[] = inlineRuns(block.inlines),
   bullet?: boolean,
+  additionalLeftCm = 0,
 ): IParagraphOptions {
   const blockHeading = heading(block.level);
   const blockAlignment = alignment(block.textAlign);
   const lineHeight = block.lineHeight ? Number(block.lineHeight) : NaN;
+  const indentation = normalizeExportIndentation({
+    indentLeft: (block.indentLeft ?? 0) + additionalLeftCm,
+    indentRight: block.indentRight,
+    firstLineIndent: block.firstLineIndent,
+  });
 
   return {
     children,
     ...(blockHeading ? { heading: blockHeading } : {}),
     ...(blockAlignment ? { alignment: blockAlignment } : {}),
     ...(bullet ? { bullet: { level: 0 } } : {}),
-    ...(block.indentLeft || block.indentRight || block.firstLineIndent
+    ...(indentation.indentLeft ||
+    indentation.indentRight ||
+    indentation.firstLineIndent
       ? {
           indent: {
-            ...(block.indentLeft
-              ? { left: Math.round(block.indentLeft * 567) }
+            ...(indentation.indentLeft
+              ? { left: Math.round(indentation.indentLeft * 567) }
               : {}),
-            ...(block.indentRight
-              ? { right: Math.round(block.indentRight * 567) }
+            ...(indentation.indentRight
+              ? { right: Math.round(indentation.indentRight * 567) }
               : {}),
-            ...(block.firstLineIndent
-              ? { firstLine: Math.round(block.firstLineIndent * 567) }
+            ...(indentation.firstLineIndent
+              ? { firstLine: Math.round(indentation.firstLineIndent * 567) }
               : {}),
           },
         }
@@ -153,8 +162,7 @@ function textBlockParagraph(block: ExportTextBlock): Paragraph {
           }),
     );
     return new Paragraph({
-      ...paragraphOptions(block, children),
-      indent: { left: 720 },
+      ...paragraphOptions(block, children, undefined, 720 / 567),
     });
   }
 
