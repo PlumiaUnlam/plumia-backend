@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
-import type { ExportBlock, ExportInline } from '../export.types';
+import type { ExportBlock, ExportInline, ExportNote } from '../export.types';
+import { bookNotes } from '../export.types';
 import type { ExportDocument, RenderedExport } from '../export.types';
 import type { ExportRenderer } from '../export-renderer.port';
 import type {
@@ -8,6 +9,12 @@ import type {
   ExportSettingsConfig,
 } from '../export-settings.types';
 import { resolveTemplate } from '../export-settings.defaults';
+
+const NOTES_SEPARATOR_GAP_PT = 10;
+const NOTES_PARAGRAPH_GAP_PT = 4;
+const NOTES_FONT_SIZE = 9;
+const MIN_SUPERSCRIPT_SIZE_PT = 6;
+const SUPERSCRIPT_SCALE = 0.7;
 
 const CM_TO_PT = 28.35;
 // Distancia fija desde el borde físico de la página hasta el header/footer —
@@ -22,7 +29,15 @@ const HEADER_FOOTER_TEXT_HEIGHT_PT = 20;
 
 function plainText(inlines: ExportInline[]): string {
   return inlines
-    .map((inline) => (inline.kind === 'break' ? '\n' : inline.text))
+    .map((inline) => {
+      if (inline.kind === 'break') {
+        return '\n';
+      }
+      if (inline.kind === 'noteReference') {
+        return `[${inline.number}]`;
+      }
+      return inline.text;
+    })
     .join('');
 }
 
@@ -49,10 +64,59 @@ function textOptions(
   } as const;
 }
 
+/**
+ * Tracks footnote bodies encountered while laying out the book, keyed by the
+ * (buffered) page index they were referenced on, so they can be drawn at the
+ * bottom of that physical page once the whole document has been laid out.
+ *
+ * Footnote numbering restarts on every physical page (product requirement) —
+ * this can only be computed live during layout (page boundaries aren't known
+ * ahead of time), via `pageCounters`, independently of `ExportNote.number`
+ * (the whole-book continuous number used only for endnotes and, in other
+ * formats, for footnotes too — see export.types.ts).
+ *
+ * Known simplification: since pdfkit auto-paginates while flowing text, we
+ * don't reserve space for footnotes ahead of time — a page with many/long
+ * footnotes can visually overlap the tail of the body text. Acceptable for a
+ * first version.
+ */
+interface QueuedFootnote {
+  note: ExportNote;
+  /** Page-scoped display number (1-based, restarts on every page). */
+  pageNumber: number;
+}
+
+interface FootnoteContext {
+  notesById: Map<string, ExportNote>;
+  footnotesByPage: Map<number, QueuedFootnote[]>;
+  pageCounters: Map<number, number>;
+}
+
+function queueFootnote(
+  pdf: PDFKit.PDFDocument,
+  footnotes: FootnoteContext,
+  noteId: string,
+): number | undefined {
+  const note = footnotes.notesById.get(noteId);
+  if (!note) {
+    return undefined;
+  }
+  const range = pdf.bufferedPageRange();
+  const pageIndex = range.start + range.count - 1;
+  const pageNumber = (footnotes.pageCounters.get(pageIndex) ?? 0) + 1;
+  footnotes.pageCounters.set(pageIndex, pageNumber);
+  const queued = footnotes.footnotesByPage.get(pageIndex) ?? [];
+  queued.push({ note, pageNumber });
+  footnotes.footnotesByPage.set(pageIndex, queued);
+  return pageNumber;
+}
+
 function renderInlineRuns(
   pdf: PDFKit.PDFDocument,
   inlines: ExportInline[],
   options: ReturnType<typeof textOptions>,
+  baseFontSize: number,
+  footnotes?: FootnoteContext,
 ): void {
   if (inlines.length === 0) {
     pdf.text('', options);
@@ -64,6 +128,31 @@ function renderInlineRuns(
       pdf.text('\n', { continued: index < inlines.length - 1 });
       return;
     }
+
+    if (inline.kind === 'noteReference') {
+      // FOOTNOTE markers restart per physical page (computed live, here);
+      // ENDNOTE markers use the whole-book continuous number since their
+      // body lives in the single end-of-book "Notas" section, not a page.
+      let displayNumber = inline.number;
+      if (footnotes && inline.noteType === 'FOOTNOTE') {
+        displayNumber =
+          queueFootnote(pdf, footnotes, inline.noteId) ?? displayNumber;
+      }
+      pdf.font('Helvetica');
+      const superscriptSize = Math.max(
+        MIN_SUPERSCRIPT_SIZE_PT,
+        Math.round(baseFontSize * SUPERSCRIPT_SCALE),
+      );
+      pdf.fontSize(superscriptSize);
+      pdf.text(`${displayNumber}`, {
+        ...options,
+        baseline: 'top',
+        continued: index < inlines.length - 1,
+      });
+      pdf.fontSize(baseFontSize);
+      return;
+    }
+
     pdf.font(
       inline.bold || inline.italic ? 'Helvetica-BoldOblique' : 'Helvetica',
     );
@@ -74,6 +163,7 @@ function renderInlineRuns(
     });
   });
   pdf.font('Helvetica');
+  pdf.fontSize(baseFontSize);
   pdf.moveDown(0.35);
 }
 
@@ -81,6 +171,7 @@ function renderBlocks(
   pdf: PDFKit.PDFDocument,
   blocks: ExportBlock[],
   listPrefix = '',
+  footnotes?: FootnoteContext,
 ): void {
   for (const block of blocks) {
     if (
@@ -102,11 +193,17 @@ function renderBlocks(
       if (block.kind === 'blockquote') {
         pdf.font('Helvetica-Oblique');
       }
-      renderInlineRuns(pdf, block.inlines, {
-        ...textOptions(block),
-        indent:
-          textOptions(block).indent + (block.kind === 'blockquote' ? 20 : 0),
-      });
+      renderInlineRuns(
+        pdf,
+        block.inlines,
+        {
+          ...textOptions(block),
+          indent:
+            textOptions(block).indent + (block.kind === 'blockquote' ? 20 : 0),
+        },
+        size,
+        footnotes,
+      );
       pdf.font('Helvetica');
       continue;
     }
@@ -144,12 +241,68 @@ function renderBlocks(
           indent: 18,
           paragraphGap: 4,
         });
-        renderBlocks(pdf, item.slice(1), listPrefix);
+        renderBlocks(pdf, item.slice(1), listPrefix, footnotes);
       } else {
         pdf.fontSize(11).text(`${prefix}`, { indent: 18, continued: true });
-        renderBlocks(pdf, item, listPrefix);
+        renderBlocks(pdf, item, listPrefix, footnotes);
       }
     });
+  }
+}
+
+function noteBodyText(note: ExportNote): string {
+  return note.content
+    .map((block) =>
+      block.kind === 'paragraph' ||
+      block.kind === 'heading' ||
+      block.kind === 'blockquote' ||
+      block.kind === 'codeBlock'
+        ? plainText(block.inlines)
+        : '',
+    )
+    .filter(Boolean)
+    .join(' ');
+}
+
+function flushFootnotesForPage(
+  pdf: PDFKit.PDFDocument,
+  queued: QueuedFootnote[],
+  margins: { bottom: number; left: number; right: number },
+): void {
+  if (queued.length === 0) {
+    return;
+  }
+
+  const contentWidth = pdf.page.width - margins.left - margins.right;
+  pdf.fontSize(NOTES_FONT_SIZE).font('Helvetica');
+
+  const noteTexts = queued.map(
+    ({ note, pageNumber }) => `${pageNumber}. ${noteBodyText(note)}`,
+  );
+  const totalTextHeight = noteTexts.reduce(
+    (sum, text) =>
+      sum +
+      pdf.heightOfString(text, { width: contentWidth }) +
+      NOTES_PARAGRAPH_GAP_PT,
+    0,
+  );
+  const y = Math.max(
+    0,
+    pdf.page.height - margins.bottom - totalTextHeight - NOTES_SEPARATOR_GAP_PT,
+  );
+
+  pdf
+    .moveTo(margins.left, y)
+    .lineTo(margins.left + contentWidth * 0.3, y)
+    .lineWidth(0.5)
+    .strokeColor('#999999')
+    .stroke();
+
+  let cursor = y + NOTES_SEPARATOR_GAP_PT;
+  for (const text of noteTexts) {
+    const height = pdf.heightOfString(text, { width: contentWidth });
+    pdf.text(text, margins.left, cursor, { width: contentWidth });
+    cursor += height + NOTES_PARAGRAPH_GAP_PT;
   }
 }
 
@@ -236,6 +389,15 @@ export class PdfExportRenderer implements ExportRenderer {
       .moveDown(1);
     // La portada queda sola en la página 1; el contenido siempre arranca en la 2.
     pdf.addPage();
+    const footnotesByPage = new Map<number, QueuedFootnote[]>();
+    const notesById = new Map(
+      bookNotes(document).map((note) => [note.id, note]),
+    );
+    const footnoteContext: FootnoteContext = {
+      notesById,
+      footnotesByPage,
+      pageCounters: new Map(),
+    };
     document.chapters.forEach((chapter, chapterIndex) => {
       if (chapterIndex > 0) {
         pdf.addPage();
@@ -245,14 +407,30 @@ export class PdfExportRenderer implements ExportRenderer {
         if (scene.title) {
           pdf.fontSize(13).text(scene.title).moveDown(0.25);
         }
-        renderBlocks(pdf, scene.content);
+        renderBlocks(pdf, scene.content, '', footnoteContext);
         if (sceneIndex < chapter.scenes.length - 1) {
           pdf.addPage();
         }
       });
     });
 
-    if (settings.header || settings.footer) {
+    // Una única sección de notas al final, al cierre de todo el libro (no
+    // por capítulo), numerada de forma continua con el número central.
+    const allEndnotes = bookNotes(document).filter(
+      (note) => note.noteType === 'ENDNOTE',
+    );
+    if (allEndnotes.length > 0) {
+      pdf.addPage();
+      pdf.fontSize(13).text('Notas').moveDown(0.4);
+      allEndnotes.forEach((note) => {
+        pdf
+          .fontSize(NOTES_FONT_SIZE)
+          .text(`${note.number}. `, { continued: true });
+        renderBlocks(pdf, note.content);
+      });
+    }
+
+    if (settings.header || settings.footer || footnotesByPage.size > 0) {
       const vars = {
         tituloLibro: document.title,
         fecha: new Date().toLocaleDateString('es'),
@@ -264,13 +442,19 @@ export class PdfExportRenderer implements ExportRenderer {
       const totalContentPages = range.count - 1;
       for (let i = contentStart; i < range.start + range.count; i++) {
         pdf.switchToPage(i);
-        const pageVars = {
-          ...vars,
-          pagina: String(i - contentStart + 1),
-          totalPaginas: String(totalContentPages),
-        };
-        drawBand(pdf, settings.header, pageVars, 'top', margins);
-        drawBand(pdf, settings.footer, pageVars, 'bottom', margins);
+        if (settings.header || settings.footer) {
+          const pageVars = {
+            ...vars,
+            pagina: String(i - contentStart + 1),
+            totalPaginas: String(totalContentPages),
+          };
+          drawBand(pdf, settings.header, pageVars, 'top', margins);
+          drawBand(pdf, settings.footer, pageVars, 'bottom', margins);
+        }
+        const pageFootnotes = footnotesByPage.get(i);
+        if (pageFootnotes) {
+          flushFootnotesForPage(pdf, pageFootnotes, margins);
+        }
       }
     }
 

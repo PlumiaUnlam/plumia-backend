@@ -2,8 +2,10 @@ import { Injectable } from '@nestjs/common';
 import {
   AlignmentType,
   Document,
+  EndnoteReferenceRun,
   ExternalHyperlink,
   Footer,
+  FootnoteReferenceRun,
   Header,
   HeadingLevel,
   ImageRun,
@@ -21,14 +23,77 @@ import type {
   ExportSettingsConfig,
 } from '../export-settings.types';
 import { resolveTemplate } from '../export-settings.defaults';
+import { bookNotes } from '../export.types';
+import { restartFootnotesEachPage } from './docx-footnote-restart';
 import type {
   ExportBlock,
   ExportDocument,
   ExportImage,
   ExportInline,
+  ExportNote,
   ExportTextBlock,
   RenderedExport,
 } from '../export.types';
+
+/**
+ * Assigns `docx`'s own numeric footnote/endnote dictionary keys (independent
+ * of our central whole-book display `number`) and collects the rendered
+ * paragraphs for each note the first time it's referenced in document order.
+ */
+interface DocxNoteContext {
+  notesById: Map<string, ExportNote>;
+  footnoteIds: Map<string, number>;
+  endnoteIds: Map<string, number>;
+  footnotes: Record<string, { children: Paragraph[] }>;
+  endnotes: Record<string, { children: Paragraph[] }>;
+  nextFootnoteId: { value: number };
+  nextEndnoteId: { value: number };
+}
+
+function createDocxNoteContext(document: ExportDocument): DocxNoteContext {
+  const notesById = new Map<string, ExportNote>();
+  for (const note of bookNotes(document)) {
+    notesById.set(note.id, note);
+  }
+  return {
+    notesById,
+    footnoteIds: new Map(),
+    endnoteIds: new Map(),
+    footnotes: {},
+    endnotes: {},
+    nextFootnoteId: { value: 1 },
+    nextEndnoteId: { value: 1 },
+  };
+}
+
+function resolveNoteReferenceRun(
+  inline: Extract<ExportInline, { kind: 'noteReference' }>,
+  notes: DocxNoteContext,
+): ParagraphChild {
+  const note = notes.notesById.get(inline.noteId);
+  const body = note ? blocksToParagraphs(note.content, notes) : [];
+
+  if (inline.noteType === 'ENDNOTE') {
+    let id = notes.endnoteIds.get(inline.noteId);
+    if (id === undefined) {
+      id = notes.nextEndnoteId.value++;
+      notes.endnoteIds.set(inline.noteId, id);
+      notes.endnotes[String(id)] = { children: body };
+    }
+    // `docx`'s ParagraphChild union omits EndnoteReferenceRun even though it
+    // extends the same `Run` base as FootnoteReferenceRun (library typing
+    // gap) — the resulting OOXML (`w:endnoteReference`) is valid regardless.
+    return new EndnoteReferenceRun(id);
+  }
+
+  let id = notes.footnoteIds.get(inline.noteId);
+  if (id === undefined) {
+    id = notes.nextFootnoteId.value++;
+    notes.footnoteIds.set(inline.noteId, id);
+    notes.footnotes[String(id)] = { children: body };
+  }
+  return new FootnoteReferenceRun(id);
+}
 
 const CM_TO_TWIPS = 567;
 // Distancia fija (en twips) desde el borde de la página al header/footer,
@@ -136,12 +201,20 @@ function alignment(
   return undefined;
 }
 
-function inlineRuns(inlines: ExportInline[]): ParagraphChild[] {
+function inlineRuns(
+  inlines: ExportInline[],
+  notes: DocxNoteContext,
+): ParagraphChild[] {
   const children: ParagraphChild[] = [];
 
   for (const inline of inlines) {
     if (inline.kind === 'break') {
       children.push(new TextRun({ break: 1 }));
+      continue;
+    }
+
+    if (inline.kind === 'noteReference') {
+      children.push(resolveNoteReferenceRun(inline, notes));
       continue;
     }
 
@@ -162,7 +235,8 @@ function inlineRuns(inlines: ExportInline[]): ParagraphChild[] {
 
 function paragraphOptions(
   block: ExportTextBlock,
-  children: ParagraphChild[] = inlineRuns(block.inlines),
+  notes: DocxNoteContext,
+  children: ParagraphChild[] = inlineRuns(block.inlines, notes),
   bullet?: boolean,
 ): IParagraphOptions {
   const blockHeading = heading(block.level);
@@ -195,36 +269,50 @@ function paragraphOptions(
   };
 }
 
-function textBlockParagraph(block: ExportTextBlock): Paragraph {
+function textBlockParagraph(
+  block: ExportTextBlock,
+  notes: DocxNoteContext,
+): Paragraph {
   if (block.kind === 'codeBlock') {
-    const children = block.inlines.map((inline) =>
-      inline.kind === 'break'
-        ? new TextRun({ break: 1 })
-        : new TextRun({ text: inline.text, font: 'Courier New' }),
-    );
-    return new Paragraph(paragraphOptions(block, children));
+    const children = block.inlines.map((inline) => {
+      if (inline.kind === 'break') {
+        return new TextRun({ break: 1 });
+      }
+      if (inline.kind === 'noteReference') {
+        return resolveNoteReferenceRun(inline, notes);
+      }
+      return new TextRun({ text: inline.text, font: 'Courier New' });
+    });
+    return new Paragraph(paragraphOptions(block, notes, children));
   }
 
   if (block.kind === 'blockquote') {
-    const children = block.inlines.map((inline) =>
-      inline.kind === 'break'
-        ? new TextRun({ break: 1 })
-        : new TextRun({
-            text: inline.text,
-            bold: inline.bold,
-            italics: true,
-          }),
-    );
+    const children = block.inlines.map((inline) => {
+      if (inline.kind === 'break') {
+        return new TextRun({ break: 1 });
+      }
+      if (inline.kind === 'noteReference') {
+        return resolveNoteReferenceRun(inline, notes);
+      }
+      return new TextRun({
+        text: inline.text,
+        bold: inline.bold,
+        italics: true,
+      });
+    });
     return new Paragraph({
-      ...paragraphOptions(block, children),
+      ...paragraphOptions(block, notes, children),
       indent: { left: 720 },
     });
   }
 
-  return new Paragraph(paragraphOptions(block));
+  return new Paragraph(paragraphOptions(block, notes));
 }
 
-function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
+function blocksToParagraphs(
+  blocks: ExportBlock[],
+  notes: DocxNoteContext,
+): Paragraph[] {
   const paragraphs: Paragraph[] = [];
 
   for (const block of blocks) {
@@ -234,7 +322,7 @@ function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
       block.kind === 'blockquote' ||
       block.kind === 'codeBlock'
     ) {
-      paragraphs.push(textBlockParagraph(block));
+      paragraphs.push(textBlockParagraph(block, notes));
       continue;
     }
 
@@ -278,16 +366,19 @@ function blocksToParagraphs(blocks: ExportBlock[]): Paragraph[] {
 
       if (firstParagraph) {
         paragraphs.push(
-          new Paragraph(paragraphOptions(firstParagraph, undefined, bullet)),
+          new Paragraph(
+            paragraphOptions(firstParagraph, notes, undefined, bullet),
+          ),
         );
         paragraphs.push(
           ...blocksToParagraphs(
             item.filter((child) => child !== firstParagraph),
+            notes,
           ),
         );
       } else {
         paragraphs.push(new Paragraph({ text: bullet ? '•' : '1.' }));
-        paragraphs.push(...blocksToParagraphs(item));
+        paragraphs.push(...blocksToParagraphs(item, notes));
       }
     }
   }
@@ -304,6 +395,7 @@ export class DocxExportRenderer implements ExportRenderer {
     settings: ExportSettingsConfig,
   ): Promise<RenderedExport> {
     const children: Paragraph[] = [];
+    const notes = createDocxNoteContext(document);
 
     document.chapters.forEach((chapter, chapterIndex) => {
       if (chapterIndex > 0) {
@@ -324,7 +416,7 @@ export class DocxExportRenderer implements ExportRenderer {
             }),
           );
         }
-        children.push(...blocksToParagraphs(scene.content));
+        children.push(...blocksToParagraphs(scene.content, notes));
         if (sceneIndex < chapter.scenes.length - 1) {
           children.push(new Paragraph({ children: [new PageBreak()] }));
         }
@@ -347,6 +439,12 @@ export class DocxExportRenderer implements ExportRenderer {
     };
 
     const file = new Document({
+      ...(Object.keys(notes.footnotes).length > 0
+        ? { footnotes: notes.footnotes }
+        : {}),
+      ...(Object.keys(notes.endnotes).length > 0
+        ? { endnotes: notes.endnotes }
+        : {}),
       sections: [
         {
           // Portada: sin headers/footers y sin entrar en la numeración de
@@ -381,8 +479,9 @@ export class DocxExportRenderer implements ExportRenderer {
         },
       ],
     });
+    const rawBuffer = await Packer.toBuffer(file);
     return {
-      buffer: await Packer.toBuffer(file),
+      buffer: await restartFootnotesEachPage(rawBuffer),
       contentType:
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       extension: 'DOCX',

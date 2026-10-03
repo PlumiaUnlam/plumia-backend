@@ -23,6 +23,8 @@ export interface ExportImage {
   extension: string;
 }
 
+export type NoteType = 'FOOTNOTE' | 'ENDNOTE';
+
 export type ExportInline =
   | {
       kind: 'text';
@@ -31,7 +33,20 @@ export type ExportInline =
       italic: boolean;
       href?: string;
     }
-  | { kind: 'break' };
+  | { kind: 'break' }
+  | {
+      kind: 'noteReference';
+      noteId: string;
+      noteType: NoteType;
+      number: number;
+    };
+
+export interface ExportNote {
+  id: string;
+  noteType: NoteType;
+  content: ExportBlock[];
+  number: number;
+}
 
 export interface ExportTextBlock {
   kind: 'paragraph' | 'heading' | 'blockquote' | 'codeBlock';
@@ -62,6 +77,7 @@ export type ExportBlock =
 export interface ExportScene {
   title: string | null;
   content: ExportBlock[];
+  notes: ExportNote[];
 }
 
 export interface ExportChapter {
@@ -78,4 +94,14 @@ export interface RenderedExport {
   buffer: Buffer;
   contentType: string;
   extension: SupportedExportFormat;
+}
+
+/** Flattens the notes referenced across a chapter's scenes, in document order. */
+function chapterNotes(chapter: ExportChapter): ExportNote[] {
+  return chapter.scenes.flatMap((scene) => scene.notes);
+}
+
+/** Flattens every note referenced across the whole book, in document order. */
+export function bookNotes(document: ExportDocument): ExportNote[] {
+  return document.chapters.flatMap((chapter) => chapterNotes(chapter));
 }

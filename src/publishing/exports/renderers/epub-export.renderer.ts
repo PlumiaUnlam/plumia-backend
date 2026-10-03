@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import Epub from 'epub-gen';
 import type { ExportRenderer } from '../export-renderer.port';
 import type { ExportSettingsConfig } from '../export-settings.types';
+import { bookNotes } from '../export.types';
 import type {
   ExportBlock,
   ExportDocument,
   ExportImage,
+  ExportNote,
   RenderedExport,
 } from '../export.types';
 import { blocksToHtml } from '../tiptap-export';
@@ -38,6 +40,27 @@ function collectImages(blocks: ExportBlock[], images: ExportImage[]): void {
 
 function imageFileUrl(path: string): string {
   return `file://${path.replaceAll('\\', '/')}`;
+}
+
+/**
+ * EPUB has no fixed-page concept, so FOOTNOTE-type and ENDNOTE-type notes
+ * render identically here — both collected into a single end-of-book "Notas"
+ * section with back-links (never inline at a "physical bottom", which
+ * doesn't exist in a reflowable format, and never split per chapter, to
+ * match the continuous whole-book numbering they share in this format).
+ */
+function notesSectionHtml(
+  notes: ExportNote[],
+  imageSrc: (image: ExportImage) => string,
+): string {
+  return notes
+    .map(
+      (note) =>
+        `<div id="note-${escapeHtml(note.id)}" class="note"><p><a href="#ref-${escapeHtml(
+          note.id,
+        )}">↩</a> ${note.number}.</p>${blocksToHtml(note.content, imageSrc)}</div>`,
+    )
+    .join('\n');
 }
 
 @Injectable()
@@ -114,6 +137,19 @@ export class EpubExportRenderer implements ExportRenderer {
           });
         });
       });
+
+      // Una única sección de notas al final de todo el libro (no por
+      // capítulo), con numeración continua compartida entre ambos tipos.
+      const allNotes = bookNotes(document);
+      if (allNotes.length > 0) {
+        content.push({
+          title: 'Notas',
+          data: notesSectionHtml(allNotes, (image) =>
+            imageFileUrl(imagePaths.get(image) ?? ''),
+          ),
+          excludeFromToc: true,
+        });
+      }
 
       await new Epub(
         {

@@ -3,6 +3,8 @@ import type {
   ExportDocument,
   ExportImage,
   ExportInline,
+  ExportNote,
+  NoteType,
 } from './export.types';
 import type { ExportSourceRecord } from './export-source.port';
 
@@ -11,6 +13,11 @@ type ImageResolver = (
   storageKey: string,
   sceneId?: string,
 ) => Promise<ExportImage>;
+/** Mutable whole-book counter: footnotes and endnotes share one sequence, never reset. */
+interface NoteCounter {
+  value: number;
+}
+const NOTE_TYPES = new Set<NoteType>(['FOOTNOTE', 'ENDNOTE']);
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -62,10 +69,33 @@ function textMarks(node: JsonRecord): ExportInline {
   return inline;
 }
 
+/** Collects footnote/endnote bodies for the current scene, numbered sequentially across the whole book. */
+interface NoteCollector {
+  counter: NoteCounter;
+  notes: ExportNote[];
+}
+
+function footnoteNodeAttrs(
+  node: JsonRecord,
+): { id: string; noteType: NoteType } | undefined {
+  const attrs = nodeAttributes(node);
+  const id = stringValue(attrs['id']);
+  const noteType = attrs['noteType'];
+  if (
+    !id ||
+    typeof noteType !== 'string' ||
+    !NOTE_TYPES.has(noteType as NoteType)
+  ) {
+    return undefined;
+  }
+  return { id, noteType: noteType as NoteType };
+}
+
 async function parseInlines(
   nodes: unknown[],
   resolveImage: ImageResolver,
   sceneId?: string,
+  collector?: NoteCollector,
 ): Promise<ExportInline[]> {
   const inlines: ExportInline[] = [];
 
@@ -84,9 +114,40 @@ async function parseInlines(
       continue;
     }
 
+    if (value['type'] === 'footnoteReference') {
+      const parsed = footnoteNodeAttrs(value);
+      if (!parsed || !collector) {
+        continue;
+      }
+      const number = ++collector.counter.value;
+      const content = await parseBlocks(
+        childNodes(value),
+        resolveImage,
+        sceneId,
+      );
+      collector.notes.push({
+        id: parsed.id,
+        noteType: parsed.noteType,
+        content,
+        number,
+      });
+      inlines.push({
+        kind: 'noteReference',
+        noteId: parsed.id,
+        noteType: parsed.noteType,
+        number,
+      });
+      continue;
+    }
+
     if (value['type'] === 'paragraph' || value['type'] === 'inline') {
       inlines.push(
-        ...(await parseInlines(childNodes(value), resolveImage, sceneId)),
+        ...(await parseInlines(
+          childNodes(value),
+          resolveImage,
+          sceneId,
+          collector,
+        )),
       );
     }
   }
@@ -113,6 +174,7 @@ async function parseBlocks(
   nodes: unknown[],
   resolveImage: ImageResolver,
   sceneId?: string,
+  collector?: NoteCollector,
 ): Promise<ExportBlock[]> {
   const blocks: ExportBlock[] = [];
 
@@ -124,7 +186,12 @@ async function parseBlocks(
     const type = value['type'];
     if (type === 'doc') {
       blocks.push(
-        ...(await parseBlocks(childNodes(value), resolveImage, sceneId)),
+        ...(await parseBlocks(
+          childNodes(value),
+          resolveImage,
+          sceneId,
+          collector,
+        )),
       );
       continue;
     }
@@ -133,7 +200,12 @@ async function parseBlocks(
       const attrs = nodeAttributes(value);
       const block: ExportBlock = {
         kind: type,
-        inlines: await parseInlines(childNodes(value), resolveImage, sceneId),
+        inlines: await parseInlines(
+          childNodes(value),
+          resolveImage,
+          sceneId,
+          collector,
+        ),
         ...(type === 'heading'
           ? { level: typeof attrs['level'] === 'number' ? attrs['level'] : 1 }
           : {}),
@@ -162,6 +234,7 @@ async function parseBlocks(
         childNodes(value),
         resolveImage,
         sceneId,
+        collector,
       );
       blocks.push({ kind: type, inlines });
       continue;
@@ -173,7 +246,9 @@ async function parseBlocks(
         if (!isRecord(item)) {
           continue;
         }
-        items.push(await parseBlocks(childNodes(item), resolveImage, sceneId));
+        items.push(
+          await parseBlocks(childNodes(item), resolveImage, sceneId, collector),
+        );
       }
       blocks.push({ kind: type, items });
       continue;
@@ -203,6 +278,7 @@ async function parseBlocks(
       childNodes(value),
       resolveImage,
       sceneId,
+      collector,
     );
     if (nestedBlocks.length > 0) {
       blocks.push(...nestedBlocks);
@@ -222,18 +298,22 @@ export async function prepareExportDocument(
   resolveImage: ImageResolver,
 ): Promise<ExportDocument> {
   const chapters = [];
+  // Footnotes and endnotes share one sequence for the whole book; it is
+  // never reset. PDF's FOOTNOTE markers ignore this and compute their own
+  // page-scoped number at layout time instead (see pdf-export.renderer.ts).
+  const counter: NoteCounter = { value: 0 };
 
   for (const chapter of source.chapters) {
     const scenes = [];
     for (const scene of chapter.scenes) {
-      scenes.push({
-        title: scene.title,
-        content: await parseBlocks(
-          scene.content && isRecord(scene.content) ? [scene.content] : [],
-          resolveImage,
-          scene.id,
-        ),
-      });
+      const notes: ExportNote[] = [];
+      const content = await parseBlocks(
+        scene.content && isRecord(scene.content) ? [scene.content] : [],
+        resolveImage,
+        scene.id,
+        { counter, notes },
+      );
+      scenes.push({ title: scene.title, content, notes });
     }
     chapters.push({ title: chapter.title, scenes });
   }
@@ -253,6 +333,12 @@ function escapeHtml(value: string): string {
 function inlineHtml(inline: ExportInline): string {
   if (inline.kind === 'break') {
     return '<br />';
+  }
+
+  if (inline.kind === 'noteReference') {
+    return `<a id="ref-${escapeHtml(inline.noteId)}" href="#note-${escapeHtml(
+      inline.noteId,
+    )}" epub:type="noteref" class="footnote-ref"><sup>${inline.number}</sup></a>`;
   }
 
   let result = escapeHtml(inline.text);
@@ -331,6 +417,14 @@ export function blocksToHtml(
 
 export function inlineText(inlines: ExportInline[]): string {
   return inlines
-    .map((inline) => (inline.kind === 'break' ? '\n' : inline.text))
+    .map((inline) => {
+      if (inline.kind === 'break') {
+        return '\n';
+      }
+      if (inline.kind === 'noteReference') {
+        return `[${inline.number}]`;
+      }
+      return inline.text;
+    })
     .join('');
 }
