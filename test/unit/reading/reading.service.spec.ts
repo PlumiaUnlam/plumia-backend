@@ -233,6 +233,23 @@ describe('ReadingService', () => {
     expect(prisma.shareLink.update).not.toHaveBeenCalled();
   });
 
+  it('lets the manuscript owner open the shared version and read comments without the invitation token', async () => {
+    prisma.shareLink.findUnique.mockResolvedValue(
+      activeShare({ permission: SharePermission.COMMENT }),
+    );
+    prisma.readerComment.findMany.mockResolvedValue([]);
+
+    await expect(
+      service.getSharedManuscript(owner, 'share-slug'),
+    ).resolves.toMatchObject({
+      viewer: { isOwner: true, canComment: true },
+    });
+    await expect(service.listComments(owner, 'share-slug')).resolves.toEqual(
+      [],
+    );
+    expect(prisma.readerComment.findMany).toHaveBeenCalledTimes(1);
+  });
+
   it('creates a review comment for a Google reader without a PlumIA account', async () => {
     prisma.shareLink.findUnique.mockResolvedValue(
       activeShare({

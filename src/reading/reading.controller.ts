@@ -13,6 +13,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
+import { AuthService } from '../auth/auth.service';
 import { FirebaseAdminService } from '../auth/firebase-admin.service';
 import { Public } from '../common/decorators/public.decorator';
 import type { AuthenticatedRequest } from '../manuscript/controllers/authenticated-request';
@@ -36,6 +37,7 @@ export class ReadingController {
   constructor(
     private readonly readingService: ReadingService,
     private readonly firebaseAdmin: FirebaseAdminService,
+    private readonly authService: AuthService,
   ) {}
 
   @Post('books/:bookId/shares')
@@ -202,7 +204,7 @@ export class ReadingController {
     }
 
     return {
-      id: decoded.uid,
+      id: await this.authService.resolveExistingUserId(decoded),
       email: decoded.email,
       emailVerified: decoded.email_verified === true,
       provider: decoded.firebase.sign_in_provider,
