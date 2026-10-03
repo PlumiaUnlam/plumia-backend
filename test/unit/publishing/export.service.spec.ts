@@ -305,6 +305,7 @@ describe('ExportService', () => {
       title: 'Book',
       chapters: [
         {
+          id: 'chapter-1',
           title: 'Chapter',
           scenes: [
             {
@@ -355,6 +356,7 @@ describe('ExportService', () => {
         title: 'Book',
         chapters: [
           {
+            id: 'chapter-1',
             title: 'Chapter',
             scenes: [
               {

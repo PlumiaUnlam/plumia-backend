@@ -7,12 +7,68 @@ import { DEFAULT_EXPORT_SETTINGS } from '../../../src/publishing/exports/export-
 import { prepareExportDocument } from '../../../src/publishing/exports/tiptap-export';
 
 describe('export scene dividers', () => {
+  it('preserves the ornamental variant and embeds visual assets', async () => {
+    const dividerSource = {
+      id: 'book-id',
+      title: 'La obra',
+      chapters: [
+        {
+          id: 'chapter-1',
+          title: 'Capítulo I',
+          scenes: [
+            {
+              id: 'scene-1',
+              title: null,
+              content: {
+                type: 'doc',
+                content: [
+                  { type: 'sceneDivider', attrs: { variant: 'stars' } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const document = await prepareExportDocument(dividerSource, () =>
+      Promise.reject(new Error('no image expected')),
+    );
+    expect(document.chapters[0]?.scenes[0]?.content).toEqual([
+      { kind: 'sceneDivider', variant: 'stars' },
+    ]);
+
+    const [docx, pdf, epub] = await Promise.all([
+      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
+      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
+      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
+    ]);
+
+    const docxZip = await JSZip.loadAsync(docx.buffer);
+    expect(
+      Object.keys(docxZip.files).some((name) => name.endsWith('.svg')),
+    ).toBe(true);
+    expect(
+      Object.keys(docxZip.files).some((name) => name.endsWith('.png')),
+    ).toBe(true);
+
+    const epubZip = await JSZip.loadAsync(epub.buffer);
+    expect(
+      Object.keys(epubZip.files).some((name) => name.endsWith('.svg')),
+    ).toBe(true);
+    expect(
+      Object.keys(epubZip.files).some((name) => name.endsWith('.xhtml')),
+    ).toBe(true);
+    expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
+  });
+
   it('renders a scene divider as a horizontal line, not a Unicode glyph', async () => {
     const dividerSource = {
       id: 'book-id',
       title: 'La obra',
       chapters: [
         {
+          id: 'chapter-1',
           title: 'Capítulo I',
           scenes: [
             {
