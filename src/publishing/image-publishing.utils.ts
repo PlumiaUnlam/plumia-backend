@@ -69,7 +69,10 @@ export function toUserFriendlyError(err: unknown): never {
         HttpStatus.GATEWAY_TIMEOUT,
       );
     }
-    if (err.message.includes('Pollinations API error')) {
+    if (
+      err.message.includes('Pollinations API error') ||
+      err.message.includes('Fal API error')
+    ) {
       throw new HttpException(
         'El servicio de generación de imágenes no está disponible en este momento.',
         HttpStatus.BAD_GATEWAY,
