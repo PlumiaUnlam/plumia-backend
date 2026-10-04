@@ -5,11 +5,6 @@ import type {
   ExportInline,
 } from './export.types';
 import type { ExportSourceRecord } from './export-source.port';
-import {
-  normalizeSceneDividerVariant,
-  sceneDividerSvg,
-  type SceneDividerVariant,
-} from './scene-divider';
 
 type JsonRecord = Record<string, unknown>;
 type ImageResolver = (
@@ -151,16 +146,8 @@ async function parseBlock(
   if (type === 'bulletList' || type === 'orderedList') {
     return [await parseListBlock(value, type, resolveImage, sceneId)];
   }
-  if (type === 'horizontalRule') {
-    return [{ kind: 'horizontalRule' }];
-  }
-  if (type === 'sceneDivider') {
-    return [
-      {
-        kind: 'sceneDivider',
-        variant: normalizeSceneDividerVariant(nodeAttributes(value)['variant']),
-      },
-    ];
+  if (type === 'horizontalRule' || type === 'sceneDivider') {
+    return [{ kind: 'sceneDivider' }];
   }
   if (type === 'image') {
     const image = await parseImageBlock(value, resolveImage, sceneId);
@@ -252,11 +239,9 @@ export async function prepareExportDocument(
 ): Promise<ExportDocument> {
   const chapters = await Promise.all(
     source.chapters.map(async (chapter) => ({
-      id: chapter.id,
       title: chapter.title,
       scenes: await Promise.all(
         chapter.scenes.map(async (scene) => ({
-          id: scene.id,
           title: scene.title,
           content: await parseBlocks(
             scene.content && isRecord(scene.content) ? [scene.content] : [],
@@ -268,7 +253,7 @@ export async function prepareExportDocument(
     })),
   );
 
-  return { id: source.id, title: source.title, chapters };
+  return { title: source.title, chapters };
 }
 
 function escapeHtml(value: string): string {
@@ -301,17 +286,13 @@ function inlineHtml(inline: ExportInline): string {
 function blocksHtml(
   blocks: ExportBlock[],
   imageSrc: (image: ExportImage) => string,
-  sceneDividerSrc: (variant: SceneDividerVariant) => string,
 ): string {
-  return blocks
-    .map((block) => blockHtml(block, imageSrc, sceneDividerSrc))
-    .join('\n');
+  return blocks.map((block) => blockHtml(block, imageSrc)).join('\n');
 }
 
 function blockHtml(
   block: ExportBlock,
   imageSrc: (image: ExportImage) => string,
-  sceneDividerSrc: (variant: SceneDividerVariant) => string,
 ): string {
   if (
     block.kind === 'paragraph' ||
@@ -324,17 +305,12 @@ function blockHtml(
   if (block.kind === 'bulletList' || block.kind === 'orderedList') {
     const tag = block.kind === 'bulletList' ? 'ul' : 'ol';
     const items = block.items
-      .map((item) => `<li>${blocksHtml(item, imageSrc, sceneDividerSrc)}</li>`)
+      .map((item) => `<li>${blocksHtml(item, imageSrc)}</li>`)
       .join('');
     return `<${tag}>${items}</${tag}>`;
   }
-  if (block.kind === 'horizontalRule') {
-    return '<hr />';
-  }
   if (block.kind === 'sceneDivider') {
-    return `<p class="scene-divider"><img src="${escapeHtml(
-      sceneDividerSrc(block.variant),
-    )}" alt="Separador ornamental" /></p>`;
+    return '<hr />';
   }
   return `<p class="image"><img src="${escapeHtml(imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
 }
@@ -371,12 +347,8 @@ export function blocksToHtml(
   blocks: ExportBlock[],
   imageSrc: (image: ExportImage) => string = (image) =>
     `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
-  sceneDividerSrc: (variant: SceneDividerVariant) => string = (variant) =>
-    `data:image/svg+xml;base64,${Buffer.from(sceneDividerSvg(variant)).toString(
-      'base64',
-    )}`,
 ): string {
-  return blocksHtml(blocks, imageSrc, sceneDividerSrc);
+  return blocksHtml(blocks, imageSrc);
 }
 
 export function inlineText(inlines: ExportInline[]): string {

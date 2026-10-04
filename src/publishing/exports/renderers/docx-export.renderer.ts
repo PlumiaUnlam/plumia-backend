@@ -1,14 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import {
   AlignmentType,
-  Bookmark,
   Document,
   ExternalHyperlink,
   Footer,
   Header,
   HeadingLevel,
   ImageRun,
-  InternalHyperlink,
   Packer,
   PageBreak,
   PageNumber,
@@ -31,8 +29,6 @@ import type {
   ExportTextBlock,
   RenderedExport,
 } from '../export.types';
-import { buildExportToc, exportAnchor } from '../export-toc';
-import { sceneDividerPngFallback, sceneDividerSvg } from '../scene-divider';
 
 const CM_TO_TWIPS = 567;
 // Distancia fija (en twips) desde el borde de la página al header/footer,
@@ -245,66 +241,12 @@ function blockToParagraphs(block: ExportBlock): Paragraph[] {
     return [imageParagraph(block)];
   }
   if (block.kind === 'sceneDivider') {
-    return [sceneDividerParagraph(block.variant)];
-  }
-  if (block.kind === 'horizontalRule') {
+    // Línea horizontal nativa de Word (borde inferior de un párrafo
+    // vacío) — el mismo mecanismo que usa Word al escribir "---" y
+    // presionar Enter. Consistente con el <hr/> de EPUB.
     return [new Paragraph({ thematicBreak: true })];
   }
   return listParagraphs(block);
-}
-
-function sceneDividerParagraph(
-  variant: Parameters<typeof sceneDividerSvg>[0],
-): Paragraph {
-  return new Paragraph({
-    alignment: AlignmentType.CENTER,
-    children: [
-      new ImageRun({
-        type: 'svg',
-        data: Buffer.from(sceneDividerSvg(variant)),
-        transformation: { width: 256, height: 64 },
-        fallback: {
-          type: 'png',
-          data: sceneDividerPngFallback(variant),
-        },
-      }),
-    ],
-  });
-}
-
-function bookmarkedParagraph(
-  text: string,
-  anchor: string,
-  headingLevel: (typeof HeadingLevel)[keyof typeof HeadingLevel],
-): Paragraph {
-  return new Paragraph({
-    heading: headingLevel,
-    children: [
-      new Bookmark({
-        id: anchor,
-        children: [new TextRun({ text })],
-      }),
-    ],
-  });
-}
-
-function tocParagraph(title: string, anchor: string, level: number): Paragraph {
-  return new Paragraph({
-    indent: { left: level * 360 },
-    spacing: { after: 100 },
-    children: [
-      new InternalHyperlink({
-        anchor,
-        children: [
-          new TextRun({
-            text: title,
-            color: '5B3D6F',
-            underline: { type: 'single' },
-          }),
-        ],
-      }),
-    ],
-  });
 }
 
 function imageParagraph(
@@ -362,38 +304,24 @@ export class DocxExportRenderer implements ExportRenderer {
     settings: ExportSettingsConfig,
   ): Promise<RenderedExport> {
     const children: Paragraph[] = [];
-    const toc = buildExportToc(document);
-
-    children.push(
-      new Paragraph({
-        text: 'Índice',
-        heading: HeadingLevel.HEADING_1,
-      }),
-      ...toc.map((entry) =>
-        tocParagraph(entry.title, entry.anchor, entry.level),
-      ),
-      new Paragraph({ children: [new PageBreak()] }),
-    );
 
     document.chapters.forEach((chapter, chapterIndex) => {
       if (chapterIndex > 0) {
         children.push(new Paragraph({ children: [new PageBreak()] }));
       }
       children.push(
-        bookmarkedParagraph(
-          chapter.title,
-          exportAnchor('chapter', chapter.id),
-          HeadingLevel.HEADING_2,
-        ),
+        new Paragraph({
+          text: chapter.title,
+          heading: HeadingLevel.HEADING_2,
+        }),
       );
       chapter.scenes.forEach((scene, sceneIndex) => {
         if (scene.title) {
           children.push(
-            bookmarkedParagraph(
-              scene.title,
-              exportAnchor('scene', scene.id),
-              HeadingLevel.HEADING_3,
-            ),
+            new Paragraph({
+              text: scene.title,
+              heading: HeadingLevel.HEADING_3,
+            }),
           );
         }
         children.push(...blocksToParagraphs(scene.content));
@@ -426,13 +354,8 @@ export class DocxExportRenderer implements ExportRenderer {
           properties: { page: { margin } },
           children: [
             new Paragraph({
+              text: document.title,
               heading: HeadingLevel.TITLE,
-              children: [
-                new Bookmark({
-                  id: exportAnchor('book', document.id),
-                  children: [new TextRun({ text: document.title })],
-                }),
-              ],
             }),
           ],
         },
