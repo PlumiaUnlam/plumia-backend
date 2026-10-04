@@ -20,6 +20,7 @@ const source = {
   title: 'La obra',
   chapters: [
     {
+      id: 'chapter-id',
       title: 'Capítulo I',
       scenes: [
         {
@@ -63,6 +64,7 @@ const multiSceneSource = {
   title: 'La obra',
   chapters: [
     {
+      id: 'chapter-1',
       title: 'Capítulo I',
       scenes: [
         {
@@ -101,6 +103,7 @@ const multiChapterSource = {
   title: 'La obra',
   chapters: [
     {
+      id: 'chapter-1',
       title: 'Capítulo I',
       scenes: [
         {
@@ -119,6 +122,7 @@ const multiChapterSource = {
       ],
     },
     {
+      id: 'chapter-2',
       title: 'Capítulo II',
       scenes: [
         {
@@ -184,6 +188,43 @@ describe('export rendering', () => {
     expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
   });
 
+  it('includes a linked hierarchical index in every format', async () => {
+    const document = await prepareExportDocument(source, () =>
+      Promise.resolve({
+        buffer: imageBuffer,
+        mimeType: 'image/png',
+        extension: 'png',
+      }),
+    );
+
+    const [docx, pdf, epub] = await Promise.all([
+      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
+      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
+      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
+    ]);
+
+    const docxZip = await JSZip.loadAsync(docx.buffer);
+    const documentXml =
+      await docxZip.files['word/document.xml']!.async('string');
+    expect(documentXml).toContain('Índice');
+    expect(documentXml).toContain('w:bookmarkStart');
+    expect(documentXml).toContain('w:anchor="export_chapter_chapter_id"');
+    expect(documentXml).toContain('w:anchor="export_scene_scene_id"');
+
+    const pdfText = pdf.buffer.toString('latin1');
+    expect(pdfText).toContain('export_book_book_id');
+    expect(pdfText).toContain('export_chapter_chapter_id');
+    expect(pdfText).toContain('export_scene_scene_id');
+
+    const epubZip = await JSZip.loadAsync(epub.buffer);
+    const index = await epubZip.files['OEBPS/index.xhtml']!.async('string');
+    expect(index).toContain('&#xCD;ndice');
+    expect(index).toContain('cover.xhtml#export_book_book_id');
+    expect(index).toContain(
+      'book-0-chapter-0-scene-0.xhtml#export_scene_scene_id',
+    );
+  });
+
   it('applies custom margins and header/footer settings across formats', async () => {
     const document = await prepareExportDocument(source, () =>
       Promise.resolve({
@@ -233,7 +274,7 @@ describe('export rendering', () => {
     ]);
 
     // Portada (1) + capítulo/escena 1 (2) + salto antes de la escena 2 (3).
-    expect(pdfPageCount(pdf.buffer)).toBe(3);
+    expect(pdfPageCount(pdf.buffer)).toBe(4);
 
     expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
     expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
@@ -251,7 +292,7 @@ describe('export rendering', () => {
     ]);
 
     // Portada (1) + capítulo 1 (2) + salto antes del capítulo 2 (3).
-    expect(pdfPageCount(pdf.buffer)).toBe(3);
+    expect(pdfPageCount(pdf.buffer)).toBe(4);
 
     expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
     expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
@@ -285,7 +326,7 @@ describe('export rendering', () => {
     // el footer cerca del margen inferior disparaba la paginación
     // automática de pdfkit y agregaba una página en blanco extra al final
     // por cada página existente.
-    expect(pdfPageCount(pdf.buffer)).toBe(3);
+    expect(pdfPageCount(pdf.buffer)).toBe(4);
   });
 
   it('renders the title alone on a cover page with no header/footer', async () => {
@@ -318,7 +359,7 @@ describe('export rendering', () => {
 
     // Portada (1) + 2 escenas de contenido; el footer numera "Página 1 de 2"
     // (reiniciado) sobre las páginas de contenido, no sobre la portada.
-    expect(pdfPageCount(pdf.buffer)).toBe(3);
+    expect(pdfPageCount(pdf.buffer)).toBe(4);
 
     expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
     expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
@@ -351,9 +392,13 @@ describe('export rendering', () => {
     const files = await epubXhtmlFiles(epub.buffer);
 
     // Portada + escena 1 + escena 2 = 3 archivos separados (spine items).
-    expect(files).toHaveLength(3);
-    expect(files[1]).toContain('Contenido de la escena 1.');
-    expect(files[2]).toContain('Contenido de la escena 2.');
+    expect(files).toHaveLength(4);
+    expect(
+      files.some((file) => file.includes('Contenido de la escena 1.')),
+    ).toBe(true);
+    expect(
+      files.some((file) => file.includes('Contenido de la escena 2.')),
+    ).toBe(true);
   });
 
   it('shows the title only on the cover page, never duplicated in the content', async () => {
@@ -370,16 +415,23 @@ describe('export rendering', () => {
       DEFAULT_EXPORT_SETTINGS,
     );
     const files = await epubXhtmlFiles(epub.buffer);
-    const titlePageBody = epubBody(files[0] ?? '');
-    const chapterFileBody = epubBody(files[1] ?? '');
+    const titlePageBody = epubBody(
+      files.find((file) => file.includes('id="export_book_book_id"')) ?? '',
+    );
+    const chapterFileBody = epubBody(
+      files.find((file) => file.includes('id="export_chapter_chapter_id"')) ??
+        '',
+    );
 
     // El <title> del <head> también repite el texto legítimamente; lo que
     // no debe duplicarse es el encabezado <h1> visible en el <body>, y ya
     // no existe un nivel "libro" que lo repita en el contenido.
-    expect(titlePageBody.match(/<h1>/g) ?? []).toHaveLength(1);
-    expect(chapterFileBody.match(/<h1>/g) ?? []).toHaveLength(0);
+    expect(titlePageBody.match(/<h1\b[^>]*>/g) ?? []).toHaveLength(1);
+    expect(chapterFileBody.match(/<h1\b[^>]*>/g) ?? []).toHaveLength(0);
     // epub-gen sanea el XHTML y codifica caracteres no-ASCII como entidades.
-    expect(chapterFileBody).toContain('<h2>Cap&#xED;tulo I</h2>');
+    expect(chapterFileBody).toContain(
+      '<h2 id="export_chapter_chapter_id">Cap&#xED;tulo I</h2>',
+    );
   });
 
   function extractTextYPositions(buffer: Buffer, needle: string): number[] {
@@ -512,6 +564,6 @@ describe('export rendering', () => {
     // El margen real se empuja al mínimo necesario para no tapar el
     // header/footer; sigue habiendo portada (1) + 2 páginas de contenido.
     expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
-    expect(pdfPageCount(pdf.buffer)).toBe(3);
+    expect(pdfPageCount(pdf.buffer)).toBe(4);
   });
 });
