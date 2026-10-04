@@ -208,20 +208,20 @@ describe('export rendering', () => {
       await docxZip.files['word/document.xml']!.async('string');
     expect(documentXml).toContain('Índice');
     expect(documentXml).toContain('w:bookmarkStart');
-    expect(documentXml).toContain('w:anchor="export_chapter_chapter-id"');
-    expect(documentXml).toContain('w:anchor="export_scene_scene-id"');
+    expect(documentXml).toContain('w:anchor="export_chapter_chapter_id"');
+    expect(documentXml).toContain('w:anchor="export_scene_scene_id"');
 
     const pdfText = pdf.buffer.toString('latin1');
-    expect(pdfText).toContain('export_book_book-id');
-    expect(pdfText).toContain('export_chapter_chapter-id');
-    expect(pdfText).toContain('export_scene_scene-id');
+    expect(pdfText).toContain('export_book_book_id');
+    expect(pdfText).toContain('export_chapter_chapter_id');
+    expect(pdfText).toContain('export_scene_scene_id');
 
     const epubZip = await JSZip.loadAsync(epub.buffer);
     const index = await epubZip.files['OEBPS/index.xhtml']!.async('string');
-    expect(index).toContain('Índice');
-    expect(index).toContain('cover.xhtml#export_book_book-id');
+    expect(index).toContain('&#xCD;ndice');
+    expect(index).toContain('cover.xhtml#export_book_book_id');
     expect(index).toContain(
-      'book-0-chapter-0-scene-0.xhtml#export_scene_scene-id',
+      'book-0-chapter-0-scene-0.xhtml#export_scene_scene_id',
     );
   });
 
@@ -416,19 +416,22 @@ describe('export rendering', () => {
     );
     const files = await epubXhtmlFiles(epub.buffer);
     const titlePageBody = epubBody(
-      files.find((file) => file.includes('id="export_book_book-id"')) ?? '',
+      files.find((file) => file.includes('id="export_book_book_id"')) ?? '',
     );
     const chapterFileBody = epubBody(
-      files.find((file) => file.includes('<h2>Cap&#xED;tulo I</h2>')) ?? '',
+      files.find((file) => file.includes('id="export_chapter_chapter_id"')) ??
+        '',
     );
 
     // El <title> del <head> también repite el texto legítimamente; lo que
     // no debe duplicarse es el encabezado <h1> visible en el <body>, y ya
     // no existe un nivel "libro" que lo repita en el contenido.
-    expect(titlePageBody.match(/<h1>/g) ?? []).toHaveLength(1);
-    expect(chapterFileBody.match(/<h1>/g) ?? []).toHaveLength(0);
+    expect(titlePageBody.match(/<h1\b[^>]*>/g) ?? []).toHaveLength(1);
+    expect(chapterFileBody.match(/<h1\b[^>]*>/g) ?? []).toHaveLength(0);
     // epub-gen sanea el XHTML y codifica caracteres no-ASCII como entidades.
-    expect(chapterFileBody).toContain('<h2>Cap&#xED;tulo I</h2>');
+    expect(chapterFileBody).toContain(
+      '<h2 id="export_chapter_chapter_id">Cap&#xED;tulo I</h2>',
+    );
   });
 
   function extractTextYPositions(buffer: Buffer, needle: string): number[] {
