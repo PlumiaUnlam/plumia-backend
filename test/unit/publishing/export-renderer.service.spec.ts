@@ -12,11 +12,7 @@ import type { EpubExportRenderer } from '../../../src/publishing/exports/rendere
 import type { PdfExportRenderer } from '../../../src/publishing/exports/renderers/pdf-export.renderer';
 
 describe('ExportRendererService', () => {
-  const document: ExportDocument = {
-    id: 'book-id',
-    title: 'La obra',
-    chapters: [],
-  };
+  const document: ExportDocument = { title: 'La obra', chapters: [] };
   const settings: ExportSettingsConfig = DEFAULT_EXPORT_SETTINGS;
   const result: RenderedExport = {
     buffer: Buffer.from('export'),
