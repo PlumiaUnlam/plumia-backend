@@ -165,14 +165,14 @@ export class PublishingService {
     });
 
     try {
+      const referenceImageUrl =
+        await this.resolveGenerationReferenceImageUrl(job);
       const result = await this.imageGen.generate({
         prompt: job.prompt,
         width: job.width,
         height: job.height,
         seed: job.seed,
-        ...(job.referenceImageUrl
-          ? { referenceImageUrl: job.referenceImageUrl }
-          : {}),
+        ...(referenceImageUrl ? { referenceImageUrl } : {}),
       });
       await this.prisma.imageGenerationJob.update({
         where: { id: jobId },
@@ -319,6 +319,37 @@ export class PublishingService {
     }
 
     return { id: null, url: entity.imageUrl };
+  }
+
+  private async resolveGenerationReferenceImageUrl(job: {
+    entityId: string;
+    referenceImageId: string | null;
+    referenceImageUrl: string | null;
+  }): Promise<string | null> {
+    if (job.referenceImageId) {
+      const image = await this.prisma.generatedImage.findFirst({
+        where: { id: job.referenceImageId, entityId: job.entityId },
+        select: { storageKey: true },
+      });
+      if (!image) {
+        throw new NotFoundException('Reference image not found');
+      }
+      return this.storage.generatePresignedGetUrl(image.storageKey);
+    }
+
+    if (!job.referenceImageUrl) {
+      return null;
+    }
+
+    const publicUrlPrefix = this.storage.getPublicUrl('');
+    if (job.referenceImageUrl.startsWith(publicUrlPrefix)) {
+      const storageKey = job.referenceImageUrl.slice(publicUrlPrefix.length);
+      if (storageKey) {
+        return this.storage.generatePresignedGetUrl(storageKey);
+      }
+    }
+
+    return job.referenceImageUrl;
   }
 
   private toInstructions(dto: GenerateImageDto): Record<string, string> {

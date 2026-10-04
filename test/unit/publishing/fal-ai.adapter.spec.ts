@@ -48,8 +48,8 @@ describe('FalAiAdapter', () => {
 
     await adapter.generate({
       prompt: 'Una torre sobre la montaña',
-      width: 1024,
-      height: 1024,
+      width: 512,
+      height: 512,
       seed: 456,
     });
 
@@ -62,6 +62,10 @@ describe('FalAiAdapter', () => {
     if (typeof body !== 'string') {
       throw new Error('Expected Fal submit body to be JSON');
     }
+    expect(JSON.parse(body)).toMatchObject({
+      resolution: '1K',
+      aspect_ratio: '1:1',
+    });
     expect(JSON.parse(body)).not.toHaveProperty('image_urls');
   });
 
@@ -73,6 +77,28 @@ describe('FalAiAdapter', () => {
 
     await expect(adapter.generate({ prompt: 'Una imagen' })).rejects.toThrow(
       'Fal API error: 422',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('identifies a network failure while downloading the generated image', async () => {
+    const fetchMock = mockFalQueue(new TypeError('fetch failed'));
+    const adapter = new FalAiAdapter(config());
+
+    await expect(adapter.generate({ prompt: 'Una imagen' })).rejects.toThrow(
+      'Error de red al descargar la imagen generada: fetch failed',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('identifies a network failure while submitting a generation request', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockRejectedValue(new TypeError('fetch failed'));
+    const adapter = new FalAiAdapter(config());
+
+    await expect(adapter.generate({ prompt: 'Una imagen' })).rejects.toThrow(
+      'Error de red al enviar la solicitud de generación: fetch failed',
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -104,7 +130,9 @@ function config(overrides: Record<string, string> = {}): ConfigService {
   } as unknown as ConfigService;
 }
 
-function mockFalQueue(): jest.SpiedFunction<typeof fetch> {
+function mockFalQueue(
+  imageDownloadError?: Error,
+): jest.SpiedFunction<typeof fetch> {
   return jest.spyOn(global, 'fetch').mockImplementation((input, init) => {
     const url =
       typeof input === 'string'
@@ -113,6 +141,9 @@ function mockFalQueue(): jest.SpiedFunction<typeof fetch> {
           ? input.href
           : input.url;
     if (url === 'https://cdn.test/generated.png') {
+      if (imageDownloadError) {
+        return Promise.reject(imageDownloadError);
+      }
       return Promise.resolve(
         new Response(new Uint8Array([1, 2, 3]), {
           status: 200,

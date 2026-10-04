@@ -365,6 +365,7 @@ describe('PublishingService', () => {
       userId: 'user-1',
       status: 'QUEUED',
       generatedImageId: null,
+      referenceImageId: 'reference-1',
       startedAt: null,
       prompt: 'Mara by the sea',
       width: 512,
@@ -374,6 +375,9 @@ describe('PublishingService', () => {
     };
     prisma.imageGenerationJob.findUnique.mockResolvedValue(job);
     prisma.imageGenerationJob.updateMany.mockResolvedValue({ count: 1 });
+    prisma.generatedImage.findFirst.mockResolvedValue({
+      storageKey: 'entities/entity-1/reference.png',
+    });
     prisma.imageGenerationJob.update.mockResolvedValue({});
     imageGeneration.generate.mockResolvedValue({
       buffer: Buffer.from([1, 2]),
@@ -390,8 +394,11 @@ describe('PublishingService', () => {
       width: 512,
       height: 640,
       seed: 42,
-      referenceImageUrl: 'https://ref.example/mara.png',
+      referenceImageUrl: 'https://cdn.example/signed',
     });
+    expect(storage.generatePresignedGetUrl).toHaveBeenCalledWith(
+      'entities/entity-1/reference.png',
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       'https://upload.example/signed',
       expect.objectContaining({ method: 'PUT' }),

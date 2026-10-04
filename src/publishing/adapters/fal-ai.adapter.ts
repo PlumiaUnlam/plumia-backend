@@ -27,7 +27,7 @@ const ASPECT_RATIOS = [
 ] as const;
 
 type FalAspectRatio = (typeof ASPECT_RATIOS)[number] | 'auto';
-type FalResolution = '0.5K' | '1K' | '2K' | '4K';
+type FalResolution = '1K' | '2K' | '4K';
 
 interface FalSubmitResponse {
   request_id?: unknown;
@@ -105,11 +105,15 @@ export class FalAiAdapter implements ImageGeneration {
     };
 
     const modelUrl = `${this.baseUrl.replace(/\/$/, '')}/${model}`;
-    const submit = await this.requestJson<FalSubmitResponse>(modelUrl, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(payload),
-    });
+    const submit = await this.requestJson<FalSubmitResponse>(
+      modelUrl,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(payload),
+      },
+      'enviar la solicitud de generación',
+    );
     const requestId = this.readString(submit.request_id);
     if (!requestId) {
       throw new Error('Fal API error: response did not include request_id');
@@ -125,9 +129,13 @@ export class FalAiAdapter implements ImageGeneration {
     const deadline = Date.now() + this.timeoutMs;
 
     while (Date.now() < deadline) {
-      const status = await this.requestJson<FalStatusResponse>(statusUrl, {
-        headers: this.headers(),
-      });
+      const status = await this.requestJson<FalStatusResponse>(
+        statusUrl,
+        {
+          headers: this.headers(),
+        },
+        'consultar el estado de la generación',
+      );
       const state = this.readString(status.status);
       if (state === 'COMPLETED') {
         break;
@@ -142,22 +150,38 @@ export class FalAiAdapter implements ImageGeneration {
       throw new Error(`Fal API timeout after ${this.timeoutMs / 1000}s`);
     }
 
-    const result = await this.requestJson<FalResultResponse>(resultUrl, {
-      headers: this.headers(),
-    });
+    const result = await this.requestJson<FalResultResponse>(
+      resultUrl,
+      {
+        headers: this.headers(),
+      },
+      'obtener el resultado de la generación',
+    );
     const image = this.readImage(result.images);
-    const imageResponse = await fetchWithTimeout(image.url, {
-      headers: { Accept: 'image/*' },
-      timeoutMs: this.timeoutMs,
-    });
+    let imageResponse: Response;
+    try {
+      imageResponse = await fetchWithTimeout(image.url, {
+        headers: { Accept: 'image/*' },
+        timeoutMs: this.timeoutMs,
+      });
+    } catch (error: unknown) {
+      throw this.networkError('descargar la imagen generada', error);
+    }
     if (!imageResponse.ok) {
       throw new Error(
         `Fal API error: could not download generated image (${imageResponse.status})`,
       );
     }
 
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(await imageResponse.arrayBuffer());
+    } catch (error: unknown) {
+      throw this.networkError('leer la imagen generada', error);
+    }
+
     return {
-      buffer: Buffer.from(await imageResponse.arrayBuffer()),
+      buffer,
       contentType:
         imageResponse.headers.get('content-type') ??
         image.contentType ??
@@ -165,11 +189,20 @@ export class FalAiAdapter implements ImageGeneration {
     };
   }
 
-  private async requestJson<T>(url: string, options: RequestInit): Promise<T> {
-    const response = await fetchWithTimeout(url, {
-      ...options,
-      timeoutMs: this.timeoutMs,
-    });
+  private async requestJson<T>(
+    url: string,
+    options: RequestInit,
+    stage: string,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, {
+        ...options,
+        timeoutMs: this.timeoutMs,
+      });
+    } catch (error: unknown) {
+      throw this.networkError(stage, error);
+    }
     const body = await response.text();
     let parsed: unknown;
     try {
@@ -184,6 +217,17 @@ export class FalAiAdapter implements ImageGeneration {
       );
     }
     return parsed as T;
+  }
+
+  private networkError(stage: string, error: unknown): Error {
+    const message = error instanceof Error ? error.message : String(error);
+    const cause =
+      error instanceof Error && error.cause instanceof Error
+        ? ` (${error.cause.message})`
+        : '';
+    return new Error(`Error de red al ${stage}: ${message}${cause}`, {
+      cause: error,
+    });
   }
 
   private headers(): HeadersInit {
@@ -235,9 +279,6 @@ export class FalAiAdapter implements ImageGeneration {
 
   private resolveResolution(width: number, height: number): FalResolution {
     const longestSide = Math.max(width, height);
-    if (longestSide <= 768) {
-      return '0.5K';
-    }
     if (longestSide <= 1536) {
       return '1K';
     }
