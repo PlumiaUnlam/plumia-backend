@@ -211,6 +211,34 @@ function renderSceneDivider(
       )
       .fillOpacity(0.7)
       .fill(color);
+  } else if (variant === 'dots') {
+    pdf.circle(88, 32, 6).fill(color);
+    pdf.circle(128, 32, 6).fill(color);
+    pdf.circle(168, 32, 6).fill(color);
+  } else if (variant === 'asterisks') {
+    pdf.lineWidth(3);
+    for (const cx of [88, 128, 168]) {
+      pdf.moveTo(cx, 16).lineTo(cx, 48).stroke();
+      pdf
+        .moveTo(cx - 14, 24)
+        .lineTo(cx + 14, 40)
+        .stroke();
+      pdf
+        .moveTo(cx - 14, 40)
+        .lineTo(cx + 14, 24)
+        .stroke();
+    }
+  } else if (variant === 'moon') {
+    pdf
+      .path(
+        'M138 8 C125 12 114 22 114 32 C114 45 125 56 138 56 C118 50 118 14 138 8 Z',
+      )
+      .fill(color);
+    pdf.lineWidth(2.5);
+    pdf.moveTo(80, 20).lineTo(80, 44).stroke();
+    pdf.moveTo(68, 32).lineTo(92, 32).stroke();
+    pdf.moveTo(180, 20).lineTo(180, 44).stroke();
+    pdf.moveTo(168, 32).lineTo(192, 32).stroke();
   } else {
     pdf.path('M8 46 C44 46 80 36 128 28').stroke();
     pdf.path('M248 46 C212 46 176 36 128 28').stroke();

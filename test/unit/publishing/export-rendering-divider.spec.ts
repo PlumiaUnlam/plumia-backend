@@ -6,7 +6,110 @@ import { PdfExportRenderer } from '../../../src/publishing/exports/renderers/pdf
 import { DEFAULT_EXPORT_SETTINGS } from '../../../src/publishing/exports/export-settings.defaults';
 import { prepareExportDocument } from '../../../src/publishing/exports/tiptap-export';
 
+function pdfContentStreams(buffer: Buffer): string {
+  const streamToken = Buffer.from('stream');
+  const endStreamToken = Buffer.from('endstream');
+  const streams: string[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const start = buffer.indexOf(streamToken, offset);
+    if (start === -1) {
+      break;
+    }
+    let dataStart = start + streamToken.length;
+    if (buffer[dataStart] === 0x0d) {
+      dataStart++;
+    }
+    if (buffer[dataStart] === 0x0a) {
+      dataStart++;
+    }
+    const end = buffer.indexOf(endStreamToken, dataStart);
+    if (end === -1) {
+      break;
+    }
+    try {
+      streams.push(
+        inflateSync(buffer.subarray(dataStart, end)).toString('latin1'),
+      );
+    } catch {
+      // Ignore uncompressed or non-content streams.
+    }
+    offset = end + endStreamToken.length;
+  }
+
+  return streams.join('\n');
+}
+
 describe('export scene dividers', () => {
+  it('keeps every divider variant distinct in the PDF renderer', async () => {
+    const variants = [
+      'flourish',
+      'diamonds',
+      'stars',
+      'waves',
+      'dots',
+      'asterisks',
+      'moon',
+    ] as const;
+    const dividerSource = {
+      id: 'book-id',
+      title: 'La obra',
+      chapters: [
+        {
+          id: 'chapter-1',
+          title: 'Capítulo I',
+          scenes: [
+            {
+              id: 'scene-1',
+              title: null,
+              content: {
+                type: 'doc',
+                content: variants.map((variant) => ({
+                  type: 'sceneDivider',
+                  attrs: { variant },
+                })),
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const document = await prepareExportDocument(dividerSource, () =>
+      Promise.reject(new Error('no image expected')),
+    );
+    expect(document.chapters[0]?.scenes[0]?.content).toEqual(
+      variants.map((variant) => ({ kind: 'sceneDivider', variant })),
+    );
+
+    const pdfContents = await Promise.all(
+      variants.map(async (variant) => {
+        const variantDocument = {
+          ...document,
+          chapters: [
+            {
+              ...document.chapters[0]!,
+              scenes: [
+                {
+                  ...document.chapters[0]!.scenes[0]!,
+                  content: [{ kind: 'sceneDivider' as const, variant }],
+                },
+              ],
+            },
+          ],
+        };
+        const rendered = await new PdfExportRenderer().render(
+          variantDocument,
+          DEFAULT_EXPORT_SETTINGS,
+        );
+        return pdfContentStreams(rendered.buffer);
+      }),
+    );
+
+    expect(new Set(pdfContents).size).toBe(variants.length);
+  });
+
   it('preserves the ornamental variant and embeds visual assets', async () => {
     const dividerSource = {
       id: 'book-id',

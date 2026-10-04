@@ -3,6 +3,9 @@ export const SCENE_DIVIDER_VARIANTS = [
   'diamonds',
   'stars',
   'waves',
+  'dots',
+  'asterisks',
+  'moon',
 ] as const;
 
 export type SceneDividerVariant = (typeof SCENE_DIVIDER_VARIANTS)[number];
@@ -73,6 +76,20 @@ const DIVIDER_SVGS: Record<SceneDividerVariant, string> = {
     <path d="M178 36c0 10 6 16 16 20 0-10-6-16-16-20z"/>
     <path d="M164 34c2-10 10-16 20-20-2 10-8 16-20 20z"/>
   ${SVG_SUFFIX}`,
+  dots: `${SVG_PREFIX}
+    <circle cx="88" cy="32" r="6" fill="${SCENE_DIVIDER_COLOR}" stroke="none"/>
+    <circle cx="128" cy="32" r="6" fill="${SCENE_DIVIDER_COLOR}" stroke="none"/>
+    <circle cx="168" cy="32" r="6" fill="${SCENE_DIVIDER_COLOR}" stroke="none"/>
+  ${SVG_SUFFIX}`,
+  asterisks: `${SVG_PREFIX}
+    <path d="M88 16v32M74 24l28 16M74 40l28-16"/>
+    <path d="M128 16v32M114 24l28 16M114 40l28-16"/>
+    <path d="M168 16v32M154 24l28 16M154 40l28-16"/>
+  ${SVG_SUFFIX}`,
+  moon: `${SVG_PREFIX}
+    <path d="M138 8a24 24 0 1 0 0 48c-20-6-20-42 0-48z" fill="${SCENE_DIVIDER_COLOR}" stroke="none"/>
+    <path d="M80 20v24M68 32h24M180 20v24M168 32h24"/>
+  ${SVG_SUFFIX}`,
 };
 
 export function sceneDividerSvg(variant: SceneDividerVariant): string {
@@ -81,7 +98,7 @@ export function sceneDividerSvg(variant: SceneDividerVariant): string {
 
 // Pre-generated transparent PNG fallbacks for Word versions that do not render SVG.
 // The SVG remains the primary image in modern Word documents.
-const DIVIDER_PNG_FALLBACKS: Record<SceneDividerVariant, string> = {
+const DIVIDER_PNG_FALLBACKS: Partial<Record<SceneDividerVariant, string>> = {
   flourish:
     'iVBORw0KGgoAAAANSUhEUgAAAQAAAABACAYAAAAAAAAA9V2pvgAAAZJJREFUeNrt2jGSwjAMBdBcjJNwCO5fQUWZxrFsWXpvhm4HvJL8EweuCwAAAAAAAAAAgHO9X5/v/6Ua0HTzCwFovvmFADTf/EIAmm9+IQDNN78QgOabXwhA880vBMAdADifqjFqnOi21KDG1l21zHL6YhncmB6okjlOedURBPE9UR2zvKxg2d+/2zCrilk+oliuaPPrpho55uvoINi9cEGAeXauvHasw0PLWrXLPsupZifjAqPX5Mlv3fp1nOc6iwpc34qvf6oHQfYadpvp8ueTp2uMGr6OIbCibhG9dtQ+sFCj691xta4eBDvr97TvFWY6/IO73X62f+Kb+P/qdgwLXfuq81qnV7Zkj37v6F/JeQUGmsLtacTopll55RjdyOZOAGjEQP1n/N2sAIhcl7lL9s2SH6/UOwPOPqLoQtFnApp9XtMz3QFweAjY/Gc1PdszAPKEwLIrC7XvHNBfDAggAAABAAgAQAAAAgAQAIAAAAQAIAAAAQAIAEAAAAIAEACAAAAEACAAAAAAAAAAAAC48wNayI7qAAAAAITjMTwAAAAASUVORAAAAACuQmCC',
   diamonds:
@@ -93,8 +110,13 @@ const DIVIDER_PNG_FALLBACKS: Record<SceneDividerVariant, string> = {
 };
 
 export function sceneDividerPngFallback(variant: SceneDividerVariant): Buffer {
-  return Buffer.from(
-    DIVIDER_PNG_FALLBACKS[normalizeSceneDividerVariant(variant)],
-    'base64',
-  );
+  const normalized = normalizeSceneDividerVariant(variant);
+  // The SVG is the primary image for the new variants. Older Word versions
+  // receive the existing flourish fallback when they cannot render SVG.
+  const encoded =
+    DIVIDER_PNG_FALLBACKS[normalized] ?? DIVIDER_PNG_FALLBACKS.flourish;
+  if (!encoded) {
+    throw new Error('Missing scene divider PNG fallback');
+  }
+  return Buffer.from(encoded, 'base64');
 }
