@@ -12,10 +12,10 @@ declare module 'epub-gen' {
     publisher?: string;
     lang?: string;
     tocTitle?: string;
+    appendChapterTitles?: boolean;
     version?: 2 | 3;
     css?: string;
     tempDir?: string;
-    appendChapterTitles?: boolean;
     content: EpubChapter[];
   }
 

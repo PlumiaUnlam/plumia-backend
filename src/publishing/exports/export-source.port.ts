@@ -6,6 +6,7 @@ export interface ExportSourceRecord {
   id: string;
   title: string;
   chapters: Array<{
+    id: string;
     title: string;
     scenes: Array<{
       id: string;
