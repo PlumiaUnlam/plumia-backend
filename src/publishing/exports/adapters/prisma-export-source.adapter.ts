@@ -13,6 +13,7 @@ const exportSourceSelect = {
     where: { deletedAt: null },
     orderBy: { sortKey: 'asc' },
     select: {
+      id: true,
       title: true,
       scenes: {
         where: { deletedAt: null },
