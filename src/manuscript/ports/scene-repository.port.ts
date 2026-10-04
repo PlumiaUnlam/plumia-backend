@@ -43,6 +43,7 @@ export interface UpdateSceneContentData {
 export interface SceneContentUpdateResult {
   scene: SceneRecord;
   contentChanged: boolean;
+  previousWordCount: number;
 }
 
 export interface SceneVersionRecord {

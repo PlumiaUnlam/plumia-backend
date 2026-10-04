@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { AnalyticsService } from '../../analytics/analytics.service';
 import { CreateSceneDto } from '../dto/scenes/create-scene.dto';
 import { CreateSceneVersionDto } from '../dto/scenes/create-scene-version.dto';
 import { UpdateSceneVersionDto } from '../dto/scenes/update-scene-version.dto';
@@ -19,6 +20,7 @@ export class SceneService {
   constructor(
     @Inject(SCENE_REPOSITORY)
     private readonly sceneRepository: SceneRepository,
+    private readonly analyticsService: AnalyticsService,
   ) {}
 
   async create(
@@ -86,6 +88,15 @@ export class SceneService {
 
     if (!result) {
       throw new NotFoundException('Scene not found');
+    }
+
+    if (result.contentChanged) {
+      await this.analyticsService.recordSceneSave({
+        userId,
+        sceneId,
+        previousWordCount: result.previousWordCount,
+        currentWordCount: result.scene.wordCount,
+      });
     }
 
     return result;

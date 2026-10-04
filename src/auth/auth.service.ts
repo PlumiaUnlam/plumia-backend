@@ -1,10 +1,12 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { type User } from '@prisma/client';
 import { UserService } from '../user/user.service';
 import { FirebaseAdminService } from './firebase-admin.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly userService: UserService,
     private readonly firebaseAdmin: FirebaseAdminService,
@@ -14,7 +16,12 @@ export class AuthService {
     let decoded;
     try {
       decoded = await this.firebaseAdmin.verifyToken(idToken);
-    } catch {
+    } catch (error) {
+      const code = firebaseErrorCode(error);
+      const message = firebaseErrorMessage(error);
+      this.logger.warn(
+        `Firebase ID token rejected${code ? ` (${code})` : ''}${message ? `: ${message}` : ''}`,
+      );
       throw new UnauthorizedException('Invalid or expired token');
     }
 
@@ -48,4 +55,41 @@ export class AuthService {
       avatarUrl: firebaseUser.picture ?? null,
     });
   }
+
+  async resolveExistingUserId(firebaseUser: {
+    uid: string;
+    email?: string;
+  }): Promise<string> {
+    const existing = await this.userService.findById(firebaseUser.uid);
+    if (existing) {
+      return existing.id;
+    }
+
+    if (firebaseUser.email) {
+      const existingByEmail = await this.userService.findByEmail(
+        firebaseUser.email,
+      );
+      if (existingByEmail) {
+        return existingByEmail.id;
+      }
+    }
+
+    return firebaseUser.uid;
+  }
+}
+
+function firebaseErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return null;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+function firebaseErrorMessage(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('message' in error)) {
+    return null;
+  }
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : null;
 }

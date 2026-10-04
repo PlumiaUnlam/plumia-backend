@@ -34,11 +34,17 @@ export const STORAGE_FOLDERS = [
   'entities',
   'scenes',
   'storyboard-audio',
+  'profiles',
 ] as const;
 export type StorageFolder = (typeof STORAGE_FOLDERS)[number];
 
 export function normalizeContentType(contentType: string): string {
   return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+}
+
+export interface PresignedGetUrlOptions {
+  responseContentType?: string;
+  downloadName?: string;
 }
 
 @Injectable()
@@ -124,13 +130,58 @@ export class StorageService {
     return imageUrl.slice(idx + prefix.length);
   }
 
-  async generatePresignedGetUrl(key: string): Promise<string> {
+  async generatePresignedGetUrl(
+    key: string,
+    options: PresignedGetUrlOptions = {},
+  ): Promise<string> {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
+      ...(options.responseContentType
+        ? { ResponseContentType: options.responseContentType }
+        : {}),
+      ...(options.downloadName
+        ? {
+            ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(options.downloadName)}`,
+          }
+        : {}),
     });
 
     return getSignedUrl(this.s3, command, { expiresIn: 900 });
+  }
+
+  async putBuffer(
+    key: string,
+    body: Uint8Array,
+    contentType: string,
+    contentDisposition?: string,
+  ): Promise<void> {
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ...(contentDisposition
+          ? { ContentDisposition: contentDisposition }
+          : {}),
+      }),
+    );
+  }
+
+  async getBuffer(key: string): Promise<Buffer> {
+    const result = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      }),
+    );
+
+    if (!result.Body) {
+      throw new Error(`Storage object ${key} has no body`);
+    }
+
+    return Buffer.from(await result.Body.transformToByteArray());
   }
 
   async headFile(key: string): Promise<boolean> {

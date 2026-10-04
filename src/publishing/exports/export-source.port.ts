@@ -1,0 +1,24 @@
+import type { Prisma } from '@prisma/client';
+
+export const EXPORT_SOURCE = Symbol('EXPORT_SOURCE');
+
+export interface ExportSourceRecord {
+  id: string;
+  title: string;
+  chapters: Array<{
+    id: string;
+    title: string;
+    scenes: Array<{
+      id: string;
+      title: string | null;
+      content: Prisma.JsonValue | null;
+    }>;
+  }>;
+}
+
+export interface ExportSourceRepository {
+  findByIdForUser(
+    userId: string,
+    bookId: string,
+  ): Promise<ExportSourceRecord | null>;
+}

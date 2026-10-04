@@ -202,6 +202,7 @@ export class PrismaSceneRepository implements SceneRepository {
           return {
             scene: this.toSceneRecord(existing),
             contentChanged: false,
+            previousWordCount: existing.wordCount,
           };
         }
 
@@ -244,6 +245,7 @@ export class PrismaSceneRepository implements SceneRepository {
         return {
           scene: this.toSceneRecord(scene),
           contentChanged: true,
+          previousWordCount: existing.wordCount,
         };
       });
     } catch (error: unknown) {
@@ -576,6 +578,15 @@ export class PrismaSceneRepository implements SceneRepository {
           return null;
         }
 
+        const existingScene = await tx.scene.findUnique({
+          where: { id: sceneId },
+          select: { wordCount: true },
+        });
+
+        if (!existingScene) {
+          return null;
+        }
+
         const scene = await tx.scene.update({
           where: { id: sceneId },
           data: {
@@ -629,6 +640,7 @@ export class PrismaSceneRepository implements SceneRepository {
         return {
           scene: this.toSceneRecord(scene),
           contentChanged: true,
+          previousWordCount: existingScene.wordCount,
         };
       });
     } catch (error: unknown) {
@@ -760,23 +772,26 @@ export class PrismaSceneRepository implements SceneRepository {
       existing.map((chunk) => [chunk.chunkIndex, chunk] as const),
     );
     const seenIndices = new Set<number>();
+    const writes: Promise<unknown>[] = [];
 
     for (const plan of plans) {
       seenIndices.add(plan.chunkIndex);
       const current = existingByIndex.get(plan.chunkIndex);
 
       if (!current) {
-        await tx.chunk.create({
-          data: {
-            projectId,
-            sceneId,
-            content: plan.content,
-            tokenCount: plan.tokenCount,
-            chunkIndex: plan.chunkIndex,
-            contentHash: plan.contentHash,
-            isDirty: options.markDirty,
-          },
-        });
+        writes.push(
+          tx.chunk.create({
+            data: {
+              projectId,
+              sceneId,
+              content: plan.content,
+              tokenCount: plan.tokenCount,
+              chunkIndex: plan.chunkIndex,
+              contentHash: plan.contentHash,
+              isDirty: options.markDirty,
+            },
+          }),
+        );
         continue;
       }
 
@@ -784,17 +799,21 @@ export class PrismaSceneRepository implements SceneRepository {
         current.contentHash !== plan.contentHash ||
         current.content !== plan.content;
       if (hasChanged) {
-        await tx.chunk.update({
-          where: { id: current.id },
-          data: {
-            content: plan.content,
-            tokenCount: plan.tokenCount,
-            contentHash: plan.contentHash,
-            isDirty: options.markDirty,
-          },
-        });
+        writes.push(
+          tx.chunk.update({
+            where: { id: current.id },
+            data: {
+              content: plan.content,
+              tokenCount: plan.tokenCount,
+              contentHash: plan.contentHash,
+              isDirty: options.markDirty,
+            },
+          }),
+        );
       }
     }
+
+    await Promise.all(writes);
 
     const staleChunkIds = existing
       .filter((chunk) => !seenIndices.has(chunk.chunkIndex))

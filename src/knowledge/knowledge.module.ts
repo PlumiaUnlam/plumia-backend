@@ -11,7 +11,6 @@ import { TimelineController } from './controllers/timeline.controller';
 import { EntityStatesController } from './controllers/entity-states.controller';
 import { EntityStateProposalsController } from './controllers/entity-state-proposals.controller';
 import { TemporalViewController } from './controllers/temporal-view.controller';
-import { KnowledgeController } from './knowledge.controller';
 import { KnowledgeService } from './knowledge.service';
 import { EntityProposalService } from './services/entity-proposal.service';
 import { RelationshipProposalService } from './services/relationship-proposal.service';
@@ -25,7 +24,6 @@ import { AuditModule } from '../audit/audit.module';
 @Module({
   imports: [AuditModule],
   controllers: [
-    KnowledgeController,
     EntitiesController,
     EntityProposalsController,
     RelationshipProposalsController,

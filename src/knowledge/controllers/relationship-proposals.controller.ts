@@ -1,5 +1,6 @@
 import {
   Controller,
+  Body,
   Delete,
   Get,
   Param,
@@ -11,7 +12,6 @@ import { RelationshipProposalService } from '../services/relationship-proposal.s
 import { RelationshipProposalResponseDto } from '../dto/responses/relationship-proposal-response.dto';
 import { RelationshipResponseDto } from '../dto/responses/relationship-response.dto';
 import type { AuthenticatedRequest } from './authenticated-request';
-import { Body } from '@nestjs/common';
 import { RelationshipProposalOverrideDto } from '../dto/relationship-proposal-override.dto';
 
 @Controller('v1')

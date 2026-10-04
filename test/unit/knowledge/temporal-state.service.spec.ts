@@ -112,6 +112,7 @@ describe('TemporalStateService', () => {
   ]);
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
   });
 
