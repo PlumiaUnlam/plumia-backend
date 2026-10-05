@@ -57,12 +57,7 @@ export class FalAiAdapter implements ImageGeneration {
   constructor(private readonly config: ConfigService) {
     const configuredApiKey = this.config.get<string>('FAL_API_KEY')?.trim();
     const legacyApiKey = this.config.get<string>('FAL_KEY')?.trim();
-    this.apiKey =
-      configuredApiKey && configuredApiKey.length > 0
-        ? configuredApiKey
-        : legacyApiKey && legacyApiKey.length > 0
-          ? legacyApiKey
-          : null;
+    this.apiKey = this.resolveApiKey(configuredApiKey, legacyApiKey);
     this.baseUrl = this.config.get<string>('FAL_BASE_URL', DEFAULT_BASE_URL);
     this.defaultModel = this.config.get<string>(
       'FAL_IMAGE_MODEL',
@@ -128,23 +123,7 @@ export class FalAiAdapter implements ImageGeneration {
       `${modelUrl}/requests/${encodeURIComponent(requestId)}/response`;
     const deadline = Date.now() + this.timeoutMs;
 
-    while (Date.now() < deadline) {
-      const status = await this.requestJson<FalStatusResponse>(
-        statusUrl,
-        {
-          headers: this.headers(),
-        },
-        'consultar el estado de la generación',
-      );
-      const state = this.readString(status.status);
-      if (state === 'COMPLETED') {
-        break;
-      }
-      if (state === 'FAILED' || state === 'CANCELED' || state === 'CANCELLED') {
-        throw new Error(`Fal API error: request ${state.toLowerCase()}`);
-      }
-      await this.sleep(this.pollIntervalMs);
-    }
+    await this.pollUntilComplete(statusUrl, deadline);
 
     if (Date.now() >= deadline) {
       throw new Error(`Fal API timeout after ${this.timeoutMs / 1000}s`);
@@ -212,11 +191,52 @@ export class FalAiAdapter implements ImageGeneration {
     }
     if (!response.ok) {
       const detail = body.replace(/\s+/g, ' ').trim().slice(0, 300);
+      const detailSuffix = detail ? ` - ${detail}` : '';
       throw new Error(
-        `Fal API error: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`,
+        `Fal API error: ${response.status} ${response.statusText}${detailSuffix}`,
       );
     }
     return parsed as T;
+  }
+
+  private resolveApiKey(
+    configuredApiKey: string | undefined,
+    legacyApiKey: string | undefined,
+  ): string | null {
+    if (configuredApiKey && configuredApiKey.length > 0) {
+      return configuredApiKey;
+    }
+    if (legacyApiKey && legacyApiKey.length > 0) {
+      return legacyApiKey;
+    }
+    return null;
+  }
+
+  private async pollUntilComplete(
+    statusUrl: string,
+    deadline: number,
+  ): Promise<void> {
+    if (Date.now() >= deadline) {
+      return;
+    }
+
+    const status = await this.requestJson<FalStatusResponse>(
+      statusUrl,
+      {
+        headers: this.headers(),
+      },
+      'consultar el estado de la generación',
+    );
+    const state = this.readString(status.status);
+    if (state === 'COMPLETED') {
+      return;
+    }
+    if (state === 'FAILED' || state === 'CANCELED' || state === 'CANCELLED') {
+      throw new Error(`Fal API error: request ${state.toLowerCase()}`);
+    }
+
+    await this.sleep(this.pollIntervalMs);
+    return this.pollUntilComplete(statusUrl, deadline);
   }
 
   private networkError(stage: string, error: unknown): Error {

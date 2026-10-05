@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
+import { extractCharacterVisualDescription } from './character-visual-description';
 
 export const MIME_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -328,22 +329,6 @@ function serializeRelevantAttributes(
       ([key, label]) => `${label}: ${serializeAttributeValue(attributes[key])}`,
     )
     .join(', ');
-}
-
-function extractCharacterVisualDescription(description: string | null): string {
-  if (!description?.trim()) {
-    return '';
-  }
-
-  const patterns = [
-    /\b(?:ojos?|mirada|cabello|pelo|piel|tono de piel|complexión|estatura|altura|rostro|cara|barba|bigote|pecas|canas|cicatrices?|vestimenta|ropa)\b(?:\s+(?:de|color|muy))?(?:\s+(?!y\b|pero\b|aunque\b|es\b|tiene\b|conoce\b)[\p{L}\p{M}\d-]+){1,3}/giu,
-    /\b(?:viste|lleva)\s+(?:un[oa]s?\s+)?[\p{L}\p{M}\d-]+(?:\s+(?!y\b|pero\b|aunque\b|es\b|tiene\b|conoce\b)[\p{L}\p{M}\d-]+){0,3}/giu,
-    /\b(?:es|mide)\s+(?:alto|alta|bajo|baja|delgado|delgada|robusto|robusta|musculoso|musculosa|\d+(?:[,.]\d+)?\s*(?:cm|m))\b/giu,
-  ];
-  const matches = patterns.flatMap((pattern) =>
-    [...description.matchAll(pattern)].map((match) => match[0].trim()),
-  );
-  return [...new Set(matches)].join(', ');
 }
 
 function isCoveredBy(text: string, source: string): boolean {
