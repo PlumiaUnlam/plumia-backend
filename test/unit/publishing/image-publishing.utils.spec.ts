@@ -4,13 +4,18 @@ import {
 } from '../../../src/publishing/image-publishing.utils';
 
 describe('image publishing prompts', () => {
-  it('includes stable identity data and requested variant changes', () => {
+  it('prioritizes visual identity, relevant attributes and requested changes for a character', () => {
     const prompt = buildSpanishPrompt(
       {
         canonicalName: 'Maren Solís',
         type: 'CHARACTER',
         description: 'Cabello negro y una cicatriz en la ceja.',
-        attributes: { eyes: 'green', age: 29 },
+        attributes: {
+          visualIdentity: 'Cabello negro y una cicatriz en la ceja.',
+          appearance: 'Ojos verdes',
+          age: 29,
+          internalNote: 'No enviar al proveedor',
+        },
       },
       {
         expression: 'sonriente',
@@ -20,14 +25,17 @@ describe('image publishing prompts', () => {
     );
 
     expect(prompt).toContain('Maren Solís');
-    expect(prompt).toContain('La referencia visual y los rasgos de identidad');
     expect(prompt).toContain(
-      'Rasgos y datos de identidad de la ficha: age: 29, eyes: green',
+      'Identidad visual de la ficha: Cabello negro y una cicatriz en la ceja.',
+    );
+    expect(prompt).toContain(
+      'Datos relevantes de la ficha: apariencia: Ojos verdes, edad: 29',
     );
     expect(prompt).toContain('expresión: sonriente');
     expect(prompt).toContain('instrucción adicional: conservar la cicatriz');
-    expect(prompt).toContain('Generar una variante nueva');
-    expect(prompt).toContain('Sin texto');
+    expect(prompt).toContain('Crear una variante nueva');
+    expect(prompt).not.toContain('No enviar al proveedor');
+    expect(prompt).not.toContain('estilo realista');
   });
 
   it('uses visual instruction labels that match the entity type', () => {
@@ -58,7 +66,7 @@ describe('image publishing prompts', () => {
         type: 'LOCATION',
         description: 'Una fortaleza sobre la montaña.',
       }),
-    ).toContain('Ilustración realista de un lugar');
+    ).toContain('Crear una representación visual del lugar Torre del Norte');
   });
 
   it('includes the visual identity profile in preview prompts', () => {
@@ -72,7 +80,88 @@ describe('image publishing prompts', () => {
     });
 
     expect(prompt).toContain(
-      'visualIdentity: Cabello negro, ojos verdes y una cicatriz en la ceja.',
+      'Identidad visual de la ficha: Cabello negro, ojos verdes y una cicatriz en la ceja.',
     );
+    expect(prompt).not.toContain('Archivista del valle');
+  });
+
+  it('sends only described physical traits for characters, not personality or plot', () => {
+    const prompt = buildSpanishPromptFromData({
+      name: 'Maren Solís',
+      type: 'CHARACTER',
+      description:
+        'Archivista paciente. Tiene ojos verdes y cabello negro. Conoce los documentos censurados del valle.',
+      attributes: {
+        personality: 'reservada',
+        motivations: 'proteger el archivo',
+        eyes: 'verdes',
+      },
+    });
+
+    expect(prompt).toContain(
+      'Rasgos físicos descritos: ojos verdes, cabello negro',
+    );
+    expect(prompt).not.toMatch(
+      /paciente|reservada|proteger el archivo|documentos censurados|archivista/i,
+    );
+    expect(prompt).not.toContain('personalidad');
+  });
+
+  it('adds image-specific visual adjustments while retaining the ficha identity once', () => {
+    const prompt = buildSpanishPrompt(
+      {
+        canonicalName: 'Maren Solís',
+        type: 'CHARACTER',
+        description: 'Tiene ojos verdes.',
+        attributes: { visualIdentity: 'Ojos verdes y cabello negro.' },
+      },
+      {},
+      undefined,
+      { visualIdentity: 'Llevar un abrigo rojo.' },
+    );
+
+    expect(prompt).toContain(
+      'Identidad visual de la ficha: Ojos verdes y cabello negro.',
+    );
+    expect(prompt).toContain(
+      'Ajuste visual para esta imagen: Llevar un abrigo rojo.',
+    );
+    expect(prompt).not.toContain('Rasgos físicos descritos: ojos verdes');
+  });
+
+  it('distingue una primera imagen y omite rasgos de rostro en entidades no humanas', () => {
+    const initial = buildSpanishPromptFromData({
+      name: 'Círculo de Sal',
+      type: 'ORGANIZATION',
+      description: 'Una organización de navegantes.',
+      attributes: {
+        emblem: 'Un círculo blanco sobre fondo azul.',
+        colors: ['azul', 'blanco'],
+        privateNote: 'dato interno',
+      },
+    });
+    const variant = buildSpanishPrompt(
+      {
+        canonicalName: 'Círculo de Sal',
+        type: 'ORGANIZATION',
+        description: 'Una organización de navegantes.',
+        attributes: { emblem: 'Un círculo blanco sobre fondo azul.' },
+      },
+      {},
+      undefined,
+      { generationMode: 'variant' },
+    );
+
+    expect(initial).toContain(
+      'Crear un emblema o una representación de la organización Círculo de Sal',
+    );
+    expect(initial).toContain(
+      'Datos relevantes de la ficha: emblema: Un círculo blanco sobre fondo azul., colores: azul, blanco',
+    );
+    expect(initial).toContain('Crear la imagen base de la entidad');
+    expect(initial).not.toContain('dato interno');
+    expect(initial).not.toContain('rostro');
+    expect(initial).not.toContain('cabello');
+    expect(variant).toContain('Crear una variante nueva');
   });
 });

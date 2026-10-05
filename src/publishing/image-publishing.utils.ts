@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
+import { extractCharacterVisualDescription } from './character-visual-description';
 
 export const MIME_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -14,13 +15,82 @@ export function createImageSeed(): number {
   return randomInt(0, MAX_IMAGE_SEED);
 }
 
-const TYPE_TO_SPANISH: Record<string, { noun: string; article: string }> = {
-  CHARACTER: { noun: 'personaje', article: 'un' },
-  LOCATION: { noun: 'lugar', article: 'un' },
-  OBJECT: { noun: 'objeto', article: 'un' },
-  ORGANIZATION: { noun: 'organización', article: 'una' },
-  EVENT: { noun: 'evento', article: 'un' },
-  CONCEPT: { noun: 'concepto', article: 'un' },
+const TYPE_TO_SPANISH: Record<string, { noun: string }> = {
+  CHARACTER: { noun: 'personaje' },
+  LOCATION: { noun: 'lugar' },
+  OBJECT: { noun: 'objeto' },
+  ORGANIZATION: { noun: 'organización' },
+  EVENT: { noun: 'evento' },
+  CONCEPT: { noun: 'concepto' },
+};
+
+const TYPE_TO_IMAGE_SUBJECT: Record<string, string> = {
+  CHARACTER: 'un retrato o una representación del personaje',
+  LOCATION: 'una representación visual del lugar',
+  OBJECT: 'una representación visual del objeto',
+  ORGANIZATION: 'un emblema o una representación de la organización',
+  EVENT: 'una escena que represente el evento',
+  CONCEPT: 'un símbolo o una representación del concepto',
+};
+
+const PROMPT_ATTRIBUTE_LABELS: Record<string, Record<string, string>> = {
+  CHARACTER: {
+    appearance: 'apariencia',
+    physicalDescription: 'descripción física',
+    hair: 'cabello',
+    hairColor: 'color de cabello',
+    eyes: 'ojos',
+    eyeColor: 'color de ojos',
+    skin: 'piel',
+    skinTone: 'tono de piel',
+    height: 'estatura',
+    build: 'complexión',
+    distinctiveFeatures: 'rasgos distintivos',
+    clothing: 'vestimenta',
+    role: 'rol',
+    occupation: 'ocupación',
+    age: 'edad',
+    species: 'especie',
+  },
+  LOCATION: {
+    terrain: 'terreno',
+    architecture: 'arquitectura',
+    landmarks: 'lugares reconocibles',
+    climate: 'clima',
+    region: 'región',
+    atmosphere: 'atmósfera',
+  },
+  OBJECT: {
+    shape: 'forma',
+    form: 'forma',
+    material: 'material',
+    markings: 'marcas',
+    color: 'color',
+    size: 'tamaño',
+    function: 'función',
+  },
+  ORGANIZATION: {
+    emblem: 'emblema',
+    colors: 'colores',
+    symbols: 'símbolos',
+    purpose: 'propósito',
+    structure: 'estructura',
+  },
+  EVENT: {
+    place: 'lugar',
+    location: 'lugar',
+    participants: 'participantes',
+    date: 'fecha',
+    temporalLabel: 'período',
+    consequences: 'consecuencias',
+  },
+  CONCEPT: {
+    definition: 'definición',
+    symbol: 'símbolo',
+    representation: 'representación',
+    meaning: 'significado',
+    origin: 'origen',
+  },
 };
 
 const GENERIC_INSTRUCTION_LABELS: Record<string, string> = {
@@ -69,7 +139,10 @@ export function toUserFriendlyError(err: unknown): never {
         HttpStatus.GATEWAY_TIMEOUT,
       );
     }
-    if (err.message.includes('Pollinations API error')) {
+    if (
+      err.message.includes('Pollinations API error') ||
+      err.message.includes('Fal API error')
+    ) {
       throw new HttpException(
         'El servicio de generación de imágenes no está disponible en este momento.',
         HttpStatus.BAD_GATEWAY,
@@ -124,6 +197,8 @@ export function buildSpanishPromptFromData(data: {
       attributes: data.attributes,
     },
     {},
+    undefined,
+    { generationMode: 'initial' },
   );
 }
 
@@ -136,22 +211,59 @@ export function buildSpanishPrompt(
   },
   instructions: Record<string, string>,
   customPrompt?: string,
+  options: {
+    generationMode?: 'initial' | 'variant';
+    visualIdentity?: string;
+  } = {},
 ): string {
-  const { noun, article } = TYPE_TO_SPANISH[entity.type] ?? {
+  const { noun } = TYPE_TO_SPANISH[entity.type] ?? {
     noun: 'entidad',
-    article: 'una',
   };
-  const parts: string[] = [
-    `Ilustración realista de ${article} ${noun} llamado ${entity.canonicalName}`,
-    'La referencia visual y los rasgos de identidad de la ficha tienen prioridad sobre el nombre de la entidad',
-    'Conservar el rostro, la estructura facial, el color y estilo del cabello, los ojos, el tono de piel, la edad aparente, la complexión y los rasgos distintivos',
-  ];
-  if (entity.description) {
-    parts.push(entity.description);
+  const mode = options.generationMode ?? 'variant';
+  const subject =
+    TYPE_TO_IMAGE_SUBJECT[entity.type] ??
+    `una representación visual de ${noun}`;
+  const parts: string[] = [`Crear ${subject} ${entity.canonicalName}`];
+  const visualIdentity = getVisualIdentity(entity.attributes);
+  const visualIdentityOverride = options.visualIdentity?.trim();
+  if (visualIdentity) {
+    parts.push(`Identidad visual de la ficha: ${visualIdentity}`);
   }
-  const attributes = serializeAttributes(entity.attributes);
+  if (
+    visualIdentityOverride &&
+    !isCoveredBy(visualIdentityOverride, visualIdentity)
+  ) {
+    parts.push(`Ajuste visual para esta imagen: ${visualIdentityOverride}`);
+  }
+  const visualDescription =
+    entity.type === 'CHARACTER'
+      ? extractCharacterVisualDescription(entity.description)
+      : (entity.description?.trim() ?? '');
+  const uncoveredVisualDescription =
+    entity.type === 'CHARACTER'
+      ? visualDescription
+          .split(',')
+          .map((detail) => detail.trim())
+          .filter((detail) => !isCoveredBy(detail, visualIdentity))
+          .join(', ')
+      : visualDescription;
+  if (
+    uncoveredVisualDescription &&
+    !isCoveredBy(uncoveredVisualDescription, visualIdentity)
+  ) {
+    parts.push(
+      entity.type === 'CHARACTER'
+        ? `Rasgos físicos descritos: ${uncoveredVisualDescription}`
+        : `Descripción de la ficha: ${uncoveredVisualDescription}`,
+    );
+  }
+  const attributes = serializeRelevantAttributes(
+    entity.type,
+    entity.attributes,
+    [visualIdentity, visualDescription],
+  );
   if (attributes) {
-    parts.push(`Rasgos y datos de identidad de la ficha: ${attributes}`);
+    parts.push(`Datos relevantes de la ficha: ${attributes}`);
   }
   const requestedChanges = Object.entries(instructions).map(
     ([key, value]) => `${getInstructionLabel(entity.type, key)}: ${value}`,
@@ -161,12 +273,20 @@ export function buildSpanishPrompt(
   }
   if (requestedChanges.length > 0) {
     parts.push(
-      `Cambios solicitados para esta variante (aplicar sin cambiar la identidad): ${requestedChanges.join('. ')}`,
+      `Cambios solicitados para esta imagen: ${requestedChanges.join('. ')}`,
+    );
+  }
+  if (mode === 'variant') {
+    parts.push(
+      'Crear una variante nueva y mantener reconocibles los datos estables descritos en la ficha y en la imagen de referencia, si existe',
+    );
+  } else {
+    parts.push(
+      'Crear la imagen base de la entidad a partir de los datos disponibles, sin asumir una referencia visual inexistente',
     );
   }
   parts.push(
-    'Generar una variante nueva: cambiar composición, pose, encuadre, fondo o iluminación cuando corresponda; no copiar exactamente la composición de la referencia salvo que se solicite explícitamente',
-    'Sin texto, sin letras, sin palabras, sin tipografía, sin escritura sobre la imagen. Estilo realista, alta calidad',
+    'No añadir palabras, tipografía ni marcas de agua salvo que se soliciten explícitamente',
   );
   return parts.join('. ');
 }
@@ -179,19 +299,77 @@ function getInstructionLabel(entityType: string, key: string): string {
   );
 }
 
-function serializeAttributes(attributes: unknown): string {
+function getVisualIdentity(attributes: unknown): string {
   if (!isRecord(attributes)) {
     return '';
   }
-  return Object.entries(attributes)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}: ${serializeAttributeValue(value)}`)
+  const visualIdentity = attributes['visualIdentity'];
+  return typeof visualIdentity === 'string' ? visualIdentity.trim() : '';
+}
+
+function serializeRelevantAttributes(
+  type: string,
+  attributes: unknown,
+  existingVisualText: string[] = [],
+): string {
+  if (!isRecord(attributes)) {
+    return '';
+  }
+  const labels = PROMPT_ATTRIBUTE_LABELS[type] ?? {};
+  return Object.entries(labels)
+    .filter(
+      ([key]) =>
+        key !== 'visualIdentity' &&
+        isDisplayValue(attributes[key]) &&
+        !existingVisualText.some((text) =>
+          isCoveredBy(serializeAttributeValue(attributes[key]), text),
+        ),
+    )
+    .map(
+      ([key, label]) => `${label}: ${serializeAttributeValue(attributes[key])}`,
+    )
     .join(', ');
+}
+
+function isCoveredBy(text: string, source: string): boolean {
+  const normalize = (value: string): string =>
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const normalizedText = normalize(text);
+  const significantWords = normalizedText
+    .split(' ')
+    .filter(
+      (word) =>
+        word.length > 2 && !['una', 'unos', 'con', 'sobre'].includes(word),
+    );
+  const normalizedSource = normalize(source);
+  return (
+    normalizedText.length > 4 &&
+    (normalizedSource.includes(normalizedText) ||
+      (significantWords.length > 0 &&
+        significantWords.every((word) => normalizedSource.includes(word))))
+  );
+}
+
+function isDisplayValue(value: unknown): boolean {
+  return (
+    value !== null &&
+    value !== undefined &&
+    serializeAttributeValue(value).trim() !== ''
+  );
 }
 
 function serializeAttributeValue(value: unknown): string {
   if (typeof value === 'string') {
     return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(serializeAttributeValue).filter(Boolean).join(', ');
   }
   if (value === null) {
     return 'sin especificar';

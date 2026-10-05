@@ -6,6 +6,7 @@ import {
   Max,
   IsUUID,
   MaxLength,
+  IsBoolean,
 } from 'class-validator';
 
 export class GenerateImageDto {
@@ -20,6 +21,15 @@ export class GenerateImageDto {
   @IsOptional()
   @IsUUID()
   referenceImageId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  skipReferenceImage?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  visualIdentity?: string;
 
   @IsOptional()
   @IsString()

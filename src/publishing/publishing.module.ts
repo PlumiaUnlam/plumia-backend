@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
 import { StorageModule } from '../storage/storage.module';
 import { PublishingController } from './publishing.controller';
 import { PublishingService } from './publishing.service';
+import { FalAiAdapter } from './adapters/fal-ai.adapter';
 import { PollinationsAdapter } from './adapters/pollinations.adapter';
 import { IMAGE_GENERATION } from './ports/image-generation.port';
 import { IMAGE_GENERATION_QUEUE } from './ports/image-generation-queue.port';
@@ -44,7 +46,15 @@ import { ExportWorkersService } from './exports/workers/export-workers.service';
     EpubExportRenderer,
     ExportOutboxPoller,
     ExportWorkersService,
-    { provide: IMAGE_GENERATION, useClass: PollinationsAdapter },
+    {
+      provide: IMAGE_GENERATION,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) =>
+        config.get<string>('IMAGE_PROVIDER', 'fal').toLowerCase() ===
+        'pollinations'
+          ? new PollinationsAdapter(config)
+          : new FalAiAdapter(config),
+    },
     ImageGenerationOutboxPoller,
     ImageGenerationWorkersService,
     ImageGenerationEventsService,
