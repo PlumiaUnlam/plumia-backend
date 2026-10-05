@@ -66,7 +66,9 @@ function matchesAnchor(
   start: number,
 ): number {
   for (const anchor of VISUAL_ANCHORS) {
-    if (start + anchor.length > tokens.length) continue;
+    if (start + anchor.length > tokens.length) {
+      continue;
+    }
 
     let matches = true;
     for (let offset = 0; offset < anchor.length; offset += 1) {
@@ -75,7 +77,9 @@ function matchesAnchor(
         matches = false;
         break;
       }
-      if (offset === 0) continue;
+      if (offset === 0) {
+        continue;
+      }
 
       const previous = tokens[start + offset - 1];
       if (!previous || !hasWhitespaceBetween(description, previous, token)) {
@@ -84,7 +88,9 @@ function matchesAnchor(
       }
     }
 
-    if (matches) return anchor.length;
+    if (matches) {
+      return anchor.length;
+    }
   }
   return 0;
 }
@@ -118,7 +124,9 @@ function wordsAfterAnchor(
   }
 
   const valueToken = tokens[valueStart];
-  if (!valueToken || STOP_WORDS.has(valueToken.value)) return null;
+  if (!valueToken || STOP_WORDS.has(valueToken.value)) {
+    return null;
+  }
 
   let lastIndex = valueStart;
   let count = 1;
@@ -139,7 +147,9 @@ function wordsAfterAnchor(
 
   const first = tokens[anchorStart];
   const last = tokens[lastIndex];
-  if (!first || !last) return null;
+  if (!first || !last) {
+    return null;
+  }
   return {
     text: description.slice(first.start, last.end).trim(),
     lastIndex,
@@ -153,10 +163,14 @@ function extractAnchoredTraits(
   const matches: string[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const anchorLength = matchesAnchor(description, tokens, index);
-    if (!anchorLength) continue;
+    if (!anchorLength) {
+      continue;
+    }
 
     const match = wordsAfterAnchor(description, tokens, index, anchorLength);
-    if (!match) continue;
+    if (!match) {
+      continue;
+    }
     matches.push(match.text);
     index = match.lastIndex;
   }
@@ -207,7 +221,9 @@ function wordsAfterClothingVerb(
 
   const first = tokens[verbIndex];
   const last = tokens[lastIndex];
-  if (!first || !last) return null;
+  if (!first || !last) {
+    return null;
+  }
   return {
     text: description.slice(first.start, last.end).trim(),
     lastIndex,
@@ -221,10 +237,14 @@ function extractClothingTraits(
   const matches: string[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
-    if (!token || (token.value !== 'viste' && token.value !== 'lleva')) continue;
+    if (!token || (token.value !== 'viste' && token.value !== 'lleva')) {
+      continue;
+    }
 
     const match = wordsAfterClothingVerb(description, tokens, index);
-    if (!match) continue;
+    if (!match) {
+      continue;
+    }
     matches.push(match.text);
     index = match.lastIndex;
   }
@@ -238,13 +258,12 @@ function extractBodyTraits(
   const matches: string[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const verb = tokens[index];
-    if (!verb || (verb.value !== 'es' && verb.value !== 'mide')) continue;
+    if (!verb || (verb.value !== 'es' && verb.value !== 'mide')) {
+      continue;
+    }
 
     const descriptor = tokens[index + 1];
-    if (
-      !descriptor ||
-      !hasWhitespaceBetween(description, verb, descriptor)
-    ) {
+    if (!descriptor || !hasWhitespaceBetween(description, verb, descriptor)) {
       continue;
     }
 
@@ -267,7 +286,9 @@ function extractBodyTraits(
 export function extractCharacterVisualDescription(
   description: string | null,
 ): string {
-  if (!description?.trim()) return '';
+  if (!description?.trim()) {
+    return '';
+  }
 
   const tokens = tokenize(description);
   const matches = [
