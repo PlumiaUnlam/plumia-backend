@@ -117,12 +117,14 @@ export class EpubExportRenderer implements ExportRenderer {
 
       const tocHtml = buildExportToc(document)
         .map((entry) => {
-          const target =
-            entry.kind === 'book'
-              ? coverFilename
-              : entry.kind === 'chapter'
-                ? chapterFilenames.get(entry.id)
-                : sceneFilenames.get(entry.id);
+          let target: string | undefined;
+          if (entry.kind === 'book') {
+            target = coverFilename;
+          } else if (entry.kind === 'chapter') {
+            target = chapterFilenames.get(entry.id);
+          } else {
+            target = sceneFilenames.get(entry.id);
+          }
           return `<p class="toc-level-${entry.level}"><a href="${escapeHtml(
             `${target ?? coverFilename}#${entry.anchor}`,
           )}">${escapeHtml(entry.title)}</a></p>`;
