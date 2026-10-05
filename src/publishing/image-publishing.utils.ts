@@ -241,7 +241,8 @@ export function buildSpanishPrompt(
   const uncoveredVisualDescription =
     entity.type === 'CHARACTER'
       ? visualDescription
-          .split(/\s*,\s*/)
+          .split(',')
+          .map((detail) => detail.trim())
           .filter((detail) => !isCoveredBy(detail, visualIdentity))
           .join(', ')
       : visualDescription;
