@@ -216,27 +216,43 @@ export class FalAiAdapter implements ImageGeneration {
     statusUrl: string,
     deadline: number,
   ): Promise<void> {
-    if (Date.now() >= deadline) {
-      return;
-    }
+    return new Promise((resolve, reject) => {
+      const poll = async (): Promise<void> => {
+        if (Date.now() >= deadline) {
+          resolve();
+          return;
+        }
 
-    const status = await this.requestJson<FalStatusResponse>(
-      statusUrl,
-      {
-        headers: this.headers(),
-      },
-      'consultar el estado de la generación',
-    );
-    const state = this.readString(status.status);
-    if (state === 'COMPLETED') {
-      return;
-    }
-    if (state === 'FAILED' || state === 'CANCELED' || state === 'CANCELLED') {
-      throw new Error(`Fal API error: request ${state.toLowerCase()}`);
-    }
+        try {
+          const status = await this.requestJson<FalStatusResponse>(
+            statusUrl,
+            {
+              headers: this.headers(),
+            },
+            'consultar el estado de la generación',
+          );
+          const state = this.readString(status.status);
+          if (state === 'COMPLETED') {
+            resolve();
+            return;
+          }
+          if (
+            state === 'FAILED' ||
+            state === 'CANCELED' ||
+            state === 'CANCELLED'
+          ) {
+            reject(new Error(`Fal API error: request ${state.toLowerCase()}`));
+            return;
+          }
 
-    await this.sleep(this.pollIntervalMs);
-    return this.pollUntilComplete(statusUrl, deadline);
+          setTimeout(() => void poll(), this.pollIntervalMs);
+        } catch (error: unknown) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+
+      void poll();
+    });
   }
 
   private networkError(stage: string, error: unknown): Error {
@@ -319,9 +335,5 @@ export class FalAiAdapter implements ImageGeneration {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
