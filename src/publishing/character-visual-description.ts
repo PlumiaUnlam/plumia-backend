@@ -60,35 +60,40 @@ function hasWhitespaceBetween(
   return separator.length > 0 && separator.trim().length === 0;
 }
 
+function isAnchorAt(
+  description: string,
+  tokens: DescriptionToken[],
+  start: number,
+  anchor: string[],
+): boolean {
+  if (start + anchor.length > tokens.length) {
+    return false;
+  }
+
+  for (let offset = 0; offset < anchor.length; offset += 1) {
+    const token = tokens[start + offset];
+    if (!token || token.value !== anchor[offset]) {
+      return false;
+    }
+    if (offset === 0) {
+      continue;
+    }
+
+    const previous = tokens[start + offset - 1];
+    if (!previous || !hasWhitespaceBetween(description, previous, token)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function matchesAnchor(
   description: string,
   tokens: DescriptionToken[],
   start: number,
 ): number {
   for (const anchor of VISUAL_ANCHORS) {
-    if (start + anchor.length > tokens.length) {
-      continue;
-    }
-
-    let matches = true;
-    for (let offset = 0; offset < anchor.length; offset += 1) {
-      const token = tokens[start + offset];
-      if (!token || token.value !== anchor[offset]) {
-        matches = false;
-        break;
-      }
-      if (offset === 0) {
-        continue;
-      }
-
-      const previous = tokens[start + offset - 1];
-      if (!previous || !hasWhitespaceBetween(description, previous, token)) {
-        matches = false;
-        break;
-      }
-    }
-
-    if (matches) {
+    if (isAnchorAt(description, tokens, start, anchor)) {
       return anchor.length;
     }
   }
