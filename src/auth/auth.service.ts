@@ -19,8 +19,10 @@ export class AuthService {
     } catch (error) {
       const code = firebaseErrorCode(error);
       const message = firebaseErrorMessage(error);
+      const codeDetails = code ? ` (${code})` : '';
+      const messageDetails = message ? `: ${message}` : '';
       this.logger.warn(
-        `Firebase ID token rejected${code ? ` (${code})` : ''}${message ? `: ${message}` : ''}`,
+        `Firebase ID token rejected${codeDetails}${messageDetails}`,
       );
       throw new UnauthorizedException('Invalid or expired token');
     }
