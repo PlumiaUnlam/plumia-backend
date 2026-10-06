@@ -9,6 +9,8 @@ export class RelationshipResponseDto {
   relationType!: RelationType;
   intensity!: number;
   description!: string | null;
+  validFromSceneId!: string | null;
+  validToSceneId!: string | null;
   createdAt!: Date;
   updatedAt!: Date;
 
@@ -21,6 +23,8 @@ export class RelationshipResponseDto {
       relationType: record.relationType,
       intensity: record.intensity,
       description: record.description,
+      validFromSceneId: record.validFromSceneId,
+      validToSceneId: record.validToSceneId,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };

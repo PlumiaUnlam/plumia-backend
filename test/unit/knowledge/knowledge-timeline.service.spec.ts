@@ -44,6 +44,7 @@ describe('KnowledgeService timeline events', () => {
       {} as never,
       {} as never,
       timelineRepository,
+      {} as never,
     );
   });
 

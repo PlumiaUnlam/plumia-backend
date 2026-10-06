@@ -198,6 +198,47 @@ describe('PrismaSceneRepository', () => {
     });
   });
 
+  it('reconciles every scene when a narrative order changes', async () => {
+    const reorderedScene = { ...scene, sortKey: '002' };
+    const tx = {
+      scene: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'scene-1',
+          sortKey: '001',
+          order: 0,
+          chapter: { book: { projectId: 'project-1' } },
+        }),
+        update: jest.fn().mockResolvedValue(reorderedScene),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'scene-1' }, { id: 'scene-2' }]),
+      },
+      outbox: { createMany: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation(
+      async (
+        callback: (transaction: typeof tx) => Promise<SceneRecord | null>,
+      ) => callback(tx),
+    );
+
+    await expect(
+      repository.updateForUser('user-1', 'scene-1', { sortKey: '002' }),
+    ).resolves.toEqual(reorderedScene);
+
+    expect(tx.outbox.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          aggregateId: 'scene-1',
+          eventType: 'scene_temporal_audit',
+        }) as unknown,
+        expect.objectContaining({
+          aggregateId: 'scene-2',
+          eventType: 'scene_temporal_audit',
+        }) as unknown,
+      ],
+    });
+  });
+
   it('does not write outbox when the scene is not owned by the user', async () => {
     const tx = {
       scene: {

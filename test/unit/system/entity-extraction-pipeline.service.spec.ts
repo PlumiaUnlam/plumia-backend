@@ -7,6 +7,9 @@ import type { PrismaService } from '../../../src/prisma/prisma.service';
 import type { EntityExtractionClient } from '../../../src/system/entity-extraction/entity-extraction.client';
 import { EntityExtractionPipelineService } from '../../../src/system/entity-extraction/entity-extraction-pipeline.service';
 import type { EntityResolutionService } from '../../../src/system/entity-extraction/entity-resolution.service';
+import type { TemporalConsistencyRuleService } from '../../../src/audit/temporal-consistency-rule.service';
+import type { TemporalKnowledgeSnapshotService } from '../../../src/audit/temporal-knowledge-snapshot.service';
+import type { TemporalStateService } from '../../../src/knowledge/services/temporal-state.service';
 import { ProposalStatus } from '@prisma/client';
 import type { ExtractionCandidate } from '../../../src/system/entity-extraction/entity-extraction.types';
 import { EntityType } from '../../../src/knowledge/domain/entity-type';
@@ -51,6 +54,10 @@ interface InconsistencyProcessor {
     };
     inconsistencies: Array<{
       entityName: string;
+      ruleCode:
+        | 'ENTITY_CONTRADICTION'
+        | 'DEAD_CHARACTER_ACTION'
+        | 'WORLDBUILDING_RULE';
       field: string;
       currentValue: string;
       observedValue: string;
@@ -73,7 +80,7 @@ interface InconsistencyProcessor {
 describe('EntityExtractionPipelineService inconsistencies', () => {
   const auditService = {
     createEntityContinuityAlert: jest.fn(),
-    obsoleteContinuityAlertsForChunk: jest.fn(),
+    obsoleteAlertsForChunk: jest.fn(),
   };
   const resolution = {
     normalize: (value: string) => value.trim().toLowerCase(),
@@ -83,6 +90,9 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
     {} as EntityExtractionClient,
     resolution as EntityResolutionService,
     auditService as unknown as AuditService,
+    {} as TemporalKnowledgeSnapshotService,
+    {} as TemporalConsistencyRuleService,
+    {} as TemporalStateService,
   ) as unknown as InconsistencyProcessor;
 
   beforeEach(() => {
@@ -103,6 +113,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
       inconsistencies: [
         {
           entityName: 'Eli',
+          ruleCode: 'DEAD_CHARACTER_ACTION',
           field: 'estado',
           currentValue: 'Esta muerta.',
           observedValue: 'Cruza el puente.',
@@ -134,7 +145,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
         evidence: ['Elena cruza el puente.'],
       }),
     );
-    expect(auditService.obsoleteContinuityAlertsForChunk).toHaveBeenCalledWith(
+    expect(auditService.obsoleteAlertsForChunk).toHaveBeenCalledWith(
       expect.objectContaining({
         sceneId: 'scene-1',
         sourceChunkId: 'chunk-1',
@@ -157,6 +168,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
       inconsistencies: [
         {
           entityName: 'Desconocida',
+          ruleCode: 'ENTITY_CONTRADICTION',
           field: 'estado',
           currentValue: 'Muerta.',
           observedValue: 'Actua.',
@@ -197,7 +209,8 @@ describe('EntityExtractionPipelineService outbox processing', () => {
   let resolution: PipelineResolutionMock;
   let audit: {
     createEntityContinuityAlert: jest.Mock;
-    obsoleteContinuityAlertsForChunk: jest.Mock;
+    obsoleteAlertsForChunk: jest.Mock;
+    obsoleteAlertsWithoutCurrentChunkSupport: jest.Mock;
   };
 
   beforeEach(() => {
@@ -238,13 +251,22 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     };
     audit = {
       createEntityContinuityAlert: jest.fn(),
-      obsoleteContinuityAlertsForChunk: jest.fn(),
+      obsoleteAlertsForChunk: jest.fn(),
+      obsoleteAlertsWithoutCurrentChunkSupport: jest.fn(),
     };
     service = new EntityExtractionPipelineService(
       prisma as never,
       client as never,
       resolution as unknown as EntityResolutionService,
       audit as unknown as AuditService,
+      {
+        getSnapshot: jest.fn().mockResolvedValue(null),
+        toExtractionContext: jest.fn(),
+      } as unknown as TemporalKnowledgeSnapshotService,
+      { auditSnapshot: jest.fn() } as unknown as TemporalConsistencyRuleService,
+      {
+        obsoleteProposalsWithoutCurrentChunkSupport: jest.fn(),
+      } as unknown as TemporalStateService,
     );
   });
 
@@ -476,7 +498,7 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       data: { isDirty: false },
     });
     expect(prisma.scene.update).not.toHaveBeenCalled();
-    expect(audit.obsoleteContinuityAlertsForChunk).toHaveBeenCalledWith(
+    expect(audit.obsoleteAlertsForChunk).toHaveBeenCalledWith(
       expect.objectContaining({ sceneId: 'scene-1', sourceChunkId: 'chunk-1' }),
     );
   });

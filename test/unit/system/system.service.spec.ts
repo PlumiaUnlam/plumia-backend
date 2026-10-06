@@ -173,13 +173,13 @@ describe('SystemService', () => {
       where: {
         processedAt: null,
         aggregateType: 'Scene',
-        eventType: 'scene_changed',
+        eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
       },
       orderBy: { createdAt: 'asc' },
       take: 25,
     });
     expect(queueInstance.add).toHaveBeenCalledWith(
-      'process-scene-changed',
+      'process-scene-event',
       { outboxId: 'outbox-1' },
       {
         jobId: 'outbox-1',

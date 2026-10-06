@@ -33,4 +33,12 @@ export class UpdateRelationshipDto {
   @IsOptional()
   @MaxLength(1000)
   description?: string | null;
+
+  @IsUUID()
+  @IsOptional()
+  validFromSceneId?: string | null;
+
+  @IsUUID()
+  @IsOptional()
+  validToSceneId?: string | null;
 }

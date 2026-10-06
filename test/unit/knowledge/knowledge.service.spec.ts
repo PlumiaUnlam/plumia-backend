@@ -16,6 +16,7 @@ import type {
   TimelineEventRepository,
 } from '../../../src/knowledge/ports/timeline-event-repository.port';
 import type { EntitySearch } from '../../../src/knowledge/ports/entity-search.port';
+import type { TemporalStateService } from '../../../src/knowledge/services/temporal-state.service';
 
 describe('KnowledgeService', () => {
   const now = new Date('2026-09-01T00:00:00.000Z');
@@ -44,6 +45,8 @@ describe('KnowledgeService', () => {
     relationType: RelationType.ALLY,
     intensity: 1,
     description: null,
+    validFromSceneId: null,
+    validToSceneId: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -85,6 +88,7 @@ describe('KnowledgeService', () => {
     };
     relationships = {
       listByProject: jest.fn(),
+      findByIdForUser: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
@@ -101,6 +105,10 @@ describe('KnowledgeService', () => {
       entities,
       relationships,
       timeline,
+      {
+        validateRelationshipWindow: jest.fn(),
+        scheduleRelationshipAudit: jest.fn(),
+      } as unknown as TemporalStateService,
     );
   });
 
@@ -181,6 +189,7 @@ describe('KnowledgeService', () => {
     ).resolves.toEqual(entity);
     expect(entities.update).toHaveBeenCalledWith('user-1', 'entity-1', {
       description: 'Updated',
+      userLockedFields: ['description'],
     });
     entities.softDelete.mockResolvedValue({ ...entity, deletedAt: now });
     await expect(
@@ -253,6 +262,7 @@ describe('KnowledgeService', () => {
       'user-1',
       'project-1',
     );
+    relationships.findByIdForUser.mockResolvedValue(relationship);
     relationships.update.mockResolvedValue(relationship);
     await expect(
       service.updateRelationship('user-1', 'relationship-1', {

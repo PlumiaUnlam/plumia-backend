@@ -47,6 +47,7 @@ export class EntityProposalResponseDto {
   sceneTitle!: string | null;
   chapterTitle!: string | null;
   entityId!: string | null;
+  conflictsWithLocked!: boolean;
   status!: EntityProposalStatusDto;
   confidenceScore!: number;
   resolutionReason!: string | null;
@@ -63,6 +64,7 @@ export class EntityProposalResponseDto {
     sceneTitle: string | null;
     chapterTitle: string | null;
     entityId: string | null;
+    conflictsWithLocked: boolean;
     status: EntityProposalStatusDto;
     confidenceScore: number;
     resolutionReason: string | null;
@@ -79,6 +81,7 @@ export class EntityProposalResponseDto {
       sceneTitle: record.sceneTitle,
       chapterTitle: record.chapterTitle,
       entityId: record.entityId,
+      conflictsWithLocked: record.conflictsWithLocked,
       status: record.status,
       confidenceScore: record.confidenceScore,
       resolutionReason: record.resolutionReason,

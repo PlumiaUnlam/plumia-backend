@@ -25,10 +25,12 @@ export class RelationshipsController {
   async listRelationships(
     @Request() req: AuthenticatedRequest,
     @Query('projectId', ParseUUIDPipe) projectId: string,
+    @Query('asOfSceneId') asOfSceneId?: string,
   ): Promise<RelationshipResponseDto[]> {
     const relationships = await this.knowledgeService.listRelationships(
       req.user.id,
       projectId,
+      asOfSceneId,
     );
     return relationships.map((relationship) =>
       RelationshipResponseDto.from(relationship),
