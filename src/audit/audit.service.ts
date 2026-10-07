@@ -227,12 +227,14 @@ export class AuditService {
           },
         });
       } else {
-        for (const state of active) {
-          await tx.entityState.update({
-            where: { id: state.id },
-            data: { validToSceneId: alert.sceneId },
-          });
-        }
+        await Promise.all(
+          active.map((state) =>
+            tx.entityState.update({
+              where: { id: state.id },
+              data: { validToSceneId: alert.sceneId },
+            }),
+          ),
+        );
         await tx.entityState.create({
           data: {
             entityId: conflict.entityId,

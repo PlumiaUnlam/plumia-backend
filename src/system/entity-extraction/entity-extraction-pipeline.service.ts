@@ -76,6 +76,19 @@ interface RelationshipProposalRecord {
   status: ProposalStatus;
 }
 
+interface RelationshipCandidatesInput {
+  projectId: string;
+  sceneId: string;
+  chunk: ChunkRow;
+  relationships: ExtractedRelationship[];
+  confirmedEntities: ConfirmedEntityLike[];
+  proposals: Map<string, ProposalRecord>;
+  resolvedEntityReferences: ResolvedEntityReferences;
+  relationshipProposals: RelationshipProposalRecord[];
+  rejectedRelationshipProposals: RelationshipProposalRecord[];
+  temporalSnapshot: TemporalKnowledgeSnapshot | null;
+}
+
 interface ProposalRow {
   id: string;
   sceneId: string;
@@ -228,7 +241,7 @@ export class EntityExtractionPipelineService {
       type: toEntityType(entity.type),
       attributes: this.normalizeAttributesRecord(entity.attributes),
     }));
-    for (const chunk of chunks) {
+    await forEachSequentially(chunks, async (chunk) => {
       const text = chunk.content.trim();
       if (!text) {
         await this.auditService.obsoleteAlertsForChunk({
@@ -236,7 +249,7 @@ export class EntityExtractionPipelineService {
           sourceChunkId: chunk.id,
           activeFingerprints: new Set<string>(),
         });
-        continue;
+        return;
       }
       const extracted = await this.extractionClient.extractEntities({
         sceneText: text,
@@ -263,7 +276,7 @@ export class EntityExtractionPipelineService {
         inconsistencies: extracted.inconsistencies,
         confirmedEntities,
       });
-    }
+    });
   }
 
   async processSceneChanged(payload: SceneChangedOutboxPayload): Promise<void> {
@@ -829,7 +842,7 @@ export class EntityExtractionPipelineService {
     confirmedEntities: ConfirmedEntityLike[];
     temporalSnapshot: TemporalKnowledgeSnapshot | null;
   }): Promise<void> {
-    for (const change of input.stateChanges ?? []) {
+    await forEachSequentially(input.stateChanges ?? [], async (change) => {
       const entity = this.findConfirmedEntityByName(
         change.entityName,
         input.confirmedEntities,
@@ -840,7 +853,7 @@ export class EntityExtractionPipelineService {
         .map((value) => value.trim())
         .filter(Boolean);
       if (!entity || !attributeKey || !toValue || evidence.length === 0) {
-        continue;
+        return;
       }
       const currentState = input.temporalSnapshot?.activeStates.find(
         (state) =>
@@ -860,7 +873,7 @@ export class EntityExtractionPipelineService {
         evidence,
         confidenceScore: this.normalizeConfidence(change.confidenceScore),
       });
-    }
+    });
   }
 
   private findConfirmedEntityByName(
@@ -1049,140 +1062,138 @@ export class EntityExtractionPipelineService {
     }
   }
 
-  private async processRelationshipCandidates(input: {
-    projectId: string;
-    sceneId: string;
-    chunk: ChunkRow;
-    relationships: ExtractedRelationship[];
-    confirmedEntities: ConfirmedEntityLike[];
-    proposals: Map<string, ProposalRecord>;
-    resolvedEntityReferences: ResolvedEntityReferences;
-    relationshipProposals: RelationshipProposalRecord[];
-    rejectedRelationshipProposals: RelationshipProposalRecord[];
-    temporalSnapshot: TemporalKnowledgeSnapshot | null;
-  }): Promise<void> {
-    for (const relationship of input.relationships ?? []) {
-      const kind = relationship.kind ?? 'CREATE';
-      const relationType = toRelationType(relationship.relationType);
-      const source = this.resolveRelationshipEntity(
-        relationship.sourceEntity,
-        input,
-      );
-      const target = this.resolveRelationshipEntity(
-        relationship.targetEntity,
-        input,
-      );
+  private async processRelationshipCandidates(
+    input: RelationshipCandidatesInput,
+  ): Promise<void> {
+    await forEachSequentially(input.relationships ?? [], (relationship) =>
+      this.processRelationshipCandidate(relationship, input),
+    );
+  }
 
-      if (!source || !target || this.sameEntityReference(source, target)) {
-        continue;
-      }
+  private async processRelationshipCandidate(
+    relationship: ExtractedRelationship,
+    input: RelationshipCandidatesInput,
+  ): Promise<void> {
+    const kind = relationship.kind ?? 'CREATE';
+    const relationType = toRelationType(relationship.relationType);
+    const source = this.resolveRelationshipEntity(
+      relationship.sourceEntity,
+      input,
+    );
+    const target = this.resolveRelationshipEntity(
+      relationship.targetEntity,
+      input,
+    );
 
-      const activeRelationship =
-        source.entityId && target.entityId
-          ? input.temporalSnapshot?.activeRelationships.find(
-              (candidate) =>
-                candidate.sourceEntityId === source.entityId &&
-                candidate.targetEntityId === target.entityId &&
-                String(candidate.relationType) === String(relationType),
-            )
-          : null;
-      const existingRelationship =
-        activeRelationship && source.entityId && target.entityId
-          ? await this.prisma.relationship.findFirst({
-              where: {
-                id: activeRelationship.id,
-                projectId: input.projectId,
-              },
-              select: { id: true, description: true, confidenceScore: true },
-            })
-          : null;
-      const intensity = this.normalizeRelationshipIntensity(
-        relationship.intensity,
-      );
+    if (!source || !target || this.sameEntityReference(source, target)) {
+      return;
+    }
 
-      if (
-        kind !== 'END' &&
-        existingRelationship &&
-        !this.relationshipHasNewInformation(
-          existingRelationship,
-          relationship.description,
-          intensity,
-        )
-      ) {
-        continue;
-      }
+    const activeRelationship =
+      source.entityId && target.entityId
+        ? input.temporalSnapshot?.activeRelationships.find(
+            (candidate) =>
+              candidate.sourceEntityId === source.entityId &&
+              candidate.targetEntityId === target.entityId &&
+              String(candidate.relationType) === String(relationType),
+          )
+        : null;
+    const existingRelationship =
+      activeRelationship && source.entityId && target.entityId
+        ? await this.prisma.relationship.findFirst({
+            where: {
+              id: activeRelationship.id,
+              projectId: input.projectId,
+            },
+            select: { id: true, description: true, confidenceScore: true },
+          })
+        : null;
+    const intensity = this.normalizeRelationshipIntensity(
+      relationship.intensity,
+    );
 
-      const current = input.relationshipProposals.find((proposal) =>
-        this.matchesRelationshipProposal(
-          proposal,
-          existingRelationship?.id ?? null,
-          source,
-          target,
-          relationType,
-          kind,
-        ),
-      );
-      const evidence = [...new Set(relationship.evidence ?? [])];
+    if (
+      kind !== 'END' &&
+      existingRelationship &&
+      !this.relationshipHasNewInformation(
+        existingRelationship,
+        relationship.description,
+        intensity,
+      )
+    ) {
+      return;
+    }
 
-      const wasRejectedWithSameEvidence =
-        input.rejectedRelationshipProposals.some(
-          (proposal) =>
-            this.matchesRelationshipProposal(
-              proposal,
-              existingRelationship?.id ?? null,
-              source,
-              target,
-              relationType,
-              kind,
-            ) && this.hasSharedEvidence(proposal.evidence, evidence),
-        );
-      if (wasRejectedWithSameEvidence) {
-        continue;
-      }
+    const current = input.relationshipProposals.find((proposal) =>
+      this.matchesRelationshipProposal(
+        proposal,
+        existingRelationship?.id ?? null,
+        source,
+        target,
+        relationType,
+        kind,
+      ),
+    );
+    const evidence = [...new Set(relationship.evidence ?? [])];
 
-      if (current) {
-        const updated = await this.prisma.relationshipProposal.update({
-          where: { id: current.id },
-          data: {
-            description: this.mergeRelationshipDescriptions(
-              current.description,
-              relationship.description,
-            ),
-            intensity: Math.max(current.intensity, intensity),
-            evidence: [...new Set([...current.evidence, ...evidence])],
-            sourceChunkId: input.chunk.id,
-            sourceChunkHash: input.chunk.contentHash,
+    const wasRejectedWithSameEvidence =
+      input.rejectedRelationshipProposals.some(
+        (proposal) =>
+          this.matchesRelationshipProposal(
+            proposal,
+            existingRelationship?.id ?? null,
+            source,
+            target,
+            relationType,
             kind,
-          },
-          select: relationshipProposalSelect,
-        });
-        Object.assign(current, this.toRelationshipProposalRecord(updated));
-        continue;
-      }
+          ) && this.hasSharedEvidence(proposal.evidence, evidence),
+      );
+    if (wasRejectedWithSameEvidence) {
+      return;
+    }
 
-      const created = await this.prisma.relationshipProposal.create({
+    if (current) {
+      const updated = await this.prisma.relationshipProposal.update({
+        where: { id: current.id },
         data: {
-          projectId: input.projectId,
-          sceneId: input.sceneId,
+          description: this.mergeRelationshipDescriptions(
+            current.description,
+            relationship.description,
+          ),
+          intensity: Math.max(current.intensity, intensity),
+          evidence: [...new Set([...current.evidence, ...evidence])],
           sourceChunkId: input.chunk.id,
           sourceChunkHash: input.chunk.contentHash,
-          relationshipId: existingRelationship?.id ?? null,
-          sourceEntityId: source.entityId,
-          targetEntityId: target.entityId,
-          sourceEntityProposalId: source.proposalId,
-          targetEntityProposalId: target.proposalId,
           kind,
-          relationType,
-          description: relationship.description ?? null,
-          intensity,
-          evidence,
         },
         select: relationshipProposalSelect,
       });
-      input.relationshipProposals.push(
-        this.toRelationshipProposalRecord(created),
-      );
+      Object.assign(current, this.toRelationshipProposalRecord(updated));
+      return;
     }
+
+    const created = await this.prisma.relationshipProposal.create({
+      data: {
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        sourceChunkId: input.chunk.id,
+        sourceChunkHash: input.chunk.contentHash,
+        relationshipId: existingRelationship?.id ?? null,
+        sourceEntityId: source.entityId,
+        targetEntityId: target.entityId,
+        sourceEntityProposalId: source.proposalId,
+        targetEntityProposalId: target.proposalId,
+        kind,
+        relationType,
+        description: relationship.description ?? null,
+        intensity,
+        evidence,
+      },
+      select: relationshipProposalSelect,
+    });
+    input.relationshipProposals.push(
+      this.toRelationshipProposalRecord(created),
+    );
   }
 
   private resolveRelationshipEntity(
@@ -1478,11 +1489,11 @@ export class EntityExtractionPipelineService {
 
   private parseTemporalAuditPayload(value: Prisma.JsonValue): string {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('Invalid temporal audit payload');
+      throw new TypeError('Invalid temporal audit payload');
     }
     const sceneId = (value as Record<string, unknown>)['sceneId'];
     if (typeof sceneId !== 'string') {
-      throw new Error('Temporal audit payload is missing sceneId');
+      throw new TypeError('Temporal audit payload is missing sceneId');
     }
     return sceneId;
   }
