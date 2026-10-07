@@ -651,22 +651,30 @@ export class TemporalStateService {
       const matching = states.filter(
         (state) => this.normalizeKey(state.attributeKey) === key,
       );
-      for (let index = 0; index < matching.length; index += 1) {
-        const current = matching[index]!;
-        const currentInterval = this.getStateInterval(current, positions);
-        if (!currentInterval) {
+      this.assertNoOverlapsForKey(key, matching, positions);
+    }
+  }
+
+  private assertNoOverlapsForKey(
+    key: string,
+    matching: readonly EntityState[],
+    positions: ReadonlyMap<string, number>,
+  ): void {
+    for (let index = 0; index < matching.length; index += 1) {
+      const current = matching[index]!;
+      const currentInterval = this.getStateInterval(current, positions);
+      if (!currentInterval) {
+        continue;
+      }
+      for (const other of matching.slice(index + 1)) {
+        const otherInterval = this.getStateInterval(other, positions);
+        if (!otherInterval) {
           continue;
         }
-        for (const other of matching.slice(index + 1)) {
-          const otherInterval = this.getStateInterval(other, positions);
-          if (!otherInterval) {
-            continue;
-          }
-          if (this.intervalsOverlap(currentInterval, otherInterval)) {
-            throw new BadRequestException(
-              `Overlapping ${key} states are not allowed`,
-            );
-          }
+        if (this.intervalsOverlap(currentInterval, otherInterval)) {
+          throw new BadRequestException(
+            `Overlapping ${key} states are not allowed`,
+          );
         }
       }
     }
