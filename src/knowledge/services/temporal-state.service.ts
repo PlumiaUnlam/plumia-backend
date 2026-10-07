@@ -402,7 +402,7 @@ export class TemporalStateService {
       throw new NotFoundException('Project not found');
     }
     const snapshot = await this.snapshots.getSnapshot(sceneId);
-    if (!snapshot || snapshot.projectId !== projectId) {
+    if (snapshot?.projectId !== projectId) {
       throw new NotFoundException('Scene not found');
     }
     const scenes = await this.getOrderedScenes(this.prisma, projectId);
@@ -519,12 +519,14 @@ export class TemporalStateService {
       });
     }
     if (this.isSingleValueKey(attributeKey)) {
-      for (const state of active) {
-        await tx.entityState.update({
-          where: { id: state.id },
-          data: { validToSceneId: input.validFromSceneId },
-        });
-      }
+      await Promise.all(
+        active.map((state) =>
+          tx.entityState.update({
+            where: { id: state.id },
+            data: { validToSceneId: input.validFromSceneId },
+          }),
+        ),
+      );
     }
     const predecessor = matching
       .filter((state) => {
@@ -651,22 +653,16 @@ export class TemporalStateService {
       );
       for (let index = 0; index < matching.length; index += 1) {
         const current = matching[index]!;
-        const currentStart = positions.get(current.validFromSceneId);
-        const currentEnd = current.validToSceneId
-          ? positions.get(current.validToSceneId)
-          : Infinity;
-        if (currentStart === undefined || currentEnd === undefined) {
+        const currentInterval = this.getStateInterval(current, positions);
+        if (!currentInterval) {
           continue;
         }
         for (const other of matching.slice(index + 1)) {
-          const otherStart = positions.get(other.validFromSceneId);
-          const otherEnd = other.validToSceneId
-            ? positions.get(other.validToSceneId)
-            : Infinity;
-          if (otherStart === undefined || otherEnd === undefined) {
+          const otherInterval = this.getStateInterval(other, positions);
+          if (!otherInterval) {
             continue;
           }
-          if (currentStart < otherEnd && otherStart < currentEnd) {
+          if (this.intervalsOverlap(currentInterval, otherInterval)) {
             throw new BadRequestException(
               `Overlapping ${key} states are not allowed`,
             );
@@ -674,6 +670,24 @@ export class TemporalStateService {
         }
       }
     }
+  }
+
+  private getStateInterval(
+    state: Pick<EntityState, 'validFromSceneId' | 'validToSceneId'>,
+    positions: ReadonlyMap<string, number>,
+  ): { start: number; end: number } | null {
+    const start = positions.get(state.validFromSceneId);
+    const end = state.validToSceneId
+      ? positions.get(state.validToSceneId)
+      : Infinity;
+    return start === undefined || end === undefined ? null : { start, end };
+  }
+
+  private intervalsOverlap(
+    left: { start: number; end: number },
+    right: { start: number; end: number },
+  ): boolean {
+    return left.start < right.end && right.start < left.end;
   }
 
   private async lockStateKey(

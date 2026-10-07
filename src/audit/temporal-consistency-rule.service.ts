@@ -6,7 +6,7 @@ import {
   RelationType,
 } from '@prisma/client';
 import { Injectable } from '@nestjs/common';
-import { AuditService } from './audit.service';
+import { AuditService, type CreateAuditAlertInput } from './audit.service';
 import type { TemporalKnowledgeSnapshot } from './temporal-knowledge-snapshot.service';
 
 const TEMPORAL_RULE_CODES = [
@@ -30,6 +30,37 @@ export class TemporalConsistencyRuleService {
     const entitiesById = new Map(
       snapshot.entities.map((entity) => [entity.id, entity] as const),
     );
+    const alerts = [
+      ...this.collectStateConflictAlerts(
+        snapshot,
+        entitiesById,
+        activeFingerprints,
+      ),
+      ...this.collectDuplicateOwnerAlerts(
+        snapshot,
+        entitiesById,
+        activeFingerprints,
+      ),
+    ];
+    await alerts.reduce<Promise<void>>(
+      (pending, alert) =>
+        pending.then(() => this.auditService.createAlert(alert)),
+      Promise.resolve(),
+    );
+
+    await this.auditService.obsoleteRuleAlertsForScene({
+      sceneId: snapshot.sceneId,
+      ruleCodes: TEMPORAL_RULE_CODES,
+      activeFingerprints,
+    });
+  }
+
+  private collectStateConflictAlerts(
+    snapshot: TemporalKnowledgeSnapshot,
+    entitiesById: ReadonlyMap<string, TemporalKnowledgeSnapshot['entities'][number]>,
+    activeFingerprints: Set<string>,
+  ): CreateAuditAlertInput[] {
+    const alerts: CreateAuditAlertInput[] = [];
     const statesByEntityAndKey = new Map<
       string,
       typeof snapshot.activeStates
@@ -72,7 +103,7 @@ export class TemporalConsistencyRuleService {
         ...values,
       ]);
       activeFingerprints.add(fingerprint);
-      await this.auditService.createAlert({
+      alerts.push({
         projectId: snapshot.projectId,
         sceneId: snapshot.sceneId,
         sourceChunkId: null,
@@ -95,6 +126,15 @@ export class TemporalConsistencyRuleService {
       });
     }
 
+    return alerts;
+  }
+
+  private collectDuplicateOwnerAlerts(
+    snapshot: TemporalKnowledgeSnapshot,
+    entitiesById: ReadonlyMap<string, TemporalKnowledgeSnapshot['entities'][number]>,
+    activeFingerprints: Set<string>,
+  ): CreateAuditAlertInput[] {
+    const alerts: CreateAuditAlertInput[] = [];
     const ownersByObject = new Map<string, string[]>();
     for (const relationship of snapshot.activeRelationships) {
       if (relationship.relationType !== RelationType.OWNS) {
@@ -110,9 +150,8 @@ export class TemporalConsistencyRuleService {
       const object = entitiesById.get(objectId);
       if (
         distinctOwnerIds.length < 2 ||
-        !object ||
-        object.type !== 'OBJECT' ||
-        object.attributes['isUnique'] !== true
+        object?.type !== 'OBJECT' ||
+        object?.attributes['isUnique'] !== true
       ) {
         continue;
       }
@@ -124,7 +163,7 @@ export class TemporalConsistencyRuleService {
         ...distinctOwnerIds,
       ]);
       activeFingerprints.add(fingerprint);
-      await this.auditService.createAlert({
+      alerts.push({
         projectId: snapshot.projectId,
         sceneId: snapshot.sceneId,
         sourceChunkId: null,
@@ -147,11 +186,7 @@ export class TemporalConsistencyRuleService {
       });
     }
 
-    await this.auditService.obsoleteRuleAlertsForScene({
-      sceneId: snapshot.sceneId,
-      ruleCodes: TEMPORAL_RULE_CODES,
-      activeFingerprints,
-    });
+    return alerts;
   }
 
   private fingerprint(
@@ -159,9 +194,12 @@ export class TemporalConsistencyRuleService {
     ruleCode: string,
     values: string[],
   ): string {
+    const sortedValues = [...values].sort((left, right) =>
+      left.localeCompare(right, 'en'),
+    );
     return createHash('sha256')
       .update(
-        [snapshot.projectId, snapshot.sceneId, ruleCode, ...values.sort()].join(
+        [snapshot.projectId, snapshot.sceneId, ruleCode, ...sortedValues].join(
           '|',
         ),
       )

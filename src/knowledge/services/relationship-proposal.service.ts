@@ -166,32 +166,34 @@ export class RelationshipProposalService {
         );
       }
 
-      const relationship =
-        proposal.kind === RelationshipProposalKind.END
-          ? await this.closeRelationshipProposal(tx, proposal)
-          : proposal.relationshipId
-            ? await tx.relationship.update({
-                where: { id: proposal.relationshipId },
-                data: {
-                  description,
-                  relationType,
-                  confidenceScore,
-                  sourceEntityId,
-                  targetEntityId,
-                },
-              })
-            : await tx.relationship.create({
-                data: {
-                  projectId: proposal.projectId,
-                  sourceEntityId,
-                  targetEntityId,
-                  relationType,
-                  description,
-                  confidenceScore,
-                  source: 'ai_proposed',
-                  validFromSceneId: proposal.sceneId,
-                },
-              });
+      let relationship: Relationship;
+      if (proposal.kind === RelationshipProposalKind.END) {
+        relationship = await this.closeRelationshipProposal(tx, proposal);
+      } else if (proposal.relationshipId) {
+        relationship = await tx.relationship.update({
+          where: { id: proposal.relationshipId },
+          data: {
+            description,
+            relationType,
+            confidenceScore,
+            sourceEntityId,
+            targetEntityId,
+          },
+        });
+      } else {
+        relationship = await tx.relationship.create({
+          data: {
+            projectId: proposal.projectId,
+            sourceEntityId,
+            targetEntityId,
+            relationType,
+            description,
+            confidenceScore,
+            source: 'ai_proposed',
+            validFromSceneId: proposal.sceneId,
+          },
+        });
+      }
 
       await tx.relationshipProposal.update({
         where: { id: proposal.id },
@@ -342,7 +344,7 @@ export class RelationshipProposalService {
     return `${currentValue}\n\n${suggestedValue}`;
   }
 
-  private async closeRelationshipProposal(
+  private closeRelationshipProposal(
     tx: Prisma.TransactionClient,
     proposal: {
       relationshipId: string | null;
