@@ -1,7 +1,7 @@
 import type { ExportFormat, ExportStatus } from '@prisma/client';
 import type { SceneDividerVariant } from './scene-divider';
 
-export const EXPORT_FORMATS = ['PDF', 'DOCX', 'EPUB'] as const;
+export const EXPORT_FORMATS = ['EPUB'] as const;
 export type SupportedExportFormat = (typeof EXPORT_FORMATS)[number];
 
 export interface ExportJobRecord {
@@ -32,7 +32,14 @@ export type ExportInline =
       italic: boolean;
       href?: string;
     }
-  | { kind: 'break' };
+  | { kind: 'break' }
+  | {
+      kind: 'note';
+      noteKind: ExportNoteKind;
+      inlines: ExportInline[];
+    };
+
+export type ExportNoteKind = 'footnote' | 'endnote';
 
 export interface ExportTextBlock {
   kind: 'paragraph' | 'heading' | 'blockquote' | 'codeBlock';
@@ -86,6 +93,8 @@ export interface ExportTocEntry {
 export interface ExportDocument {
   id: string;
   title: string;
+  author: string;
+  cover: ExportImage | null;
   chapters: ExportChapter[];
 }
 

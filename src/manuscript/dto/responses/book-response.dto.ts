@@ -5,6 +5,7 @@ export class BookResponseDto {
   projectId!: string;
   title!: string;
   sortKey!: string;
+  hasCover!: boolean;
   createdAt!: Date;
   updatedAt!: Date;
 
@@ -14,6 +15,7 @@ export class BookResponseDto {
       projectId: record.projectId,
       title: record.title,
       sortKey: record.sortKey,
+      hasCover: record.coverStorageKey !== null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };

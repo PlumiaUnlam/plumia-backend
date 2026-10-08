@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ExportFormat, ExportStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
@@ -6,19 +6,17 @@ import {
   EXPORT_SOURCE,
   type ExportSourceRepository,
 } from './export-source.port';
-import { ExportRendererService } from './export-renderer.service';
-import { ExportSettingsService } from './export-settings.service';
 import {
   EXPORT_FORMATS,
+  type ExportImage,
   type ExportJobRecord,
   type SupportedExportFormat,
 } from './export.types';
-import { prepareExportDocument } from './tiptap-export';
+import { DEFAULT_EXPORT_AUTHOR, prepareExportDocument } from './tiptap-export';
+import { EpubExportRenderer } from './renderers/epub-export.renderer';
 import { ExportJobResponseDto } from './dto/export-job-response.dto';
 
 const MIME_TYPES: Record<SupportedExportFormat, string> = {
-  PDF: 'application/pdf',
-  DOCX: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   EPUB: 'application/epub+zip',
 };
 
@@ -60,13 +58,27 @@ function fileSlug(value: string): string {
   return slug || 'obra';
 }
 
+function exportAuthor(user: {
+  name: string;
+  lastname: string;
+  displayName: string | null;
+}): string {
+  const displayName = user.displayName?.trim();
+  if (displayName) {
+    return displayName;
+  }
+  const fullName = `${user.name} ${user.lastname}`.replace(/\s+/g, ' ').trim();
+  return fullName || DEFAULT_EXPORT_AUTHOR;
+}
+
 @Injectable()
 export class ExportService {
+  private readonly logger = new Logger(ExportService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
-    private readonly renderer: ExportRendererService,
-    private readonly exportSettings: ExportSettingsService,
+    private readonly renderer: EpubExportRenderer,
     @Inject(EXPORT_SOURCE)
     private readonly sourceRepository: ExportSourceRepository,
   ) {}
@@ -222,17 +234,14 @@ export class ExportService {
           imageCache.set(storageKey, image);
           return image;
         },
+        {
+          author: exportAuthor(source.project.user),
+          cover: await this.loadCover(source.id, source.coverStorageKey),
+        },
       );
 
       await this.updateProgress(exportJobId, 55);
-      const settings = await this.exportSettings.getEffectiveConfig(
-        job.projectId,
-      );
-      const rendered = await this.renderer.render(
-        job.format,
-        document,
-        settings,
-      );
+      const rendered = await this.renderer.render(document);
       const storageKey = `exports/${job.projectId}/${job.id}.${job.format.toLowerCase()}`;
       await this.storage.putBuffer(
         storageKey,
@@ -275,6 +284,36 @@ export class ExportService {
       where: { id: exportJobId },
       data: { progress },
     });
+  }
+
+  /**
+   * La portada es opcional: si no se puede cargar, el export sigue sin ella
+   * en vez de fallar.
+   */
+  private async loadCover(
+    bookId: string,
+    coverStorageKey: string | null,
+  ): Promise<ExportImage | null> {
+    if (!coverStorageKey) {
+      return null;
+    }
+    if (!coverStorageKey.startsWith(`books/${bookId}/`)) {
+      this.logger.warn(
+        `Portada ignorada: la clave ${coverStorageKey} no pertenece al libro ${bookId}`,
+      );
+      return null;
+    }
+
+    try {
+      return await this.loadExportImage(coverStorageKey);
+    } catch (error: unknown) {
+      this.logger.warn(
+        `No se pudo cargar la portada ${coverStorageKey}; se exporta sin portada: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
   }
 
   private async loadExportImage(

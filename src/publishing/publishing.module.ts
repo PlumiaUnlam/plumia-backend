@@ -15,34 +15,21 @@ import { ImageGenerationEventsService } from './workers/image-generation-events.
 import { ImageAssetsService } from './image-assets.service';
 import { ExportController } from './exports/export.controller';
 import { ExportService } from './exports/export.service';
-import { ExportSettingsController } from './exports/export-settings.controller';
-import { ExportSettingsService } from './exports/export-settings.service';
 import { EXPORT_QUEUE } from './exports/export-queue.port';
 import { EXPORT_SOURCE } from './exports/export-source.port';
 import { BullmqExportQueue } from './exports/adapters/bullmq-export-queue.adapter';
 import { PrismaExportSourceAdapter } from './exports/adapters/prisma-export-source.adapter';
-import { ExportRendererService } from './exports/export-renderer.service';
-import { DocxExportRenderer } from './exports/renderers/docx-export.renderer';
-import { PdfExportRenderer } from './exports/renderers/pdf-export.renderer';
 import { EpubExportRenderer } from './exports/renderers/epub-export.renderer';
 import { ExportOutboxPoller } from './exports/workers/export-outbox-poller.service';
 import { ExportWorkersService } from './exports/workers/export-workers.service';
 
 @Module({
   imports: [AuthModule, StorageModule],
-  controllers: [
-    PublishingController,
-    ExportController,
-    ExportSettingsController,
-  ],
+  controllers: [PublishingController, ExportController],
   providers: [
     PublishingService,
     ImageAssetsService,
     ExportService,
-    ExportSettingsService,
-    ExportRendererService,
-    DocxExportRenderer,
-    PdfExportRenderer,
     EpubExportRenderer,
     ExportOutboxPoller,
     ExportWorkersService,

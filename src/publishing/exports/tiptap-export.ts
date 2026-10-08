@@ -4,7 +4,7 @@ import type {
   ExportImage,
   ExportInline,
 } from './export.types';
-import type { ExportSourceRecord } from './export-source.port';
+import type { ExportContentSource } from './export-source.port';
 import {
   normalizeSceneDividerVariant,
   sceneDividerSvg,
@@ -67,6 +67,41 @@ function textMarks(node: JsonRecord): ExportInline {
   return inline;
 }
 
+/**
+ * El texto de la nota vive en `attrs.content` (nodos inline de Tiptap). Solo
+ * admite texto con marcas y saltos de línea: una nota dentro de otra o una
+ * imagen se descartan.
+ */
+function noteInlines(nodes: unknown[]): ExportInline[] {
+  return nodes.flatMap((value): ExportInline[] => {
+    if (!isRecord(value)) {
+      return [];
+    }
+    if (value['type'] === 'text') {
+      return [textMarks(value)];
+    }
+    if (value['type'] === 'hardBreak') {
+      return [{ kind: 'break' }];
+    }
+    return noteInlines(childNodes(value));
+  });
+}
+
+function parseNoteReference(node: JsonRecord): ExportInline | null {
+  const attrs = nodeAttributes(node);
+  const content = attrs['content'];
+  const inlines = noteInlines(Array.isArray(content) ? content : []);
+  if (!inlines.some((inline) => inline.kind === 'text' && inline.text.trim())) {
+    return null;
+  }
+
+  return {
+    kind: 'note',
+    noteKind: attrs['kind'] === 'endnote' ? 'endnote' : 'footnote',
+    inlines,
+  };
+}
+
 async function parseInlines(
   nodes: unknown[],
   resolveImage: ImageResolver,
@@ -91,6 +126,10 @@ async function parseInline(
   }
   if (value['type'] === 'hardBreak') {
     return [{ kind: 'break' }];
+  }
+  if (value['type'] === 'noteReference') {
+    const note = parseNoteReference(value);
+    return note ? [note] : [];
   }
   if (value['type'] === 'paragraph' || value['type'] === 'inline') {
     return parseInlines(childNodes(value), resolveImage, sceneId);
@@ -246,9 +285,12 @@ async function parseImageBlock(
   };
 }
 
+export const DEFAULT_EXPORT_AUTHOR = 'PlumIA';
+
 export async function prepareExportDocument(
-  source: ExportSourceRecord,
+  source: ExportContentSource,
   resolveImage: ImageResolver,
+  meta: { author?: string; cover?: ExportImage | null } = {},
 ): Promise<ExportDocument> {
   const chapters = await Promise.all(
     source.chapters.map(async (chapter) => ({
@@ -268,7 +310,13 @@ export async function prepareExportDocument(
     })),
   );
 
-  return { id: source.id, title: source.title, chapters };
+  return {
+    id: source.id,
+    title: source.title,
+    author: meta.author ?? DEFAULT_EXPORT_AUTHOR,
+    cover: meta.cover ?? null,
+    chapters,
+  };
 }
 
 function escapeHtml(value: string): string {
@@ -280,9 +328,20 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
-function inlineHtml(inline: ExportInline): string {
+type NoteInline = Extract<ExportInline, { kind: 'note' }>;
+
+interface HtmlRenderers {
+  imageSrc: (image: ExportImage) => string;
+  sceneDividerSrc: (variant: SceneDividerVariant) => string;
+  noteRef: (note: NoteInline) => string;
+}
+
+function inlineHtml(inline: ExportInline, renderers: HtmlRenderers): string {
   if (inline.kind === 'break') {
     return '<br />';
+  }
+  if (inline.kind === 'note') {
+    return renderers.noteRef(inline);
   }
 
   let result = escapeHtml(inline.text);
@@ -298,33 +357,23 @@ function inlineHtml(inline: ExportInline): string {
   return result;
 }
 
-function blocksHtml(
-  blocks: ExportBlock[],
-  imageSrc: (image: ExportImage) => string,
-  sceneDividerSrc: (variant: SceneDividerVariant) => string,
-): string {
-  return blocks
-    .map((block) => blockHtml(block, imageSrc, sceneDividerSrc))
-    .join('\n');
+function blocksHtml(blocks: ExportBlock[], renderers: HtmlRenderers): string {
+  return blocks.map((block) => blockHtml(block, renderers)).join('\n');
 }
 
-function blockHtml(
-  block: ExportBlock,
-  imageSrc: (image: ExportImage) => string,
-  sceneDividerSrc: (variant: SceneDividerVariant) => string,
-): string {
+function blockHtml(block: ExportBlock, renderers: HtmlRenderers): string {
   if (
     block.kind === 'paragraph' ||
     block.kind === 'heading' ||
     block.kind === 'blockquote' ||
     block.kind === 'codeBlock'
   ) {
-    return textBlockHtml(block);
+    return textBlockHtml(block, renderers);
   }
   if (block.kind === 'bulletList' || block.kind === 'orderedList') {
     const tag = block.kind === 'bulletList' ? 'ul' : 'ol';
     const items = block.items
-      .map((item) => `<li>${blocksHtml(item, imageSrc, sceneDividerSrc)}</li>`)
+      .map((item) => `<li>${blocksHtml(item, renderers)}</li>`)
       .join('');
     return `<${tag}>${items}</${tag}>`;
   }
@@ -333,16 +382,19 @@ function blockHtml(
   }
   if (block.kind === 'sceneDivider') {
     return `<p class="scene-divider"><img src="${escapeHtml(
-      sceneDividerSrc(block.variant),
+      renderers.sceneDividerSrc(block.variant),
     )}" alt="Separador ornamental" /></p>`;
   }
-  return `<p class="image"><img src="${escapeHtml(imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
+  return `<p class="image"><img src="${escapeHtml(renderers.imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
 }
 
 function textBlockHtml(
   block: Extract<ExportBlock, { inlines: ExportInline[] }>,
+  renderers: HtmlRenderers,
 ): string {
-  const content = block.inlines.map(inlineHtml).join('');
+  const content = block.inlines
+    .map((inline) => inlineHtml(inline, renderers))
+    .join('');
   const style = [
     block.textAlign ? `text-align:${block.textAlign}` : '',
     block.lineHeight ? `line-height:${block.lineHeight}` : '',
@@ -369,18 +421,38 @@ function textBlockHtml(
 
 export function blocksToHtml(
   blocks: ExportBlock[],
-  imageSrc: (image: ExportImage) => string = (image) =>
-    `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
-  sceneDividerSrc: (variant: SceneDividerVariant) => string = (variant) =>
-    `data:image/svg+xml;base64,${Buffer.from(sceneDividerSvg(variant)).toString(
-      'base64',
-    )}`,
+  renderers: Partial<HtmlRenderers> = {},
 ): string {
-  return blocksHtml(blocks, imageSrc, sceneDividerSrc);
+  return blocksHtml(blocks, {
+    imageSrc: (image) =>
+      `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
+    sceneDividerSrc: (variant) =>
+      `data:image/svg+xml;base64,${Buffer.from(
+        sceneDividerSvg(variant),
+      ).toString('base64')}`,
+    noteRef: () => '',
+    ...renderers,
+  });
+}
+
+/** HTML del texto de una nota (sin marcadores de notas anidadas). */
+export function noteInlinesToHtml(inlines: ExportInline[]): string {
+  const renderers: HtmlRenderers = {
+    imageSrc: () => '',
+    sceneDividerSrc: () => '',
+    noteRef: () => '',
+  };
+  return inlines.map((inline) => inlineHtml(inline, renderers)).join('');
 }
 
 export function inlineText(inlines: ExportInline[]): string {
   return inlines
-    .map((inline) => (inline.kind === 'break' ? '\n' : inline.text))
+    .map((inline) =>
+      inline.kind === 'break'
+        ? '\n'
+        : inline.kind === 'note'
+          ? ''
+          : inline.text,
+    )
     .join('');
 }

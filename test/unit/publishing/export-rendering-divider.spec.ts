@@ -1,265 +1,113 @@
-import { inflateSync } from 'node:zlib';
+import type { Prisma } from '@prisma/client';
 import JSZip from 'jszip';
-import { DocxExportRenderer } from '../../../src/publishing/exports/renderers/docx-export.renderer';
 import { EpubExportRenderer } from '../../../src/publishing/exports/renderers/epub-export.renderer';
-import { PdfExportRenderer } from '../../../src/publishing/exports/renderers/pdf-export.renderer';
-import { DEFAULT_EXPORT_SETTINGS } from '../../../src/publishing/exports/export-settings.defaults';
+import type { ExportContentSource } from '../../../src/publishing/exports/export-source.port';
 import { prepareExportDocument } from '../../../src/publishing/exports/tiptap-export';
 
-function pdfContentStreams(buffer: Buffer): string {
-  const streamToken = Buffer.from('stream');
-  const endStreamToken = Buffer.from('endstream');
-  const streams: string[] = [];
-  let offset = 0;
+const variants = [
+  'flourish',
+  'diamonds',
+  'stars',
+  'waves',
+  'dots',
+  'asterisks',
+  'moon',
+] as const;
 
-  for (;;) {
-    const start = buffer.indexOf(streamToken, offset);
-    if (start === -1) {
-      break;
-    }
-    let dataStart = start + streamToken.length;
-    if (buffer[dataStart] === 0x0d) {
-      dataStart++;
-    }
-    if (buffer[dataStart] === 0x0a) {
-      dataStart++;
-    }
-    const end = buffer.indexOf(endStreamToken, dataStart);
-    if (end === -1) {
-      break;
-    }
-    try {
-      streams.push(
-        inflateSync(buffer.subarray(dataStart, end)).toString('latin1'),
-      );
-    } catch {
-      // Ignore uncompressed or non-content streams.
-    }
-    offset = end + endStreamToken.length;
-  }
-
-  return streams.join('\n');
+function sourceWith(content: Prisma.JsonArray): ExportContentSource {
+  return {
+    id: 'book-id',
+    title: 'La obra',
+    chapters: [
+      {
+        id: 'chapter-1',
+        title: 'Capítulo I',
+        scenes: [
+          {
+            id: 'scene-1',
+            title: null,
+            content: { type: 'doc', content },
+          },
+        ],
+      },
+    ],
+  };
 }
 
-describe('export scene dividers', () => {
-  it('keeps every divider variant distinct in the PDF renderer', async () => {
-    const variants = [
-      'flourish',
-      'diamonds',
-      'stars',
-      'waves',
-      'dots',
-      'asterisks',
-      'moon',
-    ] as const;
-    const dividerSource = {
-      id: 'book-id',
-      title: 'La obra',
-      chapters: [
-        {
-          id: 'chapter-1',
-          title: 'Capítulo I',
-          scenes: [
-            {
-              id: 'scene-1',
-              title: null,
-              content: {
-                type: 'doc',
-                content: variants.map((variant) => ({
-                  type: 'sceneDivider',
-                  attrs: { variant },
-                })),
-              },
-            },
-          ],
-        },
-      ],
-    };
+const noImage = (): Promise<never> =>
+  Promise.reject(new Error('no image expected'));
 
-    const document = await prepareExportDocument(dividerSource, () =>
-      Promise.reject(new Error('no image expected')),
+describe('export scene dividers', () => {
+  it('keeps every divider variant as its own distinct SVG in the EPUB', async () => {
+    const document = await prepareExportDocument(
+      sourceWith(
+        variants.map((variant) => ({
+          type: 'sceneDivider',
+          attrs: { variant },
+        })),
+      ),
+      noImage,
     );
     expect(document.chapters[0]?.scenes[0]?.content).toEqual(
       variants.map((variant) => ({ kind: 'sceneDivider', variant })),
     );
 
-    const pdfContents = await Promise.all(
-      variants.map(async (variant) => {
-        const variantDocument = {
-          ...document,
-          chapters: [
-            {
-              ...document.chapters[0]!,
-              scenes: [
-                {
-                  ...document.chapters[0]!.scenes[0]!,
-                  content: [{ kind: 'sceneDivider' as const, variant }],
-                },
-              ],
-            },
-          ],
-        };
-        const rendered = await new PdfExportRenderer().render(
-          variantDocument,
-          DEFAULT_EXPORT_SETTINGS,
-        );
-        return pdfContentStreams(rendered.buffer);
-      }),
-    );
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
 
-    expect(new Set(pdfContents).size).toBe(variants.length);
+    const svgs = await Promise.all(
+      variants.map((variant) =>
+        zip.files[`OEBPS/images/divider-${variant}.svg`]!.async('string'),
+      ),
+    );
+    expect(new Set(svgs).size).toBe(variants.length);
+
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+    for (const variant of variants) {
+      expect(opf).toContain(
+        `href="images/divider-${variant}.svg" media-type="image/svg+xml"`,
+      );
+    }
   });
 
-  it('preserves the ornamental variant and embeds visual assets', async () => {
-    const dividerSource = {
-      id: 'book-id',
-      title: 'La obra',
-      chapters: [
-        {
-          id: 'chapter-1',
-          title: 'Capítulo I',
-          scenes: [
-            {
-              id: 'scene-1',
-              title: null,
-              content: {
-                type: 'doc',
-                content: [
-                  { type: 'sceneDivider', attrs: { variant: 'stars' } },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    };
-
-    const document = await prepareExportDocument(dividerSource, () =>
-      Promise.reject(new Error('no image expected')),
+  it('only embeds the divider variants actually used', async () => {
+    const document = await prepareExportDocument(
+      sourceWith([{ type: 'sceneDivider', attrs: { variant: 'stars' } }]),
+      noImage,
     );
     expect(document.chapters[0]?.scenes[0]?.content).toEqual([
       { kind: 'sceneDivider', variant: 'stars' },
     ]);
 
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-    ]);
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
 
-    const docxZip = await JSZip.loadAsync(docx.buffer);
-    expect(
-      Object.keys(docxZip.files).some((name) => name.endsWith('.svg')),
-    ).toBe(true);
-    expect(
-      Object.keys(docxZip.files).some((name) => name.endsWith('.png')),
-    ).toBe(true);
+    const svgFiles = Object.keys(zip.files).filter((name) =>
+      name.endsWith('.svg'),
+    );
+    expect(svgFiles).toEqual(['OEBPS/images/divider-stars.svg']);
 
-    const epubZip = await JSZip.loadAsync(epub.buffer);
-    expect(
-      Object.keys(epubZip.files).some((name) => name.endsWith('.svg')),
-    ).toBe(true);
-    expect(
-      Object.keys(epubZip.files).some((name) => name.endsWith('.xhtml')),
-    ).toBe(true);
-    expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
+    const scene =
+      await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
+    expect(scene).toContain('src="images/divider-stars.svg"');
   });
 
-  it('renders a scene divider as a horizontal line, not a Unicode glyph', async () => {
-    const dividerSource = {
-      id: 'book-id',
-      title: 'La obra',
-      chapters: [
-        {
-          id: 'chapter-1',
-          title: 'Capítulo I',
-          scenes: [
-            {
-              id: 'scene-1',
-              title: null,
-              content: {
-                type: 'doc',
-                content: [
-                  {
-                    type: 'paragraph',
-                    content: [{ type: 'text', text: 'Antes.' }],
-                  },
-                  { type: 'horizontalRule' },
-                  {
-                    type: 'paragraph',
-                    content: [{ type: 'text', text: 'Después.' }],
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    };
-
-    const document = await prepareExportDocument(dividerSource, () =>
-      Promise.reject(new Error('no image expected')),
+  it('renders a horizontal rule as <hr />, not a Unicode glyph', async () => {
+    const document = await prepareExportDocument(
+      sourceWith([
+        { type: 'paragraph', content: [{ type: 'text', text: 'Antes.' }] },
+        { type: 'horizontalRule' },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Después.' }] },
+      ]),
+      noImage,
     );
 
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-    ]);
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
 
-    // DOCX: el separador es un borde de párrafo (w:pBdr), no un carácter.
-    const docxZip = await JSZip.loadAsync(docx.buffer);
-    const documentXml =
-      await docxZip.files['word/document.xml']?.async('string');
-    expect(documentXml).toContain('w:pBdr');
-    expect(documentXml).not.toContain('⁂');
-
-    // PDF: una línea vectorial real (operadores m/l/S), no el glifo roto.
-    const pdfText = pdf.buffer.toString('latin1');
-    expect(pdfText).not.toContain('⁂');
-    const streamTok = Buffer.from('stream');
-    const endTok = Buffer.from('endstream');
-    let idx = 0;
-    let foundStrokedLine = false;
-    for (;;) {
-      const start = pdf.buffer.indexOf(streamTok, idx);
-      if (start === -1) {
-        break;
-      }
-      let dataStart = start + streamTok.length;
-      if (pdf.buffer[dataStart] === 0x0d) {
-        dataStart++;
-      }
-      if (pdf.buffer[dataStart] === 0x0a) {
-        dataStart++;
-      }
-      const end = pdf.buffer.indexOf(endTok, dataStart);
-      if (end === -1) {
-        break;
-      }
-      try {
-        const content = inflateSync(
-          pdf.buffer.subarray(dataStart, end),
-        ).toString('latin1');
-        if (/ m\n[\d.]+ [\d.]+ l\n/.test(content) && /\nS\n/.test(content)) {
-          foundStrokedLine = true;
-        }
-      } catch {
-        // No es un content stream FlateDecode.
-      }
-      idx = end + endTok.length;
-    }
-    expect(foundStrokedLine).toBe(true);
-
-    // EPUB: sin cambios, sigue siendo <hr/>.
-    const epubZip = await JSZip.loadAsync(epub.buffer);
-    const xhtmlFiles = Object.keys(epubZip.files).filter(
-      (name) =>
-        name.endsWith('.xhtml') && name.split('/').pop() !== 'toc.xhtml',
-    );
-    const epubPages = await Promise.all(
-      xhtmlFiles.map((name) => epubZip.files[name]!.async('string')),
-    );
-    expect(epubPages.some((html) => html.includes('<hr'))).toBe(true);
+    const scene =
+      await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
+    expect(scene).toContain('<hr />');
+    expect(scene).not.toContain('⁂');
   });
 });

@@ -9,6 +9,12 @@ import {
 const exportSourceSelect = {
   id: true,
   title: true,
+  coverStorageKey: true,
+  project: {
+    select: {
+      user: { select: { name: true, lastname: true, displayName: true } },
+    },
+  },
   chapters: {
     where: { deletedAt: null },
     orderBy: { sortKey: 'asc' },

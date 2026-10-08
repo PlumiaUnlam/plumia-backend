@@ -1,6 +1,5 @@
 import { ExportFormat, ExportStatus } from '@prisma/client';
 import { ExportService } from '../../../src/publishing/exports/export.service';
-import { DEFAULT_EXPORT_SETTINGS } from '../../../src/publishing/exports/export-settings.defaults';
 
 describe('ExportService', () => {
   const containing = <T>(value: T): T => expect.objectContaining(value) as T;
@@ -23,16 +22,18 @@ describe('ExportService', () => {
     generatePresignedGetUrl: jest.fn(),
   };
   const renderer = { render: jest.fn() };
-  const exportSettings = {
-    getEffectiveConfig: jest.fn().mockResolvedValue(DEFAULT_EXPORT_SETTINGS),
-  };
   const source = { findByIdForUser: jest.fn() };
+  const sourceMeta = {
+    coverStorageKey: null as string | null,
+    project: {
+      user: { name: 'Ana', lastname: 'Pérez', displayName: null },
+    },
+  };
 
   const service = new ExportService(
     prisma as never,
     storage as never,
     renderer as never,
-    exportSettings as never,
     source,
   );
 
@@ -46,7 +47,7 @@ describe('ExportService', () => {
       id: 'job-id',
       projectId: 'project-id',
       scopeId: 'book-id',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: ExportStatus.QUEUED,
       progress: 0,
       errorMessage: null,
@@ -64,14 +65,14 @@ describe('ExportService', () => {
       'user-id',
       'project-id',
       'book-id',
-      'PDF',
+      'EPUB',
     );
 
     expect(result).toMatchObject({
       id: 'job-id',
       projectId: 'project-id',
       bookId: 'book-id',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: ExportStatus.QUEUED,
     });
     expect(prisma.book.findFirst).toHaveBeenCalledWith(
@@ -87,7 +88,7 @@ describe('ExportService', () => {
         data: containing({
           projectId: 'project-id',
           userId: 'user-id',
-          format: ExportFormat.PDF,
+          format: ExportFormat.EPUB,
           scopeType: 'BOOK',
           scopeId: 'book-id',
         }),
@@ -108,7 +109,7 @@ describe('ExportService', () => {
     prisma.book.findFirst.mockResolvedValue(null);
 
     await expect(
-      service.requestExport('user-id', 'project-id', 'book-id', 'PDF'),
+      service.requestExport('user-id', 'project-id', 'book-id', 'EPUB'),
     ).rejects.toThrow('Book not found');
   });
 
@@ -126,35 +127,34 @@ describe('ExportService', () => {
       projectId: 'project-id',
       scopeId: 'book-id',
       userId: 'user-id',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: ExportStatus.QUEUED,
     });
     prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
     prisma.exportJob.update.mockResolvedValue({});
     source.findByIdForUser.mockResolvedValue({
+      ...sourceMeta,
       id: 'book-id',
       title: 'La obra',
       chapters: [],
     });
     renderer.render.mockResolvedValue({
-      buffer: Buffer.from('pdf'),
-      contentType: 'application/pdf',
-      extension: 'PDF',
+      buffer: Buffer.from('epub'),
+      contentType: 'application/epub+zip',
+      extension: 'EPUB',
     });
 
     await service.processExport('job-id');
 
     expect(source.findByIdForUser).toHaveBeenCalledWith('user-id', 'book-id');
     expect(renderer.render).toHaveBeenCalledWith(
-      ExportFormat.PDF,
       containing({ title: 'La obra', chapters: [] }),
-      DEFAULT_EXPORT_SETTINGS,
     );
     expect(storage.putBuffer).toHaveBeenCalledWith(
-      'exports/project-id/job-id.pdf',
-      Buffer.from('pdf'),
-      'application/pdf',
-      expect.stringContaining('la-obra.pdf'),
+      'exports/project-id/job-id.epub',
+      Buffer.from('epub'),
+      'application/epub+zip',
+      expect.stringContaining('la-obra.epub'),
     );
     expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
       containing({
@@ -162,7 +162,7 @@ describe('ExportService', () => {
         data: containing({
           status: ExportStatus.COMPLETED,
           progress: 100,
-          storageKey: 'exports/project-id/job-id.pdf',
+          storageKey: 'exports/project-id/job-id.epub',
         }),
       }),
     );
@@ -173,11 +173,11 @@ describe('ExportService', () => {
       id: 'job-id',
       projectId: 'project-id',
       scopeId: 'book-id',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: ExportStatus.COMPLETED,
       progress: 100,
       errorMessage: null,
-      storageKey: 'exports/project-id/job-id.pdf',
+      storageKey: 'exports/project-id/job-id.epub',
       fileSizeBytes: 123n,
       createdAt: new Date(),
       completedAt: new Date(),
@@ -185,7 +185,7 @@ describe('ExportService', () => {
     prisma.exportJob.findFirst.mockResolvedValue(completed);
     prisma.book.findUnique.mockResolvedValue({ title: 'L’été — À nous' });
     storage.generatePresignedGetUrl.mockResolvedValue(
-      'https://download.example/book.pdf',
+      'https://download.example/book.epub',
     );
 
     await expect(
@@ -193,13 +193,13 @@ describe('ExportService', () => {
     ).resolves.toMatchObject({
       id: 'job-id',
       status: ExportStatus.COMPLETED,
-      downloadUrl: 'https://download.example/book.pdf',
+      downloadUrl: 'https://download.example/book.epub',
     });
     expect(storage.generatePresignedGetUrl).toHaveBeenCalledWith(
       completed.storageKey,
       {
-        responseContentType: 'application/pdf',
-        downloadName: 'l-ete-a-nous.pdf',
+        responseContentType: 'application/epub+zip',
+        downloadName: 'l-ete-a-nous.epub',
       },
     );
 
@@ -236,7 +236,11 @@ describe('ExportService', () => {
   it.each([
     [{ format: 'TXT', scopeId: 'book-id' }, 'Unsupported export format: TXT'],
     [
-      { format: ExportFormat.PDF, scopeId: null },
+      { format: ExportFormat.PDF, scopeId: 'book-id' },
+      'Unsupported export format: PDF',
+    ],
+    [
+      { format: ExportFormat.EPUB, scopeId: null },
       'Export job is missing a book scopeId',
     ],
   ])(
@@ -271,7 +275,7 @@ describe('ExportService', () => {
       projectId: 'project-id',
       scopeId: 'book-id',
       userId: 'user-id',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: ExportStatus.QUEUED,
     });
     prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
@@ -296,11 +300,12 @@ describe('ExportService', () => {
       projectId: 'project-id',
       scopeId: 'book-id',
       userId: 'user-id',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: ExportStatus.QUEUED,
     });
     prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
     source.findByIdForUser.mockResolvedValue({
+      ...sourceMeta,
       id: 'book-id',
       title: 'Book',
       chapters: [
@@ -337,9 +342,9 @@ describe('ExportService', () => {
     });
     storage.getBuffer.mockResolvedValue(Buffer.from('image'));
     renderer.render.mockResolvedValue({
-      buffer: Buffer.from('pdf'),
-      contentType: 'application/pdf',
-      extension: 'PDF',
+      buffer: Buffer.from('epub'),
+      contentType: 'application/epub+zip',
+      extension: 'EPUB',
     });
 
     await service.processExport('job-id');
@@ -352,6 +357,7 @@ describe('ExportService', () => {
     ]) {
       prisma.exportJob.update.mockClear();
       source.findByIdForUser.mockResolvedValue({
+        ...sourceMeta,
         id: 'book-id',
         title: 'Book',
         chapters: [
@@ -380,5 +386,108 @@ describe('ExportService', () => {
         containing({ data: containing({ status: ExportStatus.FAILED }) }),
       );
     }
+  });
+  describe('cover and author', () => {
+    const queuedJob = {
+      id: 'job-id',
+      projectId: 'project-id',
+      scopeId: 'book-id',
+      userId: 'user-id',
+      format: ExportFormat.EPUB,
+      status: ExportStatus.QUEUED,
+    };
+
+    beforeEach(() => {
+      prisma.exportJob.findUnique.mockResolvedValue(queuedJob);
+      prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
+      prisma.exportJob.update.mockResolvedValue({});
+      renderer.render.mockResolvedValue({
+        buffer: Buffer.from('epub'),
+        contentType: 'application/epub+zip',
+        extension: 'EPUB',
+      });
+    });
+
+    function mockSource(overrides: {
+      coverStorageKey?: string | null;
+      displayName?: string | null;
+      name?: string;
+      lastname?: string;
+    }): void {
+      source.findByIdForUser.mockResolvedValue({
+        id: 'book-id',
+        title: 'La obra',
+        chapters: [],
+        coverStorageKey: overrides.coverStorageKey ?? null,
+        project: {
+          user: {
+            name: overrides.name ?? 'Ana',
+            lastname: overrides.lastname ?? 'Pérez',
+            displayName: overrides.displayName ?? null,
+          },
+        },
+      });
+    }
+
+    it('loads the book cover and uses the display name as author', async () => {
+      mockSource({
+        coverStorageKey: 'books/book-id/cover-1.png',
+        displayName: 'A. P. Escritora',
+      });
+      storage.getBuffer.mockResolvedValue(Buffer.from('png'));
+
+      await service.processExport('job-id');
+
+      expect(storage.getBuffer).toHaveBeenCalledWith(
+        'books/book-id/cover-1.png',
+      );
+      expect(renderer.render).toHaveBeenCalledWith(
+        containing({
+          author: 'A. P. Escritora',
+          cover: {
+            buffer: Buffer.from('png'),
+            mimeType: 'image/png',
+            extension: 'png',
+          },
+        }),
+      );
+    });
+
+    it('falls back to name and lastname, then to PlumIA', async () => {
+      mockSource({});
+      await service.processExport('job-id');
+      expect(renderer.render).toHaveBeenLastCalledWith(
+        containing({ author: 'Ana Pérez', cover: null }),
+      );
+
+      mockSource({ name: ' ', lastname: '' });
+      await service.processExport('job-id');
+      expect(renderer.render).toHaveBeenLastCalledWith(
+        containing({ author: 'PlumIA' }),
+      );
+    });
+
+    it('exports without cover when the cover cannot be loaded', async () => {
+      mockSource({ coverStorageKey: 'books/book-id/cover-1.jpg' });
+      storage.getBuffer.mockRejectedValue(new Error('NoSuchKey'));
+
+      await service.processExport('job-id');
+
+      expect(renderer.render).toHaveBeenCalledWith(containing({ cover: null }));
+      expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
+        containing({
+          data: containing({ status: ExportStatus.COMPLETED }),
+        }),
+      );
+    });
+
+    it('ignores a cover key that does not belong to the book', async () => {
+      mockSource({ coverStorageKey: 'books/other-book/cover-1.jpg' });
+
+      await service.processExport('job-id');
+
+      expect(storage.getBuffer).not.toHaveBeenCalled();
+      expect(renderer.render).toHaveBeenCalledWith(containing({ cover: null }));
+    });
   });
 });

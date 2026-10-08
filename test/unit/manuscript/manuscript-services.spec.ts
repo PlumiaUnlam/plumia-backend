@@ -36,6 +36,7 @@ describe('Manuscript child services', () => {
     projectId: 'project-1',
     title: 'Book one',
     sortKey: '001',
+    coverStorageKey: null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,

@@ -5,7 +5,6 @@ import { WritingGoalType } from '../../../src/analytics/domain/writing-goal-type
 import { AuditController } from '../../../src/audit/audit.controller';
 import { PublishingController } from '../../../src/publishing/publishing.controller';
 import { ExportController } from '../../../src/publishing/exports/export.controller';
-import { ExportSettingsController } from '../../../src/publishing/exports/export-settings.controller';
 import { SummaryController } from '../../../src/summary/controllers/summary.controller';
 
 const req = { user: { id: 'user-1' } } as AuthenticatedRequest;
@@ -268,7 +267,7 @@ describe('publishing and export controllers', () => {
       id: 'export-1',
       projectId: 'project-1',
       bookId: 'book-1',
-      format: ExportFormat.PDF,
+      format: ExportFormat.EPUB,
       status: 'QUEUED',
       progress: 0,
       errorMessage: null,
@@ -283,7 +282,7 @@ describe('publishing and export controllers', () => {
 
     await expect(
       controller.create(req, 'project-1', 'book-1', {
-        format: ExportFormat.PDF,
+        format: ExportFormat.EPUB,
       }),
     ).resolves.toMatchObject({ id: 'export-1' });
     await expect(
@@ -293,38 +292,13 @@ describe('publishing and export controllers', () => {
       'user-1',
       'project-1',
       'book-1',
-      ExportFormat.PDF,
+      ExportFormat.EPUB,
     );
     expect(service.getExportStatus).toHaveBeenCalledWith(
       'user-1',
       'project-1',
       'book-1',
       'export-1',
-    );
-  });
-
-  it('passes project-scoped export settings reads and writes through', async () => {
-    const settings = {
-      margins: { top: 20 },
-      header: { enabled: true },
-      footer: { enabled: false },
-    };
-    const service = {
-      getSettings: jest.fn().mockResolvedValue(settings),
-      upsertSettings: jest.fn().mockResolvedValue(settings),
-    };
-    const controller = new ExportSettingsController(service as never);
-    const dto = { margins: { top: 20 } };
-
-    await expect(controller.get(req, 'project-1')).resolves.toEqual(settings);
-    await expect(
-      controller.update(req, 'project-1', dto as never),
-    ).resolves.toEqual(settings);
-    expect(service.getSettings).toHaveBeenCalledWith('user-1', 'project-1');
-    expect(service.upsertSettings).toHaveBeenCalledWith(
-      'user-1',
-      'project-1',
-      dto,
     );
   });
 });
