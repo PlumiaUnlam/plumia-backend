@@ -101,20 +101,25 @@ export class StorageService {
         return `${storageFolder}/${entityId}/${uuid}.${ext}`;
       })();
 
+    const presignedUrl = await this.generatePresignedPutUrl(key, contentType);
+
+    const publicUrl = `${this.publicUrl}/${this.bucket}/${key}`;
+
+    return { presignedUrl, publicUrl, storageKey: key };
+  }
+
+  /** URL de subida directa (PUT) para una clave ya validada por el llamador. */
+  generatePresignedPutUrl(key: string, contentType: string): Promise<string> {
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
       ContentType: contentType,
     });
 
-    const presignedUrl = await getSignedUrl(this.s3, command, {
+    return getSignedUrl(this.s3, command, {
       expiresIn: 900,
       signableHeaders: new Set(['content-type']),
     });
-
-    const publicUrl = `${this.publicUrl}/${this.bucket}/${key}`;
-
-    return { presignedUrl, publicUrl, storageKey: key };
   }
 
   getPublicUrl(key: string): string {
@@ -192,6 +197,22 @@ export class StorageService {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  async headObject(
+    key: string,
+  ): Promise<{ contentLength: number; contentType: string | null } | null> {
+    try {
+      const result = await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      return {
+        contentLength: result.ContentLength ?? 0,
+        contentType: result.ContentType ?? null,
+      };
+    } catch {
+      return null;
     }
   }
 

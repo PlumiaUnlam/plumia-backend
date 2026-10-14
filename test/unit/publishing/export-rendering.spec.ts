@@ -1,10 +1,7 @@
-import { inflateSync } from 'node:zlib';
+import type { Prisma } from '@prisma/client';
 import JSZip from 'jszip';
-import { DocxExportRenderer } from '../../../src/publishing/exports/renderers/docx-export.renderer';
+import type { ExportImage } from '../../../src/publishing/exports/export.types';
 import { EpubExportRenderer } from '../../../src/publishing/exports/renderers/epub-export.renderer';
-import { PdfExportRenderer } from '../../../src/publishing/exports/renderers/pdf-export.renderer';
-import { DEFAULT_EXPORT_SETTINGS } from '../../../src/publishing/exports/export-settings.defaults';
-import type { ExportSettingsConfig } from '../../../src/publishing/exports/export-settings.types';
 import {
   blocksToHtml,
   prepareExportDocument,
@@ -143,22 +140,31 @@ const multiChapterSource = {
   ],
 };
 
-function pdfPageCount(buffer: Buffer): number | undefined {
-  const match = buffer
-    .toString('latin1')
-    .match(/\/Type\s*\/Pages[^>]*\/Count\s+(\d+)/);
-  return match ? Number(match[1]) : undefined;
+const pngImage = (): Promise<ExportImage> =>
+  Promise.resolve({
+    buffer: imageBuffer,
+    mimeType: 'image/png',
+    extension: 'png',
+  });
+
+async function epubXhtmlFiles(buffer: Buffer): Promise<string[]> {
+  const zip = await JSZip.loadAsync(buffer);
+  const entries = Object.keys(zip.files)
+    .filter(
+      (name) =>
+        name.endsWith('.xhtml') && name.split('/').pop() !== 'toc.xhtml',
+    )
+    .sort();
+  return Promise.all(entries.map((name) => zip.files[name]!.async('string')));
+}
+
+function epubBody(html: string): string {
+  return html.match(/<body>([\s\S]*)<\/body>/)?.[1] ?? html;
 }
 
 describe('export rendering', () => {
   it('normalizes Tiptap content and embeds referenced images', async () => {
-    const document = await prepareExportDocument(source, () =>
-      Promise.resolve({
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        extension: 'png',
-      }),
-    );
+    const document = await prepareExportDocument(source, pngImage);
 
     const blocks = document.chapters[0]?.scenes[0]?.content ?? [];
     const html = blocksToHtml(blocks);
@@ -168,230 +174,72 @@ describe('export rendering', () => {
     expect(html).toContain('data:image/png;base64');
   });
 
-  it('generates a DOCX, PDF and EPUB buffer', async () => {
-    const document = await prepareExportDocument(source, () =>
-      Promise.resolve({
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        extension: 'png',
-      }),
+  it('generates a valid EPUB container with an uncompressed mimetype first', async () => {
+    const document = await prepareExportDocument(source, pngImage);
+
+    const epub = await new EpubExportRenderer().render(document);
+
+    expect(epub.contentType).toBe('application/epub+zip');
+    expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
+    // Local file header: el nombre arranca en el byte 30 y el método de
+    // compresión (0 = STORE) está en el byte 8.
+    expect(epub.buffer.readUInt16LE(8)).toBe(0);
+    expect(epub.buffer.subarray(30, 38).toString()).toBe('mimetype');
+    expect(epub.buffer.subarray(38, 58).toString()).toBe(
+      'application/epub+zip',
     );
 
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-    ]);
-
-    expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
-    expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
-    expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
+    const zip = await JSZip.loadAsync(epub.buffer);
+    expect(zip.files['META-INF/container.xml']).toBeDefined();
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+    expect(opf).toContain('<dc:identifier id="book-id">urn:uuid:book-id');
+    expect(opf).toContain('properties="nav"');
+    expect(opf).toMatch(
+      /<meta property="dcterms:modified">\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z<\/meta>/,
+    );
   });
 
-  it('includes a linked hierarchical index in every format', async () => {
-    const document = await prepareExportDocument(source, () =>
-      Promise.resolve({
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        extension: 'png',
-      }),
-    );
+  it('embeds referenced images in the EPUB and declares them in the manifest', async () => {
+    const document = await prepareExportDocument(source, pngImage);
 
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-    ]);
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
 
-    const docxZip = await JSZip.loadAsync(docx.buffer);
-    const documentXml =
-      await docxZip.files['word/document.xml']!.async('string');
-    expect(documentXml).toContain('Índice');
-    expect(documentXml).toContain('w:bookmarkStart');
-    expect(documentXml).toContain('w:anchor="export_chapter_chapter_id"');
-    expect(documentXml).toContain('w:anchor="export_scene_scene_id"');
+    const image =
+      await zip.files['OEBPS/images/image-0.png']!.async('nodebuffer');
+    expect(image.equals(imageBuffer)).toBe(true);
 
-    const pdfText = pdf.buffer.toString('latin1');
-    expect(pdfText).toContain('export_book_book_id');
-    expect(pdfText).toContain('export_chapter_chapter_id');
-    expect(pdfText).toContain('export_scene_scene_id');
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+    expect(opf).toContain('href="images/image-0.png" media-type="image/png"');
+
+    const scene =
+      await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
+    expect(scene).toContain('<img src="images/image-0.png" alt="Estación" />');
+  });
+
+  it('includes a linked hierarchical index', async () => {
+    const document = await prepareExportDocument(source, pngImage);
+
+    const epub = await new EpubExportRenderer().render(document);
 
     const epubZip = await JSZip.loadAsync(epub.buffer);
     const index = await epubZip.files['OEBPS/index.xhtml']!.async('string');
-    expect(index).toContain('&#xCD;ndice');
+    expect(index).toContain('Índice');
     expect(index).toContain('cover.xhtml#export_book_book_id');
     expect(index).toContain(
       'book-0-chapter-0-scene-0.xhtml#export_scene_scene_id',
     );
   });
 
-  it('applies custom margins and header/footer settings across formats', async () => {
-    const document = await prepareExportDocument(source, () =>
-      Promise.resolve({
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        extension: 'png',
-      }),
-    );
-
-    const settings: ExportSettingsConfig = {
-      margins: { topCm: 5, bottomCm: 1, leftCm: 1, rightCm: 3 },
-      header: {
-        text: '{{tituloLibro}}',
-        alignment: 'center',
-        pageNumber: { enabled: false, format: '' },
-      },
-      footer: {
-        text: null,
-        alignment: 'right',
-        pageNumber: {
-          enabled: true,
-          format: 'Página {{pagina}} de {{totalPaginas}}',
-        },
-      },
-    };
-
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, settings),
-      new PdfExportRenderer().render(document, settings),
-      new EpubExportRenderer().render(document, settings),
-    ]);
-
-    expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
-    expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
-    expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
-  });
-
-  it('inserts a page break between scenes but not after the last scene of a chapter', async () => {
-    const document = await prepareExportDocument(multiSceneSource, () =>
-      Promise.reject(new Error('no image expected')),
-    );
-
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-    ]);
-
-    // Portada (1) + capítulo/escena 1 (2) + salto antes de la escena 2 (3).
-    expect(pdfPageCount(pdf.buffer)).toBe(4);
-
-    expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
-    expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
-  });
-
-  it('inserts a page break between chapters', async () => {
-    const document = await prepareExportDocument(multiChapterSource, () =>
-      Promise.reject(new Error('no image expected')),
-    );
-
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new PdfExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-      new EpubExportRenderer().render(document, DEFAULT_EXPORT_SETTINGS),
-    ]);
-
-    // Portada (1) + capítulo 1 (2) + salto antes del capítulo 2 (3).
-    expect(pdfPageCount(pdf.buffer)).toBe(4);
-
-    expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
-    expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
-  });
-
-  it('does not append blank trailing pages when header/footer are enabled', async () => {
-    const document = await prepareExportDocument(multiSceneSource, () =>
-      Promise.reject(new Error('no image expected')),
-    );
-
-    const settings: ExportSettingsConfig = {
-      margins: DEFAULT_EXPORT_SETTINGS.margins,
-      header: {
-        text: '{{tituloLibro}}',
-        alignment: 'center',
-        pageNumber: { enabled: false, format: '' },
-      },
-      footer: {
-        text: null,
-        alignment: 'center',
-        pageNumber: {
-          enabled: true,
-          format: 'Página {{pagina}} de {{totalPaginas}}',
-        },
-      },
-    };
-
-    const pdf = await new PdfExportRenderer().render(document, settings);
-
-    // Portada (1) + 2 escenas de contenido (2 y 3). Antes del fix, dibujar
-    // el footer cerca del margen inferior disparaba la paginación
-    // automática de pdfkit y agregaba una página en blanco extra al final
-    // por cada página existente.
-    expect(pdfPageCount(pdf.buffer)).toBe(4);
-  });
-
-  it('renders the title alone on a cover page with no header/footer', async () => {
-    const document = await prepareExportDocument(multiSceneSource, () =>
-      Promise.reject(new Error('no image expected')),
-    );
-
-    const settings: ExportSettingsConfig = {
-      margins: DEFAULT_EXPORT_SETTINGS.margins,
-      header: {
-        text: '{{tituloLibro}}',
-        alignment: 'center',
-        pageNumber: { enabled: false, format: '' },
-      },
-      footer: {
-        text: null,
-        alignment: 'center',
-        pageNumber: {
-          enabled: true,
-          format: 'Página {{pagina}} de {{totalPaginas}}',
-        },
-      },
-    };
-
-    const [docx, pdf, epub] = await Promise.all([
-      new DocxExportRenderer().render(document, settings),
-      new PdfExportRenderer().render(document, settings),
-      new EpubExportRenderer().render(document, settings),
-    ]);
-
-    // Portada (1) + 2 escenas de contenido; el footer numera "Página 1 de 2"
-    // (reiniciado) sobre las páginas de contenido, no sobre la portada.
-    expect(pdfPageCount(pdf.buffer)).toBe(4);
-
-    expect(docx.buffer.subarray(0, 2).toString()).toBe('PK');
-    expect(epub.buffer.subarray(0, 2).toString()).toBe('PK');
-  });
-
-  async function epubXhtmlFiles(buffer: Buffer): Promise<string[]> {
-    const zip = await JSZip.loadAsync(buffer);
-    const entries = Object.keys(zip.files)
-      .filter(
-        (name) =>
-          name.endsWith('.xhtml') && name.split('/').pop() !== 'toc.xhtml',
-      )
-      .sort();
-    return Promise.all(entries.map((name) => zip.files[name]!.async('string')));
-  }
-
-  function epubBody(html: string): string {
-    return html.match(/<body>([\s\S]*)<\/body>/)?.[1] ?? html;
-  }
-
   it('splits each scene into its own EPUB file so readers get a real page break', async () => {
     const document = await prepareExportDocument(multiSceneSource, () =>
       Promise.reject(new Error('no image expected')),
     );
 
-    const epub = await new EpubExportRenderer().render(
-      document,
-      DEFAULT_EXPORT_SETTINGS,
-    );
+    const epub = await new EpubExportRenderer().render(document);
     const files = await epubXhtmlFiles(epub.buffer);
 
-    // Portada + escena 1 + escena 2 = 3 archivos separados (spine items).
+    // Portada + índice + escena 1 + escena 2 = 4 archivos (spine items).
     expect(files).toHaveLength(4);
     expect(
       files.some((file) => file.includes('Contenido de la escena 1.')),
@@ -401,19 +249,30 @@ describe('export rendering', () => {
     ).toBe(true);
   });
 
-  it('shows the title only on the cover page, never duplicated in the content', async () => {
-    const document = await prepareExportDocument(source, () =>
-      Promise.resolve({
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        extension: 'png',
-      }),
+  it('starts each chapter in its own EPUB file', async () => {
+    const document = await prepareExportDocument(multiChapterSource, () =>
+      Promise.reject(new Error('no image expected')),
     );
 
-    const epub = await new EpubExportRenderer().render(
-      document,
-      DEFAULT_EXPORT_SETTINGS,
-    );
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
+
+    const first =
+      await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
+    const second =
+      await zip.files['OEBPS/book-0-chapter-1-scene-0.xhtml']!.async('string');
+    expect(first).toContain('Contenido del capítulo 1.');
+    expect(second).toContain('Contenido del capítulo 2.');
+
+    const nav = await zip.files['OEBPS/toc.xhtml']!.async('string');
+    expect(nav).toContain('Capítulo I');
+    expect(nav).toContain('Capítulo II');
+  });
+
+  it('shows the title only on the cover page, never duplicated in the content', async () => {
+    const document = await prepareExportDocument(source, pngImage);
+
+    const epub = await new EpubExportRenderer().render(document);
     const files = await epubXhtmlFiles(epub.buffer);
     const titlePageBody = epubBody(
       files.find((file) => file.includes('id="export_book_book_id"')) ?? '',
@@ -424,146 +283,259 @@ describe('export rendering', () => {
     );
 
     // El <title> del <head> también repite el texto legítimamente; lo que
-    // no debe duplicarse es el encabezado <h1> visible en el <body>, y ya
-    // no existe un nivel "libro" que lo repita en el contenido.
+    // no debe duplicarse es el encabezado <h1> visible en el <body>.
     expect(titlePageBody.match(/<h1\b[^>]*>/g) ?? []).toHaveLength(1);
     expect(chapterFileBody.match(/<h1\b[^>]*>/g) ?? []).toHaveLength(0);
-    // epub-gen sanea el XHTML y codifica caracteres no-ASCII como entidades.
     expect(chapterFileBody).toContain(
-      '<h2 id="export_chapter_chapter_id">Cap&#xED;tulo I</h2>',
+      '<h2 id="export_chapter_chapter_id">Capítulo I</h2>',
     );
   });
+});
 
-  function extractTextYPositions(buffer: Buffer, needle: string): number[] {
-    const streamTok = Buffer.from('stream');
-    const endTok = Buffer.from('endstream');
-    const positions: number[] = [];
-    let idx = 0;
-    for (;;) {
-      const s = buffer.indexOf(streamTok, idx);
-      if (s === -1) {
-        break;
-      }
-      let dataStart = s + streamTok.length;
-      if (buffer[dataStart] === 0x0d) {
-        dataStart++;
-      }
-      if (buffer[dataStart] === 0x0a) {
-        dataStart++;
-      }
-      const e = buffer.indexOf(endTok, dataStart);
-      if (e === -1) {
-        break;
-      }
-      try {
-        const content = inflateSync(buffer.subarray(dataStart, e)).toString(
-          'latin1',
-        );
-        for (const block of content.split('BT').slice(1)) {
-          // pdfkit puede partir el texto en varios fragmentos hex dentro
-          // del mismo operador TJ (kerning entre ciertos pares de letras),
-          // así que hay que reensamblarlos antes de buscar el texto.
-          const hexChunks = [...block.matchAll(/<([0-9a-f]+)>/g)].map(
-            (m) => m[1] ?? '',
-          );
-          const decoded = Buffer.from(hexChunks.join(''), 'hex').toString(
-            'latin1',
-          );
-          if (decoded.includes(needle)) {
-            const match = /1 0 0 1 [-\d.]+ (-?[\d.]+) Tm/.exec(block);
-            if (match?.[1]) {
-              positions.push(Number(match[1]));
-            }
-          }
-        }
-      } catch {
-        // No es un content stream FlateDecode (fuentes embebidas, etc).
-      }
-      idx = e + endTok.length;
-    }
-    return positions;
+describe('export notes', () => {
+  const note = (
+    kind: 'footnote' | 'endnote',
+    text: string,
+    marks: Array<Prisma.JsonObject> = [],
+  ): Prisma.JsonObject => ({
+    type: 'noteReference',
+    attrs: {
+      id: `${kind}-${text}`,
+      kind,
+      content: [{ type: 'text', text, marks }],
+    },
+  });
+
+  const paragraph = (
+    ...content: Array<Prisma.JsonObject>
+  ): Prisma.JsonObject => ({ type: 'paragraph', content });
+
+  const text = (value: string): Prisma.JsonObject => ({
+    type: 'text',
+    text: value,
+  });
+
+  const notesSource = {
+    id: 'book-id',
+    title: 'La obra',
+    chapters: [
+      {
+        id: 'chapter-1',
+        title: 'Capítulo I',
+        scenes: [
+          {
+            id: 'scene-1',
+            title: null,
+            content: {
+              type: 'doc',
+              content: [
+                paragraph(
+                  text('Uno'),
+                  note('footnote', 'Pie A', [{ type: 'italic' }]),
+                  text(' dos'),
+                  note('endnote', 'Final A'),
+                ),
+              ],
+            },
+          },
+          {
+            id: 'scene-2',
+            title: null,
+            content: {
+              type: 'doc',
+              content: [paragraph(text('Tres'), note('footnote', 'Pie B'))],
+            },
+          },
+        ],
+      },
+      {
+        id: 'chapter-2',
+        title: 'Capítulo II',
+        scenes: [
+          {
+            id: 'scene-3',
+            title: null,
+            content: {
+              type: 'doc',
+              content: [
+                paragraph(
+                  text('Cuatro'),
+                  note('footnote', 'Pie C', [
+                    { type: 'link', attrs: { href: 'https://a.com/?x=1&y=2' } },
+                  ]),
+                  note('endnote', 'Final B'),
+                  note('footnote', '   '),
+                ),
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  async function renderNotes(): Promise<JSZip> {
+    const document = await prepareExportDocument(notesSource, () =>
+      Promise.reject(new Error('no image expected')),
+    );
+    const epub = await new EpubExportRenderer().render(document);
+    return JSZip.loadAsync(epub.buffer);
   }
 
-  it('keeps the header/footer position fixed regardless of the configured margin', async () => {
-    const document = await prepareExportDocument(source, () =>
-      Promise.resolve({
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        extension: 'png',
-      }),
-    );
+  const read = (zip: JSZip, name: string): Promise<string> =>
+    zip.files[`OEBPS/${name}`]!.async('string');
 
-    const settingsFor = (marginCm: number): ExportSettingsConfig => ({
-      margins: {
-        topCm: marginCm,
-        bottomCm: marginCm,
-        leftCm: marginCm,
-        rightCm: marginCm,
-      },
-      header: {
-        text: 'HEADERMARKER',
-        alignment: 'left',
-        pageNumber: { enabled: false, format: '' },
-      },
-      footer: {
-        text: 'FOOTERMARKER',
-        alignment: 'left',
-        pageNumber: { enabled: false, format: '' },
-      },
-    });
-
-    const [smallMargin, largeMargin] = await Promise.all([
-      new PdfExportRenderer().render(document, settingsFor(1)),
-      new PdfExportRenderer().render(document, settingsFor(6)),
-    ]);
-
-    const headerYSmall = extractTextYPositions(
-      smallMargin.buffer,
-      'HEADERMARKER',
-    );
-    const headerYLarge = extractTextYPositions(
-      largeMargin.buffer,
-      'HEADERMARKER',
-    );
-    const footerYSmall = extractTextYPositions(
-      smallMargin.buffer,
-      'FOOTERMARKER',
-    );
-    const footerYLarge = extractTextYPositions(
-      largeMargin.buffer,
-      'FOOTERMARKER',
-    );
-
-    expect(headerYSmall.length).toBeGreaterThan(0);
-    expect(footerYSmall.length).toBeGreaterThan(0);
-    expect(headerYSmall).toEqual(headerYLarge);
-    expect(footerYSmall).toEqual(footerYLarge);
-  });
-
-  it('renders without error when the configured margin is smaller than the header/footer band', async () => {
-    const document = await prepareExportDocument(multiSceneSource, () =>
+  it('parses note references with their kind and formatted text, dropping empty notes', async () => {
+    const document = await prepareExportDocument(notesSource, () =>
       Promise.reject(new Error('no image expected')),
     );
 
-    const settings: ExportSettingsConfig = {
-      margins: { topCm: 0.2, bottomCm: 0.2, leftCm: 0.2, rightCm: 0.2 },
-      header: {
-        text: 'HEADERMARKER',
-        alignment: 'left',
-        pageNumber: { enabled: false, format: '' },
-      },
-      footer: {
-        text: 'FOOTERMARKER',
-        alignment: 'left',
-        pageNumber: { enabled: true, format: 'Página {{pagina}}' },
-      },
-    };
+    const first = document.chapters[0]?.scenes[0]?.content[0];
+    expect(first).toMatchObject({
+      kind: 'paragraph',
+      inlines: [
+        { kind: 'text', text: 'Uno' },
+        {
+          kind: 'note',
+          noteKind: 'footnote',
+          inlines: [{ kind: 'text', text: 'Pie A', italic: true }],
+        },
+        { kind: 'text', text: ' dos' },
+        { kind: 'note', noteKind: 'endnote' },
+      ],
+    });
 
-    const pdf = await new PdfExportRenderer().render(document, settings);
+    const last = document.chapters[1]?.scenes[0]?.content[0];
+    expect(
+      last?.kind === 'paragraph'
+        ? last.inlines.filter((inline) => inline.kind === 'note')
+        : [],
+    ).toHaveLength(2);
+  });
 
-    // El margen real se empuja al mínimo necesario para no tapar el
-    // header/footer; sigue habiendo portada (1) + 2 páginas de contenido.
-    expect(pdf.buffer.subarray(0, 4).toString()).toBe('%PDF');
-    expect(pdfPageCount(pdf.buffer)).toBe(4);
+  it('numbers footnotes per chapter and places them at the end of their scene', async () => {
+    const zip = await renderNotes();
+    const scene1 = await read(zip, 'book-0-chapter-0-scene-0.xhtml');
+    const scene2 = await read(zip, 'book-0-chapter-0-scene-1.xhtml');
+    const scene3 = await read(zip, 'book-0-chapter-1-scene-0.xhtml');
+
+    expect(scene1).toContain(
+      '<a epub:type="noteref" class="noteref" id="fn-c0-1-ref" href="#fn-c0-1"><sup>1</sup></a>',
+    );
+    expect(scene1).toContain(
+      '<aside epub:type="footnote" class="footnote" id="fn-c0-1"><p><a href="#fn-c0-1-ref">1</a>. <em>Pie A</em></p></aside>',
+    );
+    // El texto queda en el archivo (lo usa el popup) pero oculto en la página.
+    expect(await read(zip, 'style.css')).toContain(
+      'aside.footnote { display: none; }',
+    );
+    expect(scene2).toContain('id="fn-c0-2"');
+    expect(scene2).toContain('Pie B');
+    expect(scene2).not.toContain('Pie A');
+    // Reinicia en el capítulo II.
+    expect(scene3).toContain('href="#fn-c1-1"><sup>1</sup></a>');
+    expect(scene3).toContain('<a href="https://a.com/?x=1&amp;y=2">Pie C</a>');
+  });
+
+  it('numbers endnotes across the book and lists them in notes.xhtml grouped by chapter', async () => {
+    const zip = await renderNotes();
+    const scene1 = await read(zip, 'book-0-chapter-0-scene-0.xhtml');
+    const scene3 = await read(zip, 'book-0-chapter-1-scene-0.xhtml');
+    const notes = await read(zip, 'notes.xhtml');
+
+    expect(scene1).toContain(
+      'id="enref-1" href="notes.xhtml#en-1"><sup>1</sup></a>',
+    );
+    expect(scene3).toContain(
+      'id="enref-2" href="notes.xhtml#en-2"><sup>2</sup></a>',
+    );
+    expect(notes).toContain('<section epub:type="endnotes">');
+    expect(notes.indexOf('Capítulo I<')).toBeLessThan(
+      notes.indexOf('Capítulo II<'),
+    );
+    expect(notes).toContain('<li epub:type="endnote" id="en-1" value="1">');
+    expect(notes).toContain(
+      'href="book-0-chapter-1-scene-0.xhtml#enref-2">↩</a>',
+    );
+
+    const opf = await read(zip, 'content.opf');
+    expect(opf).toContain('<itemref idref="notes"/>');
+    expect(opf.lastIndexOf('<itemref')).toBe(
+      opf.indexOf('<itemref idref="notes"/>'),
+    );
+    expect(await read(zip, 'toc.xhtml')).toContain('href="notes.xhtml"');
+    expect(await read(zip, 'index.xhtml')).toContain(
+      '<a href="notes.xhtml">Notas</a>',
+    );
+  });
+
+  it('does not generate a notes section when the book has no endnotes', async () => {
+    const document = await prepareExportDocument(multiSceneSource, () =>
+      Promise.reject(new Error('no image expected')),
+    );
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
+
+    expect(zip.files['OEBPS/notes.xhtml']).toBeUndefined();
+    expect(await read(zip, 'index.xhtml')).not.toContain('Notas');
+  });
+});
+
+describe('export cover and author', () => {
+  async function render(cover: ExportImage | null): Promise<JSZip> {
+    const document = await prepareExportDocument(
+      multiSceneSource,
+      () => Promise.reject(new Error('no image expected')),
+      { author: 'Ana & Pérez', cover },
+    );
+    const epub = await new EpubExportRenderer().render(document);
+    return JSZip.loadAsync(epub.buffer);
+  }
+
+  it('embeds the cover image as the first spine item and declares it as cover-image', async () => {
+    const zip = await render({
+      buffer: imageBuffer,
+      mimeType: 'image/png',
+      extension: 'png',
+    });
+
+    const coverFile = zip.files['OEBPS/images/cover.png']!;
+    expect((await coverFile.async('nodebuffer')).equals(imageBuffer)).toBe(
+      true,
+    );
+
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+    expect(opf).toContain(
+      '<item id="cover-image" href="images/cover.png" media-type="image/png" properties="cover-image"/>',
+    );
+    expect(opf).toContain('<meta name="cover" content="cover-image"/>');
+    expect(opf.match(/<itemref idref="([^"]+)"/)?.[1]).toBe('cover-page');
+
+    const coverPage =
+      await zip.files['OEBPS/cover-image.xhtml']!.async('string');
+    expect(coverPage).toContain('epub:type="cover"');
+    expect(coverPage).toContain('src="images/cover.png"');
+
+    const nav = await zip.files['OEBPS/toc.xhtml']!.async('string');
+    expect(nav).not.toContain('cover-image.xhtml');
+  });
+
+  it('keeps the current title page when there is no cover', async () => {
+    const zip = await render(null);
+
+    expect(zip.files['OEBPS/cover-image.xhtml']).toBeUndefined();
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+    expect(opf).not.toContain('cover-image');
+    expect(opf.match(/<itemref idref="([^"]+)"/)?.[1]).toBe('cover');
+  });
+
+  it('uses the author in the metadata and on the title page', async () => {
+    const zip = await render(null);
+
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+    expect(opf).toContain('<dc:creator>Ana &amp; Pérez</dc:creator>');
+    expect(opf).toContain('<dc:publisher>PlumIA</dc:publisher>');
+    const titlePage = await zip.files['OEBPS/cover.xhtml']!.async('string');
+    expect(titlePage).toContain('<p class="author">Ana &amp; Pérez</p>');
   });
 });

@@ -69,6 +69,28 @@ export class PrismaBookRepository implements BookRepository {
     return this.findByIdForUser(userId, bookId);
   }
 
+  setCoverForUser(
+    userId: string,
+    bookId: string,
+    coverStorageKey: string | null,
+  ): Promise<{ previousCoverStorageKey: string | null } | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const book = await tx.book.findFirst({
+        where: { id: bookId, deletedAt: null, project: { userId } },
+        select: { coverStorageKey: true },
+      });
+      if (!book) {
+        return null;
+      }
+
+      await tx.book.update({
+        where: { id: bookId },
+        data: { coverStorageKey },
+      });
+      return { previousCoverStorageKey: book.coverStorageKey };
+    });
+  }
+
   softDeleteForUser(
     userId: string,
     bookId: string,
