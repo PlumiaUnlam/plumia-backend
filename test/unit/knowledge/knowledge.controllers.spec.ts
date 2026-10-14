@@ -134,6 +134,7 @@ describe('knowledge controllers', () => {
     expect(service.listRelationships).toHaveBeenCalledWith(
       'user-1',
       'project-1',
+      undefined,
     );
     await expect(
       controller.createRelationship(req, 'project-1', dto as never),

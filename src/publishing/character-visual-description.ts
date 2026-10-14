@@ -166,7 +166,12 @@ function extractAnchoredTraits(
   tokens: DescriptionToken[],
 ): string[] {
   const matches: string[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
+  let lastConsumedIndex = -1;
+  for (const [index] of tokens.entries()) {
+    if (index <= lastConsumedIndex) {
+      continue;
+    }
+
     const anchorLength = matchesAnchor(description, tokens, index);
     if (!anchorLength) {
       continue;
@@ -177,7 +182,7 @@ function extractAnchoredTraits(
       continue;
     }
     matches.push(match.text);
-    index = match.lastIndex;
+    lastConsumedIndex = match.lastIndex;
   }
   return matches;
 }
@@ -240,7 +245,12 @@ function extractClothingTraits(
   tokens: DescriptionToken[],
 ): string[] {
   const matches: string[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
+  let lastConsumedIndex = -1;
+  for (const [index] of tokens.entries()) {
+    if (index <= lastConsumedIndex) {
+      continue;
+    }
+
     const token = tokens[index];
     if (!token || (token.value !== 'viste' && token.value !== 'lleva')) {
       continue;
@@ -251,7 +261,7 @@ function extractClothingTraits(
       continue;
     }
     matches.push(match.text);
-    index = match.lastIndex;
+    lastConsumedIndex = match.lastIndex;
   }
   return matches;
 }

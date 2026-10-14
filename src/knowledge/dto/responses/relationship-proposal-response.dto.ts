@@ -17,6 +17,8 @@ export interface RelationshipProposalCurrentDto {
   relationType: RelationType;
   description: string | null;
   intensity: number;
+  validFromSceneId: string | null;
+  validToSceneId: string | null;
 }
 
 export class RelationshipProposalResponseDto {
@@ -24,6 +26,7 @@ export class RelationshipProposalResponseDto {
   projectId!: string;
   sceneId!: string;
   relationshipId!: string | null;
+  kind!: 'CREATE' | 'UPDATE' | 'END';
   source!: RelationshipProposalEndpointDto;
   target!: RelationshipProposalEndpointDto;
   current!: RelationshipProposalCurrentDto | null;

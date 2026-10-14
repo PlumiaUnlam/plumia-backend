@@ -327,4 +327,88 @@ describe('StorageController', () => {
     ).rejects.toThrow(ForbiddenException);
     expect(response.redirect).not.toHaveBeenCalled();
   });
+
+  it('serves only the authenticated user’s profile image from their profile folder', async () => {
+    const response = { setHeader: jest.fn(), redirect: jest.fn() };
+    prisma.user.findUnique.mockResolvedValue({
+      avatarUrl: 'https://cdn.example/bucket/profiles/user-1/avatar.png',
+    });
+    storage.extractKeyFromUrl.mockReturnValue('profiles/user-1/avatar.png');
+
+    await expect(
+      controller.getProfileImage('user-1', req(), response as never),
+    ).resolves.toBeUndefined();
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      select: { avatarUrl: true },
+    });
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'private, no-cache',
+    );
+    expect(response.redirect).toHaveBeenCalledWith(
+      302,
+      'https://download.example/signed',
+    );
+
+    await expect(
+      controller.getProfileImage('someone-else', req(), response as never),
+    ).rejects.toThrow(ForbiddenException);
+    prisma.user.findUnique.mockResolvedValueOnce(null);
+    await expect(
+      controller.getProfileImage('user-1', req(), response as never),
+    ).rejects.toThrow(new NotFoundException('Profile image not found'));
+
+    prisma.user.findUnique.mockResolvedValueOnce({
+      avatarUrl: 'https://cdn.example/bucket/entities/entity-1/avatar.png',
+    });
+    storage.extractKeyFromUrl.mockReturnValueOnce(
+      'entities/entity-1/avatar.png',
+    );
+    await expect(
+      controller.getProfileImage('user-1', req(), response as never),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('restricts profile upload ownership and profile download keys', async () => {
+    await expect(
+      controller.presignedUpload(req(), {
+        entityId: 'someone-else',
+        filename: 'avatar.png',
+        contentType: 'image/png',
+        storageFolder: 'profiles',
+      } as never),
+    ).rejects.toThrow(ForbiddenException);
+    storage.generatePresignedUploadUrl.mockResolvedValueOnce({
+      presignedUrl: 'https://upload.example/profile',
+      publicUrl: 'https://cdn.example/profile',
+      storageKey: 'profiles/user-1/avatar.png',
+    });
+    await expect(
+      controller.presignedUpload(req(), {
+        entityId: 'user-1',
+        filename: 'avatar.png',
+        contentType: 'image/png',
+        storageFolder: 'profiles',
+      } as never),
+    ).resolves.toMatchObject({ storageKey: 'profiles/user-1/avatar.png' });
+    expect(storage.generatePresignedUploadUrl).toHaveBeenLastCalledWith(
+      'user-1',
+      'avatar.png',
+      'image/png',
+      undefined,
+      'profiles',
+    );
+
+    await expect(
+      controller.presignedDownloadByKey(req(), {
+        storageKey: 'profiles/someone-else/avatar.png',
+      }),
+    ).rejects.toThrow(new HttpException('Forbidden', 403));
+    await expect(
+      controller.presignedDownloadByKey(req(), {
+        storageKey: 'profiles/user-1/avatar.png',
+      }),
+    ).resolves.toEqual({ url: 'https://download.example/signed' });
+  });
 });

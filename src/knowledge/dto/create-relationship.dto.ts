@@ -36,4 +36,9 @@ export class CreateRelationshipDto {
   @IsNotEmpty()
   @IsUUID()
   validFromSceneId?: string;
+
+  @IsString()
+  @IsOptional()
+  @IsUUID()
+  validToSceneId?: string | null;
 }

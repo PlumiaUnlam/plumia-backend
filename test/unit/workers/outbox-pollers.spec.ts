@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import type { PendingOutboxEvent } from '../../../src/common/workers/outbox-poller';
+import {
+  OutboxPoller,
+  type PendingOutboxEvent,
+} from '../../../src/common/workers/outbox-poller';
 import type { PrismaService } from '../../../src/prisma/prisma.service';
 import type { StorageService } from '../../../src/storage/storage.service';
 import { SummaryOutboxPoller } from '../../../src/summary/workers/summary-outbox-poller.service';
@@ -24,14 +27,17 @@ const process = (poller: object, value: PendingOutboxEvent): Promise<void> =>
 
 describe('outbox poller event handling', () => {
   let prisma: {
-    outbox: { update: jest.Mock };
+    outbox: { findMany: jest.Mock; update: jest.Mock };
     storyboardNote: { findFirst: jest.Mock };
   };
   let storage: { deleteObject: jest.Mock };
 
   beforeEach(() => {
     prisma = {
-      outbox: { update: jest.fn().mockResolvedValue({}) },
+      outbox: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+      },
       storyboardNote: { findFirst: jest.fn() },
     };
     storage = { deleteObject: jest.fn().mockResolvedValue(undefined) };
@@ -169,5 +175,157 @@ describe('outbox poller event handling', () => {
     storage.deleteObject.mockRejectedValueOnce(new Error('R2 offline'));
     await process(poller, event({ id: 'retry', payload: { storageKey } }));
     expect(prisma.outbox.update).not.toHaveBeenCalled();
+  });
+});
+
+class TestOutboxPoller extends OutboxPoller {
+  readonly handleEvent = jest.fn<Promise<void>, [PendingOutboxEvent]>();
+
+  constructor(config: ConfigService, prisma: PrismaService) {
+    super(config, prisma, 'test.event');
+  }
+
+  protected processEvent(event: PendingOutboxEvent): Promise<void> {
+    return this.handleEvent(event);
+  }
+}
+
+describe('OutboxPoller lifecycle', () => {
+  const event: PendingOutboxEvent = {
+    id: 'event-1',
+    aggregateId: 'aggregate-1',
+    payload: {},
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('does not start polling in worker role and safely destroys without a timer', () => {
+    const prisma = {
+      outbox: { findMany: jest.fn(), update: jest.fn() },
+    };
+    const config = {
+      get: jest.fn().mockReturnValue('worker'),
+    } as unknown as ConfigService;
+    const poller = new TestOutboxPoller(config, prisma as never);
+
+    poller.onModuleInit();
+    poller.onModuleDestroy();
+
+    expect(prisma.outbox.findMany).not.toHaveBeenCalled();
+  });
+
+  it('polls ordered events sequentially and clears its timer on shutdown', async () => {
+    jest.useFakeTimers();
+    const events = [event, { ...event, id: 'event-2' }];
+    const prisma = {
+      outbox: {
+        findMany: jest.fn().mockResolvedValue(events),
+        update: jest.fn(),
+      },
+    };
+    const config = {
+      get: jest.fn().mockReturnValue('web'),
+    } as unknown as ConfigService;
+    const poller = new TestOutboxPoller(config, prisma as never);
+    poller.handleEvent.mockResolvedValue(undefined);
+
+    poller.onModuleInit();
+    await jest.advanceTimersByTimeAsync(0);
+    poller.onModuleDestroy();
+
+    expect(prisma.outbox.findMany).toHaveBeenCalledWith({
+      where: { processedAt: null, eventType: 'test.event' },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    });
+    expect(poller.handleEvent.mock.calls.map(([item]) => item.id)).toEqual([
+      'event-1',
+      'event-2',
+    ]);
+  });
+
+  it('skips overlapping poll ticks while a database read is in progress', async () => {
+    jest.useFakeTimers();
+    let finishRead: ((events: PendingOutboxEvent[]) => void) | undefined;
+    const pendingRead = new Promise<PendingOutboxEvent[]>((resolve) => {
+      finishRead = resolve;
+    });
+    const prisma = {
+      outbox: {
+        findMany: jest.fn().mockReturnValue(pendingRead),
+        update: jest.fn(),
+      },
+    };
+    const config = {
+      get: jest.fn().mockReturnValue('web'),
+    } as unknown as ConfigService;
+    const poller = new TestOutboxPoller(config, prisma as never);
+    poller.handleEvent.mockResolvedValue(undefined);
+
+    poller.onModuleInit();
+    await jest.advanceTimersByTimeAsync(0);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(prisma.outbox.findMany).toHaveBeenCalledTimes(1);
+
+    finishRead?.([event]);
+    await jest.advanceTimersByTimeAsync(0);
+    poller.onModuleDestroy();
+    expect(poller.handleEvent).toHaveBeenCalledWith(event);
+  });
+
+  it('includes an Error stack when polling rejects with an Error', async () => {
+    jest.useFakeTimers();
+    const error = new Error('database unavailable');
+    const loggerError = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation();
+    const prisma = {
+      outbox: {
+        findMany: jest.fn().mockRejectedValue(error),
+        update: jest.fn(),
+      },
+    };
+    const config = {
+      get: jest.fn().mockReturnValue('web'),
+    } as unknown as ConfigService;
+    const poller = new TestOutboxPoller(config, prisma as never);
+
+    poller.onModuleInit();
+    await jest.advanceTimersByTimeAsync(0);
+    poller.onModuleDestroy();
+
+    expect(loggerError).toHaveBeenCalledWith(
+      'No se pudo procesar la cola test.event.',
+      error.stack,
+    );
+  });
+
+  it('logs poll errors and recovers the running state for non-Error failures', async () => {
+    jest.useFakeTimers();
+    const loggerError = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation();
+    const prisma = {
+      outbox: {
+        findMany: jest.fn().mockRejectedValue('database unavailable'),
+        update: jest.fn(),
+      },
+    };
+    const config = {
+      get: jest.fn().mockReturnValue('web'),
+    } as unknown as ConfigService;
+    const poller = new TestOutboxPoller(config, prisma as never);
+
+    poller.onModuleInit();
+    await jest.advanceTimersByTimeAsync(0);
+    poller.onModuleDestroy();
+
+    expect(loggerError).toHaveBeenCalledWith(
+      'No se pudo procesar la cola test.event.',
+      undefined,
+    );
   });
 });

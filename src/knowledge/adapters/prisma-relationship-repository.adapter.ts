@@ -36,6 +36,21 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
     );
   }
 
+  async findByIdForUser(
+    userId: string,
+    id: string,
+  ): Promise<RelationshipRecord | null> {
+    const relationship = await this.prisma.relationship.findFirst({
+      where: {
+        id,
+        project: { userId, deletedAt: null },
+        sourceEntity: { deletedAt: null },
+        targetEntity: { deletedAt: null },
+      },
+    });
+    return relationship ? this.toRelationshipRecord(relationship) : null;
+  }
+
   async create(
     userId: string,
     data: CreateRelationshipData,
@@ -72,6 +87,9 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
         ...(data.validFromSceneId === undefined
           ? {}
           : { validFromSceneId: data.validFromSceneId }),
+        ...(data.validToSceneId === undefined
+          ? {}
+          : { validToSceneId: data.validToSceneId }),
       },
     });
 
@@ -133,6 +151,12 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
         ...(data.intensity === undefined
           ? {}
           : { confidenceScore: new Prisma.Decimal(data.intensity / 5) }),
+        ...(data.validFromSceneId === undefined
+          ? {}
+          : { validFromSceneId: data.validFromSceneId }),
+        ...(data.validToSceneId === undefined
+          ? {}
+          : { validToSceneId: data.validToSceneId }),
       },
     });
 
@@ -170,6 +194,8 @@ export class PrismaRelationshipRepository implements RelationshipRepository {
         Math.min(5, Math.round(Number(relationship.confidenceScore) * 5)),
       ),
       description: relationship.description,
+      validFromSceneId: relationship.validFromSceneId,
+      validToSceneId: relationship.validToSceneId,
       createdAt: relationship.createdAt,
       updatedAt: relationship.updatedAt,
     };

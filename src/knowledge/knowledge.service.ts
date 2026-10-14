@@ -33,6 +33,8 @@ import {
   type TimelineEventRecord,
   type TimelineEventRepository,
 } from './ports/timeline-event-repository.port';
+import { TemporalStateService } from './services/temporal-state.service';
+import { toRelationType } from './domain/relation-type';
 
 @Injectable()
 export class KnowledgeService {
@@ -44,6 +46,7 @@ export class KnowledgeService {
     private readonly relationshipRepository: RelationshipRepository,
     @Inject(TIMELINE_EVENT_REPOSITORY)
     private readonly timelineEventRepository: TimelineEventRepository,
+    private readonly temporalStates: TemporalStateService,
   ) {}
 
   searchEntities(
@@ -61,7 +64,11 @@ export class KnowledgeService {
   listRelationships(
     userId: string,
     projectId: string,
+    asOfSceneId?: string,
   ): Promise<RelationshipRecord[]> {
+    if (asOfSceneId) {
+      return this.listTemporalRelationships(userId, projectId, asOfSceneId);
+    }
     return this.relationshipRepository.listByProject(userId, projectId);
   }
 
@@ -92,7 +99,12 @@ export class KnowledgeService {
       throw new BadRequestException('Relationship entities must be different');
     }
 
-    return this.relationshipRepository.create(userId, {
+    await this.temporalStates.validateRelationshipWindow(
+      projectId,
+      dto.validFromSceneId,
+      dto.validToSceneId,
+    );
+    const relationship = await this.relationshipRepository.create(userId, {
       projectId,
       sourceEntityId: dto.sourceEntityId,
       targetEntityId: dto.targetEntityId,
@@ -104,7 +116,17 @@ export class KnowledgeService {
       ...(dto.validFromSceneId === undefined
         ? {}
         : { validFromSceneId: dto.validFromSceneId }),
+      ...(dto.validToSceneId === undefined
+        ? {}
+        : { validToSceneId: dto.validToSceneId }),
     });
+    if (relationship) {
+      await this.temporalStates.scheduleRelationshipAudit(
+        projectId,
+        dto.validFromSceneId ?? dto.validToSceneId,
+      );
+    }
+    return relationship;
   }
 
   async updateRelationship(
@@ -120,6 +142,22 @@ export class KnowledgeService {
       throw new BadRequestException('Relationship entities must be different');
     }
 
+    const existing = await this.relationshipRepository.findByIdForUser(
+      userId,
+      id,
+    );
+    if (!existing) {
+      throw new NotFoundException('Relationship not found');
+    }
+    await this.temporalStates.validateRelationshipWindow(
+      existing.projectId,
+      dto.validFromSceneId === undefined
+        ? existing.validFromSceneId
+        : dto.validFromSceneId,
+      dto.validToSceneId === undefined
+        ? existing.validToSceneId
+        : dto.validToSceneId,
+    );
     const relationship = await this.relationshipRepository.update(userId, id, {
       ...(dto.sourceEntityId === undefined
         ? {}
@@ -134,12 +172,24 @@ export class KnowledgeService {
       ...(dto.description === undefined
         ? {}
         : { description: dto.description }),
+      ...(dto.validFromSceneId === undefined
+        ? {}
+        : { validFromSceneId: dto.validFromSceneId }),
+      ...(dto.validToSceneId === undefined
+        ? {}
+        : { validToSceneId: dto.validToSceneId }),
     });
 
     if (!relationship) {
       throw new NotFoundException('Relationship not found');
     }
 
+    await this.temporalStates.scheduleRelationshipAudit(
+      relationship.projectId,
+      dto.validFromSceneId ??
+        dto.validToSceneId ??
+        relationship.validFromSceneId,
+    );
     return relationship;
   }
 
@@ -153,6 +203,10 @@ export class KnowledgeService {
       throw new NotFoundException('Relationship not found');
     }
 
+    await this.temporalStates.scheduleRelationshipAudit(
+      relationship.projectId,
+      relationship.validFromSceneId,
+    );
     return relationship;
   }
 
@@ -171,13 +225,86 @@ export class KnowledgeService {
     id: string,
     dto: UpdateEntityDto,
   ): Promise<EntityRecord> {
-    const entity = await this.entityRepository.update(userId, id, dto);
+    const current = await this.entityRepository.findByIdForUser(userId, id);
+    if (!current) {
+      throw new NotFoundException('Entity not found');
+    }
+    const entity = await this.entityRepository.update(userId, id, {
+      ...dto,
+      userLockedFields: this.mergeLockedFields(current, dto),
+    });
 
     if (!entity) {
       throw new NotFoundException('Entity not found');
     }
 
     return entity;
+  }
+
+  private mergeLockedFields(
+    current: EntityRecord,
+    update: UpdateEntityDto,
+  ): string[] {
+    const locked = new Set(current.userLockedFields);
+    if (
+      update.canonicalName !== undefined &&
+      update.canonicalName !== current.canonicalName
+    ) {
+      locked.add('canonicalName');
+    }
+    if (update.type !== undefined && update.type !== current.type) {
+      locked.add('type');
+    }
+    if (
+      update.description !== undefined &&
+      update.description !== current.description
+    ) {
+      locked.add('description');
+    }
+    if (
+      update.aliases !== undefined &&
+      JSON.stringify(update.aliases) !== JSON.stringify(current.aliases)
+    ) {
+      locked.add('aliases');
+    }
+    if (update.imageUrl !== undefined && update.imageUrl !== current.imageUrl) {
+      locked.add('imageUrl');
+    }
+    if (
+      update.attributes !== undefined &&
+      JSON.stringify(update.attributes) !== JSON.stringify(current.attributes)
+    ) {
+      locked.add('attributes');
+    }
+    return [...locked];
+  }
+
+  private async listTemporalRelationships(
+    userId: string,
+    projectId: string,
+    sceneId: string,
+  ): Promise<RelationshipRecord[]> {
+    const view = await this.temporalStates.getTemporalView(
+      userId,
+      projectId,
+      sceneId,
+    );
+    return view.relationships.map((relationship) => ({
+      id: relationship.id,
+      projectId,
+      sourceEntityId: relationship.sourceEntityId,
+      targetEntityId: relationship.targetEntityId,
+      relationType: toRelationType(relationship.relationType),
+      intensity: Math.max(
+        1,
+        Math.min(5, Math.round(relationship.intensity * 5)),
+      ),
+      description: relationship.description,
+      validFromSceneId: relationship.validFromSceneId,
+      validToSceneId: relationship.validToSceneId,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    }));
   }
 
   async removeEntity(userId: string, id: string): Promise<EntityRecord> {

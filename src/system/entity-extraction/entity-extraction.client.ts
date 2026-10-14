@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
 import { ENTITY_EXTRACTION_PROMPT } from './prompts/entity-extraction.prompt';
-import type { ExtractionResponse } from './entity-extraction.types';
+import type {
+  ExtractionResponse,
+  TemporalAuditContext,
+} from './entity-extraction.types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CHAT_MODEL = 'gemini-2.5-flash';
@@ -54,11 +57,34 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         ],
       },
     },
+    stateChanges: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          entityName: { type: 'string' },
+          attributeKey: { type: 'string' },
+          fromValue: { type: ['string', 'null'] },
+          toValue: { type: 'string' },
+          confidenceScore: { type: 'number' },
+          evidence: { type: 'array', items: { type: 'string' } },
+        },
+        required: [
+          'entityName',
+          'attributeKey',
+          'fromValue',
+          'toValue',
+          'confidenceScore',
+          'evidence',
+        ],
+      },
+    },
     relationships: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
+          kind: { type: 'string', enum: ['CREATE', 'UPDATE', 'END'] },
           sourceEntity: { type: 'string' },
           targetEntity: { type: 'string' },
           relationType: {
@@ -81,6 +107,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           evidence: { type: 'array', items: { type: 'string' } },
         },
         required: [
+          'kind',
           'sourceEntity',
           'targetEntity',
           'relationType',
@@ -96,6 +123,14 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         type: 'object',
         properties: {
           entityName: { type: 'string' },
+          ruleCode: {
+            type: 'string',
+            enum: [
+              'ENTITY_CONTRADICTION',
+              'DEAD_CHARACTER_ACTION',
+              'WORLDBUILDING_RULE',
+            ],
+          },
           field: { type: 'string' },
           currentValue: { type: 'string' },
           observedValue: { type: 'string' },
@@ -106,6 +141,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         },
         required: [
           'entityName',
+          'ruleCode',
           'field',
           'currentValue',
           'observedValue',
@@ -117,7 +153,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ['entities', 'relationships', 'inconsistencies'],
+  required: ['entities', 'stateChanges', 'relationships', 'inconsistencies'],
 } as const;
 
 @Injectable()
@@ -167,6 +203,7 @@ export class EntityExtractionClient {
       description?: string | null;
       attributes?: Record<string, unknown>;
     }>;
+    temporalContext?: TemporalAuditContext;
   }): Promise<ExtractionResponse> {
     if (!this.hasExtractionModel()) {
       throw new Error(
@@ -185,7 +222,13 @@ export class EntityExtractionClient {
           role: 'user',
           parts: [
             {
-              text: JSON.stringify(input),
+              text: JSON.stringify({
+                sceneText: input.sceneText,
+                knownEntities: input.knownEntities,
+                ...(input.temporalContext
+                  ? { temporalContext: input.temporalContext }
+                  : {}),
+              }),
             },
           ],
         },
@@ -204,6 +247,9 @@ export class EntityExtractionClient {
     const parsed = this.safeParseJson<ExtractionResponse>(content);
     return {
       entities: Array.isArray(parsed.entities) ? parsed.entities : [],
+      stateChanges: Array.isArray(parsed.stateChanges)
+        ? parsed.stateChanges
+        : [],
       relationships: Array.isArray(parsed.relationships)
         ? parsed.relationships
         : [],

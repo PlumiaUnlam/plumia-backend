@@ -20,6 +20,29 @@ import {
 const positionStep = new Prisma.Decimal(1000);
 const minimumPositionGap = new Prisma.Decimal('0.000000000001');
 
+type TimelineEventOptionalFields = Pick<
+  CreateTimelineEventData,
+  'description' | 'date' | 'temporalLabel' | 'impact' | 'storyboardArcId'
+>;
+
+function toTimelineEventOptionalFields(
+  data: TimelineEventOptionalFields,
+): TimelineEventOptionalFields {
+  return {
+    ...(data.description === undefined
+      ? {}
+      : { description: data.description }),
+    ...(data.date === undefined ? {} : { date: data.date }),
+    ...(data.temporalLabel === undefined
+      ? {}
+      : { temporalLabel: data.temporalLabel }),
+    ...(data.impact === undefined ? {} : { impact: data.impact }),
+    ...(data.storyboardArcId === undefined
+      ? {}
+      : { storyboardArcId: data.storyboardArcId }),
+  };
+}
+
 const timelineEventInclude = {
   storyboardArc: { select: { id: true, title: true } },
   entities: {
@@ -130,17 +153,7 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
         data: {
           projectId: data.projectId,
           title: data.title,
-          ...(data.description === undefined
-            ? {}
-            : { description: data.description }),
-          ...(data.date === undefined ? {} : { date: data.date }),
-          ...(data.temporalLabel === undefined
-            ? {}
-            : { temporalLabel: data.temporalLabel }),
-          ...(data.impact === undefined ? {} : { impact: data.impact }),
-          ...(data.storyboardArcId === undefined
-            ? {}
-            : { storyboardArcId: data.storyboardArcId }),
+          ...toTimelineEventOptionalFields(data),
           position,
           ...(data.source === undefined ? {} : { source: data.source }),
           ...(data.sourceSceneId === undefined
@@ -206,17 +219,7 @@ export class PrismaTimelineEventRepository implements TimelineEventRepository {
         where: { id },
         data: {
           ...(data.title === undefined ? {} : { title: data.title }),
-          ...(data.description === undefined
-            ? {}
-            : { description: data.description }),
-          ...(data.date === undefined ? {} : { date: data.date }),
-          ...(data.temporalLabel === undefined
-            ? {}
-            : { temporalLabel: data.temporalLabel }),
-          ...(data.impact === undefined ? {} : { impact: data.impact }),
-          ...(data.storyboardArcId === undefined
-            ? {}
-            : { storyboardArcId: data.storyboardArcId }),
+          ...toTimelineEventOptionalFields(data),
           ...(data.entityIds === undefined
             ? {}
             : {

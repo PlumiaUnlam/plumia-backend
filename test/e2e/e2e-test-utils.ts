@@ -23,6 +23,9 @@ import { StorageService } from '../../src/storage/storage.service';
 export const E2E_USER_ID = 'e2e-user';
 export const E2E_USER_EMAIL = 'e2e-user@example.com';
 export const E2E_TOKEN = 'e2e-token';
+export const E2E_READER_ID = 'e2e-reader';
+export const E2E_READER_EMAIL = 'reader@example.com';
+export const E2E_READER_TOKEN = 'e2e-reader-token';
 export const e2eChatGenerationMock = {
   generate: jest.fn((input: ChatGenerationInput) =>
     Promise.resolve({
@@ -46,7 +49,7 @@ export const e2eChatGenerationMock = {
 export async function createE2eApp(): Promise<INestApplication> {
   process.env['APP_ROLE'] = 'web';
 
-  const authMock: Pick<AuthService, 'login'> = {
+  const authMock: Pick<AuthService, 'login' | 'resolveExistingUserId'> = {
     login(idToken: string): Promise<User> {
       if (idToken !== E2E_TOKEN) {
         return Promise.reject(
@@ -66,6 +69,9 @@ export async function createE2eApp(): Promise<INestApplication> {
         updatedAt: new Date(),
         deletedAt: null,
       });
+    },
+    resolveExistingUserId(firebaseUser): Promise<string> {
+      return Promise.resolve(firebaseUser.uid);
     },
   };
   const uploadedStorageKeys = new Set<string>();
@@ -122,7 +128,23 @@ export async function createE2eApp(): Promise<INestApplication> {
     .useValue(authMock)
     .overrideProvider(FirebaseAdminService)
     .useValue({
-      verifyToken: jest.fn(() => Promise.resolve({ uid: E2E_USER_ID })),
+      verifyToken: jest.fn((idToken: string) =>
+        Promise.resolve(
+          idToken === E2E_READER_TOKEN
+            ? {
+                uid: E2E_READER_ID,
+                email: E2E_READER_EMAIL,
+                email_verified: true,
+                firebase: { sign_in_provider: 'google.com' },
+              }
+            : {
+                uid: E2E_USER_ID,
+                email: E2E_USER_EMAIL,
+                email_verified: false,
+                firebase: { sign_in_provider: 'password' },
+              },
+        ),
+      ),
     })
     .overrideProvider(CHAT_GENERATION_PROVIDER)
     .useValue(e2eChatGenerationMock)

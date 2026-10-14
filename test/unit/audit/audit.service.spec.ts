@@ -104,7 +104,7 @@ describe('AuditService', () => {
       },
     ]);
 
-    await service.obsoleteContinuityAlertsForChunk({
+    await service.obsoleteAlertsForChunk({
       sceneId: 'scene-1',
       sourceChunkId: 'chunk-1',
       activeFingerprints: new Set(),
@@ -112,6 +112,27 @@ describe('AuditService', () => {
 
     expect(prisma.auditAlert.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['alert-stale'] } },
+      data: { status: AuditStatus.OBSOLETE },
+    });
+  });
+
+  it('marks an alert obsolete when its source chunk hash is no longer current', async () => {
+    prisma.auditAlert.findMany.mockResolvedValue([
+      {
+        id: 'alert-stale-hash',
+        sourceChunkId: 'chunk-1',
+        sourceChunkHash: 'old-hash',
+        sourceConflict: {},
+      },
+    ]);
+
+    await service.obsoleteAlertsWithoutCurrentChunkSupport({
+      sceneId: 'scene-1',
+      chunks: new Map([['chunk-1', { contentHash: 'new-hash' }]]),
+    });
+
+    expect(prisma.auditAlert.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['alert-stale-hash'] } },
       data: { status: AuditStatus.OBSOLETE },
     });
   });

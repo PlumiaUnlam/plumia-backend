@@ -4,6 +4,7 @@ import { Prisma, ProposalStatus, RelationType } from '@prisma/client';
 import { PrismaService } from '../../../src/prisma/prisma.service';
 import { RelationshipProposalService } from '../../../src/knowledge/services/relationship-proposal.service';
 import { RelationType as DomainRelationType } from '../../../src/knowledge/domain/relation-type';
+import { TemporalStateService } from '../../../src/knowledge/services/temporal-state.service';
 
 interface MockPrisma {
   relationshipProposal: {
@@ -30,6 +31,7 @@ interface MockTx {
 describe('RelationshipProposalService', () => {
   let service: RelationshipProposalService;
   let prisma: MockPrisma;
+  let temporalStates: { scheduleRelationshipAudit: jest.Mock };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -45,11 +47,16 @@ describe('RelationshipProposalService', () => {
             $transaction: jest.fn(),
           },
         },
+        {
+          provide: TemporalStateService,
+          useValue: { scheduleRelationshipAudit: jest.fn() },
+        },
       ],
     }).compile();
 
     service = module.get(RelationshipProposalService);
     prisma = module.get<MockPrisma>(PrismaService);
+    temporalStates = module.get(TemporalStateService);
   });
 
   it('lists a relationship proposal and marks it ready when both entities exist', async () => {
@@ -144,6 +151,10 @@ describe('RelationshipProposalService', () => {
 
     expect(tx.relationship.create).toHaveBeenCalled();
     expect(tx.relationship.update).not.toHaveBeenCalled();
+    expect(temporalStates.scheduleRelationshipAudit).toHaveBeenCalledWith(
+      'project-1',
+      'scene-1',
+    );
     expect(result).toMatchObject({
       id: 'relationship-1',
       relationType: RelationType.ALLY,
@@ -199,6 +210,10 @@ describe('RelationshipProposalService', () => {
       },
     });
     expect(tx.relationship.create).not.toHaveBeenCalled();
+    expect(temporalStates.scheduleRelationshipAudit).toHaveBeenCalledWith(
+      'project-1',
+      'scene-2',
+    );
   });
 
   it('rejects self relationships and missing proposals', async () => {

@@ -5,7 +5,7 @@ import type {
 } from './export.types';
 
 export function exportAnchor(kind: ExportTocKind, id: string): string {
-  return `export_${kind}_${id.replace(/[^A-Za-z0-9_]/g, '_')}`;
+  return `export_${kind}_${id.replace(/\W/g, '_')}`;
 }
 
 /**

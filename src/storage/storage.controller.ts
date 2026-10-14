@@ -197,59 +197,85 @@ export class StorageController {
       throw new HttpException('Invalid storage key', HttpStatus.BAD_REQUEST);
     }
 
-    if (scope === 'entities') {
-      const entity = await this.prisma.entity.findFirst({
-        where: { id: resourceId, deletedAt: null },
-        select: {
-          id: true,
-          project: { select: { userId: true } },
-        },
-      });
-
-      if (!entity) {
-        throw new HttpException('Entity not found', HttpStatus.NOT_FOUND);
-      }
-
-      if (entity.project.userId !== req.user.id) {
-        throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
-      }
-    } else if (scope === 'scenes') {
-      const scene = await this.prisma.scene.findFirst({
-        where: { id: resourceId, deletedAt: null },
-        select: {
-          id: true,
-          chapter: {
-            select: {
-              book: {
-                select: {
-                  project: { select: { userId: true } },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (!scene) {
-        throw new HttpException('Scene not found', HttpStatus.NOT_FOUND);
-      }
-
-      if (scene.chapter.book.project.userId !== req.user.id) {
-        throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
-      }
-    } else if (scope === 'profiles') {
-      if (resourceId !== req.user.id) {
-        throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
-      }
-    } else {
-      await this.assertStoryboardCardAccess(req.user.id, resourceId);
-    }
+    await this.assertPresignedDownloadAccess(req.user.id, scope, resourceId);
 
     const url = await this.storageService.generatePresignedGetUrl(
       dto.storageKey,
     );
 
     return { url };
+  }
+
+  private async assertPresignedDownloadAccess(
+    userId: string,
+    scope: StorageFolder,
+    resourceId: string,
+  ): Promise<void> {
+    switch (scope) {
+      case 'entities':
+        await this.assertEntityDownloadAccess(userId, resourceId);
+        return;
+      case 'scenes':
+        await this.assertSceneDownloadAccess(userId, resourceId);
+        return;
+      case 'profiles':
+        if (resourceId !== userId) {
+          throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+        }
+        return;
+      case 'storyboard-audio':
+        await this.assertStoryboardCardAccess(userId, resourceId);
+    }
+  }
+
+  private async assertEntityDownloadAccess(
+    userId: string,
+    entityId: string,
+  ): Promise<void> {
+    const entity = await this.prisma.entity.findFirst({
+      where: { id: entityId, deletedAt: null },
+      select: {
+        id: true,
+        project: { select: { userId: true } },
+      },
+    });
+
+    if (!entity) {
+      throw new HttpException('Entity not found', HttpStatus.NOT_FOUND);
+    }
+
+    if (entity.project.userId !== userId) {
+      throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+    }
+  }
+
+  private async assertSceneDownloadAccess(
+    userId: string,
+    sceneId: string,
+  ): Promise<void> {
+    const scene = await this.prisma.scene.findFirst({
+      where: { id: sceneId, deletedAt: null },
+      select: {
+        id: true,
+        chapter: {
+          select: {
+            book: {
+              select: {
+                project: { select: { userId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!scene) {
+      throw new HttpException('Scene not found', HttpStatus.NOT_FOUND);
+    }
+
+    if (scene.chapter.book.project.userId !== userId) {
+      throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+    }
   }
 
   @Post('presigned-download')

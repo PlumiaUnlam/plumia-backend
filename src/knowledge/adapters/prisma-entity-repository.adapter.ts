@@ -95,6 +95,9 @@ export class PrismaEntityRepository implements EntityRepository {
           : { attributes: data.attributes as Prisma.InputJsonValue }),
         ...(data.imageUrl === undefined ? {} : { imageUrl: data.imageUrl }),
         ...(data.isActive === undefined ? {} : { isActive: data.isActive }),
+        ...(data.userLockedFields === undefined
+          ? {}
+          : { userLockedFields: data.userLockedFields }),
       },
     });
 

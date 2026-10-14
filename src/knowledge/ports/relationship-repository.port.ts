@@ -10,6 +10,8 @@ export interface RelationshipRecord {
   relationType: RelationType;
   intensity: number;
   description: string | null;
+  validFromSceneId: string | null;
+  validToSceneId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,6 +24,7 @@ export interface CreateRelationshipData {
   intensity: number;
   description?: string;
   validFromSceneId?: string;
+  validToSceneId?: string | null;
 }
 
 export interface UpdateRelationshipData {
@@ -30,6 +33,8 @@ export interface UpdateRelationshipData {
   relationType?: RelationType;
   intensity?: number;
   description?: string | null;
+  validFromSceneId?: string | null;
+  validToSceneId?: string | null;
 }
 
 export interface RelationshipRepository {
@@ -37,6 +42,10 @@ export interface RelationshipRepository {
     userId: string,
     projectId: string,
   ): Promise<RelationshipRecord[]>;
+  findByIdForUser(
+    userId: string,
+    id: string,
+  ): Promise<RelationshipRecord | null>;
   create(
     userId: string,
     data: CreateRelationshipData,
