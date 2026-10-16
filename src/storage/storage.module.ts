@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { AuthModule } from '../auth/auth.module';
+import { FirebaseModule } from '../auth/firebase.module';
 import { PrismaStorageResourceAuthorization } from './adapters/prisma-storage-resource-authorization.adapter';
 import { StorageController } from './storage.controller';
 import { STORAGE_RESOURCE_AUTHORIZATION } from './ports/storage-resource-authorization.port';
 import { StorageService } from './storage.service';
 
 @Module({
-  imports: [AuthModule],
+  imports: [FirebaseModule],
   controllers: [StorageController],
   providers: [
     StorageService,

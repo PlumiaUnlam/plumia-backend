@@ -1,5 +1,6 @@
 import {
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
   type CanActivate,
@@ -8,10 +9,12 @@ import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
 import { AuthService } from '../auth.service';
+import { FirebaseAdminService } from '../firebase-admin.service';
 
 type RequestWithUser = Request & {
   user?: {
     id: string;
+    uid: string;
     email: string;
   };
 };
@@ -21,6 +24,7 @@ export class FirebaseAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly authService: AuthService,
+    private readonly firebaseAdmin: FirebaseAdminService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -41,7 +45,18 @@ export class FirebaseAuthGuard implements CanActivate {
     }
 
     const user = await this.authService.login(token);
-    request.user = { id: user.id, email: user.email };
+
+    const decoded = await this.firebaseAdmin.verifyToken(token);
+    if (decoded.email_verified !== true) {
+      throw new ForbiddenException('Email verification required');
+    }
+
+    // `id` es el id de nuestra fila y `uid` el del token recién verificado: son
+    // lo mismo en el caso normal, pero no siempre (validateFirebaseUser cae al
+    // fallback por email cuando findById no matchea). Quien necesite tocar
+    // Firebase tiene que usar `uid`; usar `id` ahí borraría el identificador
+    // equivocado y dejaría la identidad viva en silencio.
+    request.user = { id: user.id, uid: decoded.uid, email: user.email };
 
     return true;
   }

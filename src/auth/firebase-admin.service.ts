@@ -33,4 +33,8 @@ export class FirebaseAdminService implements OnModuleInit {
   async verifyToken(idToken: string): Promise<admin.auth.DecodedIdToken> {
     return this.app.auth().verifyIdToken(idToken);
   }
+
+  async deleteUser(uid: string): Promise<void> {
+    await this.app.auth().deleteUser(uid);
+  }
 }

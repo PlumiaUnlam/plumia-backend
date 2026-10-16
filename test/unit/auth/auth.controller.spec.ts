@@ -45,7 +45,7 @@ describe('AuthController', () => {
 
       const result = await authController.login(dto);
 
-      expect(authService.login).toHaveBeenCalledWith('firebase-id-token');
+      expect(authService.login).toHaveBeenCalledWith('firebase-id-token', {});
       expect(result).toEqual({
         user: {
           id: mockUser.id,
@@ -59,6 +59,40 @@ describe('AuthController', () => {
           role: mockUser.role,
           plan: mockUser.plan,
         },
+      });
+    });
+
+    it('should forward firstName and lastName when provided', async () => {
+      const dto: LoginDto = {
+        idToken: 'firebase-id-token',
+        firstName: 'Jane',
+        lastName: 'Doe',
+      };
+      authService.login.mockResolvedValue(mockUser);
+
+      await authController.login(dto);
+
+      expect(authService.login).toHaveBeenCalledWith('firebase-id-token', {
+        firstName: 'Jane',
+        lastName: 'Doe',
+      });
+    });
+
+    it('should forward the username when provided', async () => {
+      const dto: LoginDto = {
+        idToken: 'firebase-id-token',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        username: 'jane.doe',
+      };
+      authService.login.mockResolvedValue(mockUser);
+
+      await authController.login(dto);
+
+      expect(authService.login).toHaveBeenCalledWith('firebase-id-token', {
+        firstName: 'Jane',
+        lastName: 'Doe',
+        username: 'jane.doe',
       });
     });
   });

@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
@@ -230,5 +231,31 @@ describe('StorageService', () => {
     expect(send.mock.calls[0]?.[0]).toBeInstanceOf(HeadObjectCommand);
     send.mockRejectedValueOnce(new Error('not found'));
     await expect(service.headFile('missing')).resolves.toBe(false);
+  });
+
+  it('lists every object under a prefix across pagination pages', async () => {
+    send
+      .mockResolvedValueOnce({
+        Contents: [{ Key: 'profiles/u-1/old.png' }],
+        IsTruncated: true,
+        NextContinuationToken: 'page-2',
+      })
+      .mockResolvedValueOnce({
+        Contents: [{ Key: 'profiles/u-1/current.png' }, { Key: undefined }],
+        IsTruncated: false,
+      });
+
+    await expect(service.listObjects('profiles/u-1/')).resolves.toEqual([
+      'profiles/u-1/old.png',
+      'profiles/u-1/current.png',
+    ]);
+
+    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(ListObjectsV2Command);
+    expect(
+      (send.mock.calls[0]?.[0] as ListObjectsV2Command).input,
+    ).toMatchObject({ Bucket: 'assets', Prefix: 'profiles/u-1/' });
+    expect(
+      (send.mock.calls[1]?.[0] as ListObjectsV2Command).input.ContinuationToken,
+    ).toBe('page-2');
   });
 });

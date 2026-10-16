@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Patch, Request } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Patch,
+  Request,
+} from '@nestjs/common';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UserService, type UserEntity } from './user.service';
 
@@ -11,7 +20,9 @@ export class UserController {
     id: string;
     email: string;
   } {
-    return req.user;
+    // Se piden solo los campos a mano: `req.user` trae además `uid`, que es un
+    // detalle interno del guard y no forma parte de este contrato.
+    return { id: req.user.id, email: req.user.email };
   }
 
   @Patch('me')
@@ -23,5 +34,13 @@ export class UserController {
       displayName: dto.displayName.trim(),
       avatarUrl: dto.avatarUrl ?? null,
     });
+  }
+
+  @Delete('me')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteMe(
+    @Request() req: { user: { id: string; uid: string } },
+  ): Promise<void> {
+    return this.userService.deleteAccount(req.user.id, req.user.uid);
   }
 }

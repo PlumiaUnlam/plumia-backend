@@ -14,7 +14,11 @@ export class AuthController {
   async login(@Body() dto: LoginDto): Promise<{
     user: Omit<User, 'deletedAt'>;
   }> {
-    const result = await this.authService.login(dto.idToken);
+    const result = await this.authService.login(dto.idToken, {
+      ...(dto.firstName ? { firstName: dto.firstName } : {}),
+      ...(dto.lastName ? { lastName: dto.lastName } : {}),
+      ...(dto.username ? { username: dto.username } : {}),
+    });
     const safeUser = Object.fromEntries(
       Object.entries(result).filter(([key]) => key !== 'deletedAt'),
     ) as Omit<User, 'deletedAt'>;
