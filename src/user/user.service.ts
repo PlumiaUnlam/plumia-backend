@@ -445,7 +445,9 @@ export class UserService {
           );
         }
 
-        await sleep(100 * attempt);
+        // El await es el punto del reintento: sin esa espera el loop volvería a
+        // pegar contra la misma causa transitoria. NOSONAR: S9382 no aplica.
+        await sleep(100 * attempt); // NOSONAR
       }
     }
   }
@@ -486,24 +488,37 @@ export class UserService {
           );
         }
 
-        await sleep(FIREBASE_RETRY_BASE_DELAY_MS * attempt);
+        // Mismo caso que el backoff de la transacción: esperar antes de reintentar
+        // es la regla, no un efecto secundario del loop. NOSONAR: S9382.
+        await sleep(FIREBASE_RETRY_BASE_DELAY_MS * attempt); // NOSONAR
       }
     }
   }
 
+  /**
+   * Los borrados son independientes entre sí, así que van en paralelo: en una
+   * baja no tiene sentido esperar a que S3 conteste de a uno.
+   *
+   * `allSettled` y no `all` porque un objeto que no se pueda borrar no aborta
+   * el resto del purge. Fallar acá tampoco levanta excepción: el contenido ya
+   * quedó suprimido en la base y lo que queda suelto es solo un blob.
+   */
   private async purgeStorage(
     storageKeys: Set<string>,
     userId: string,
   ): Promise<void> {
-    for (const key of storageKeys) {
-      try {
-        await this.storage.deleteObject(key);
-      } catch (error) {
+    const keys = [...storageKeys];
+    const results = await Promise.allSettled(
+      keys.map((key) => this.storage.deleteObject(key)),
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
         this.logger.warn(
-          `No se pudo purgar ${key} (usuario ${userId}): ${stringify(error)}`,
+          `No se pudo purgar ${keys[index]} (usuario ${userId}): ${stringify(result.reason)}`,
         );
       }
-    }
+    });
   }
 }
 

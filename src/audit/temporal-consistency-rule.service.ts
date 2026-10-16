@@ -57,7 +57,10 @@ export class TemporalConsistencyRuleService {
 
   private collectStateConflictAlerts(
     snapshot: TemporalKnowledgeSnapshot,
-    entitiesById: ReadonlyMap<string, TemporalKnowledgeSnapshot['entities'][number]>,
+    entitiesById: ReadonlyMap<
+      string,
+      TemporalKnowledgeSnapshot['entities'][number]
+    >,
     activeFingerprints: Set<string>,
   ): CreateAuditAlertInput[] {
     const alerts: CreateAuditAlertInput[] = [];
@@ -131,7 +134,10 @@ export class TemporalConsistencyRuleService {
 
   private collectDuplicateOwnerAlerts(
     snapshot: TemporalKnowledgeSnapshot,
-    entitiesById: ReadonlyMap<string, TemporalKnowledgeSnapshot['entities'][number]>,
+    entitiesById: ReadonlyMap<
+      string,
+      TemporalKnowledgeSnapshot['entities'][number]
+    >,
     activeFingerprints: Set<string>,
   ): CreateAuditAlertInput[] {
     const alerts: CreateAuditAlertInput[] = [];

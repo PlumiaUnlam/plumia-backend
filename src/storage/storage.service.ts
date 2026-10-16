@@ -235,13 +235,15 @@ export class StorageService {
     let continuationToken: string | undefined;
 
     do {
-      const result = await this.s3.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          ContinuationToken: continuationToken,
-        }),
-      );
+      // NOSONAR: S9382 no aplica. La paginación de S3 es secuencial por
+      // definición: el token de la página N+1 sale de la respuesta de la N,
+      // así que no hay nada que paralelizar.
+      const command = new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      });
+      const result = await this.s3.send(command); // NOSONAR
 
       for (const item of result.Contents ?? []) {
         if (item.Key) {
