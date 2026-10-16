@@ -12,7 +12,11 @@ jest.mock('firebase-admin', () => ({
 
 describe('FirebaseAdminService', () => {
   const mockVerifyIdToken = jest.fn();
-  const mockAuth = jest.fn(() => ({ verifyIdToken: mockVerifyIdToken }));
+  const mockDeleteUser = jest.fn();
+  const mockAuth = jest.fn(() => ({
+    verifyIdToken: mockVerifyIdToken,
+    deleteUser: mockDeleteUser,
+  }));
   const firebaseApp = { auth: mockAuth };
   const initializeApp = jest.mocked(admin.initializeApp);
   const applicationDefault = jest.mocked(admin.credential.applicationDefault);
@@ -94,5 +98,18 @@ describe('FirebaseAdminService', () => {
     );
     expect(mockAuth).toHaveBeenCalledTimes(1);
     expect(mockVerifyIdToken).toHaveBeenCalledWith('firebase-token');
+  });
+
+  it('delegates account deletion to the initialized Firebase app', async () => {
+    mockDeleteUser.mockResolvedValue(undefined);
+    const service = new FirebaseAdminService(
+      config as unknown as ConfigService,
+    );
+    service.onModuleInit();
+
+    await expect(service.deleteUser('user-1')).resolves.toBeUndefined();
+
+    expect(mockAuth).toHaveBeenCalledTimes(1);
+    expect(mockDeleteUser).toHaveBeenCalledWith('user-1');
   });
 });

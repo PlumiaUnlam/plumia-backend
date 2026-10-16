@@ -4,7 +4,7 @@ import { UserService } from '../../../src/user/user.service';
 
 describe('UserController', () => {
   let userController: UserController;
-  const userService = { updateProfile: jest.fn() };
+  const userService = { updateProfile: jest.fn(), deleteAccount: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -38,6 +38,23 @@ describe('UserController', () => {
         displayName: 'Ailen',
         avatarUrl: null,
       });
+    });
+  });
+
+  describe('deleteMe', () => {
+    it('deletes the account of the authenticated user', async () => {
+      userService.deleteAccount.mockResolvedValue(undefined);
+
+      // `id` es el de la fila y `uid` el del token: el que va a Firebase es
+      // el segundo.
+      await userController.deleteMe({
+        user: { id: 'uuid-1', uid: 'token-uid-1' },
+      });
+
+      expect(userService.deleteAccount).toHaveBeenCalledWith(
+        'uuid-1',
+        'token-uid-1',
+      );
     });
   });
 });

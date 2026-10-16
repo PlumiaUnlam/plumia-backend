@@ -1,12 +1,18 @@
-import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import {
+  ForbiddenException,
+  UnauthorizedException,
+  type ExecutionContext,
+} from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { FirebaseAuthGuard } from '../../../src/auth/guards/firebase-auth.guard';
 import type { AuthService } from '../../../src/auth/auth.service';
+import type { FirebaseAdminService } from '../../../src/auth/firebase-admin.service';
 
 describe('FirebaseAuthGuard', () => {
   let guard: FirebaseAuthGuard;
   let reflector: { getAllAndOverride: jest.Mock };
   let authService: { login: jest.Mock };
+  let firebaseAdmin: { verifyToken: jest.Mock };
   let request: {
     headers: { authorization: string | undefined };
     user?: unknown;
@@ -16,6 +22,11 @@ describe('FirebaseAuthGuard', () => {
   beforeEach(() => {
     reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) };
     authService = { login: jest.fn() };
+    firebaseAdmin = {
+      verifyToken: jest
+        .fn()
+        .mockResolvedValue({ uid: 'user-1', email_verified: true }),
+    };
     request = { headers: { authorization: undefined } };
     context = {
       getHandler: jest.fn(),
@@ -25,6 +36,7 @@ describe('FirebaseAuthGuard', () => {
     guard = new FirebaseAuthGuard(
       reflector as unknown as Reflector,
       authService as unknown as AuthService,
+      firebaseAdmin as unknown as FirebaseAdminService,
     );
   });
 
@@ -62,7 +74,36 @@ describe('FirebaseAuthGuard', () => {
     await expect(guard.canActivate(context)).resolves.toBe(true);
 
     expect(authService.login).toHaveBeenCalledWith('valid-token');
-    expect(request.user).toEqual({ id: 'user-1', email: 'writer@example.com' });
+    expect(request.user).toEqual({
+      id: 'user-1',
+      uid: 'user-1',
+      email: 'writer@example.com',
+    });
+  });
+
+  it('keeps the row id and the Firebase uid apart, so deletion never guesses', async () => {
+    request.headers.authorization = 'Bearer token-of-another-identity';
+    // La fila se encontró por email y su id es el uid de una identidad
+    // anterior; el token que entró trae el uid vigente. Si la baja usara `id`
+    // para tocar Firebase, borraría un identificador que no existe y dejaría
+    // la identidad viva en silencio.
+    authService.login.mockResolvedValue({
+      id: 'old-row-id',
+      email: 'writer@example.com',
+      role: 'AUTHOR',
+    });
+    firebaseAdmin.verifyToken.mockResolvedValue({
+      uid: 'current-firebase-uid',
+      email_verified: true,
+    });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+
+    expect(request.user).toEqual({
+      id: 'old-row-id',
+      uid: 'current-firebase-uid',
+      email: 'writer@example.com',
+    });
   });
 
   it('propagates authentication failures from AuthService', async () => {
@@ -72,5 +113,53 @@ describe('FirebaseAuthGuard', () => {
     );
 
     await expect(guard.canActivate(context)).rejects.toThrow('Invalid token');
+  });
+
+  it('rejects with Forbidden when the email is not verified', async () => {
+    request.headers.authorization = 'Bearer unverified-token';
+    authService.login.mockResolvedValue({
+      id: 'user-1',
+      email: 'writer@example.com',
+      role: 'AUTHOR',
+    });
+    firebaseAdmin.verifyToken.mockResolvedValue({
+      uid: 'user-1',
+      email_verified: false,
+    });
+
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      new ForbiddenException('Email verification required'),
+    );
+    expect(request.user).toBeUndefined();
+  });
+
+  it('rejects when email_verified is absent from the token', async () => {
+    request.headers.authorization = 'Bearer token-without-claim';
+    authService.login.mockResolvedValue({
+      id: 'user-1',
+      email: 'writer@example.com',
+      role: 'AUTHOR',
+    });
+    firebaseAdmin.verifyToken.mockResolvedValue({ uid: 'user-1' });
+
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      new ForbiddenException('Email verification required'),
+    );
+  });
+
+  it('accepts a verified email', async () => {
+    request.headers.authorization = 'Bearer verified-token';
+    authService.login.mockResolvedValue({
+      id: 'user-1',
+      email: 'writer@example.com',
+      role: 'AUTHOR',
+    });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(request.user).toEqual({
+      id: 'user-1',
+      uid: 'user-1',
+      email: 'writer@example.com',
+    });
   });
 });

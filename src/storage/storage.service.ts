@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
   DeleteObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -202,5 +203,36 @@ export class StorageService {
         Key: key,
       }),
     );
+  }
+
+  /**
+   * Lista todas las claves bajo un prefijo (ej. `profiles/<uid>/`) para poder
+   * barrer objetos huérfanos que ya no tienen fila en la base.
+   */
+  async listObjects(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const result = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        }),
+      );
+
+      for (const item of result.Contents ?? []) {
+        if (item.Key) {
+          keys.push(item.Key);
+        }
+      }
+
+      continuationToken = result.IsTruncated
+        ? result.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+
+    return keys;
   }
 }
