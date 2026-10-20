@@ -5,12 +5,13 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { EntityExtractionClient } from './entity-extraction/entity-extraction.client';
 import { EntityExtractionPipelineService } from './entity-extraction/entity-extraction-pipeline.service';
 import { EntityResolutionService } from './entity-extraction/entity-resolution.service';
+import { HealthController } from './health.controller';
 import { SystemController } from './system.controller';
 import { SystemService } from './system.service';
 
 @Module({
   imports: [PrismaModule, AuditModule, KnowledgeModule],
-  controllers: [SystemController],
+  controllers: [SystemController, HealthController],
   providers: [
     SystemService,
     EntityExtractionClient,

@@ -20,6 +20,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile --prod
+# El client generado en la etapa build no se copia; se regenera acá para que
+# exista dentro de los node_modules de producción.
+RUN pnpm exec prisma generate
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
@@ -32,6 +35,7 @@ RUN addgroup --system --gid 1001 nodejs \
 COPY --from=deps --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=nestjs:nodejs /app/dist ./dist
 COPY --chown=nestjs:nodejs package.json ./
+COPY --chown=nestjs:nodejs prisma ./prisma
 
 USER nestjs
 

@@ -14,13 +14,18 @@ async function bootstrap(): Promise<void> {
 
   const app = await NestFactory.create(AppModule);
 
-  // Habilitamos CORS indicando exactamente qué orígenes están permitidos
+  // Orígenes permitidos separados por coma en CORS_ORIGINS; sin la variable se
+  // usan los de desarrollo local.
+  const corsOrigins = (
+    process.env['CORS_ORIGINS'] ??
+    'http://localhost:3000,http://localhost:3001,http://192.168.0.102:3001'
+  )
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://192.168.0.102:3001',
-    ],
+    origin: corsOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Métodos HTTP permitidos
     allowedHeaders: [
       'Accept',
