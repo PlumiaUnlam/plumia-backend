@@ -43,14 +43,21 @@ function normalizeImageTextFlow(value: unknown): ImageTextFlow {
 }
 
 function normalizeImageWidth(value: unknown): number | null {
-  const width =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)
-        ? Number(value)
-        : Number.NaN;
+  let width: number;
+  if (typeof value === 'number') {
+    width = value;
+  } else if (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)) {
+    width = Number(value);
+  } else {
+    return null;
+  }
+
+  if (!Number.isFinite(width)) {
+    return null;
+  }
+
   const roundedWidth = Math.round(width);
-  return Number.isFinite(width) && roundedWidth > 0 ? roundedWidth : null;
+  return roundedWidth > 0 ? roundedWidth : null;
 }
 
 function textMarks(node: JsonRecord): ExportInline {
