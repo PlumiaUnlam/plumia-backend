@@ -1,4 +1,5 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
+import type { NextFunction, Request, Response } from 'express';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { SystemService } from './system/system.service';
@@ -13,6 +14,21 @@ async function bootstrap(): Promise<void> {
   }
 
   const app = await NestFactory.create(AppModule);
+
+  if (process.env['LOG_TIMINGS'] === 'true') {
+    // Diagnóstico de latencia: tiempo total por request (incluye guards).
+    const logger = new Logger('HTTP');
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const start = process.hrtime.bigint();
+      res.on('finish', () => {
+        const ms = Number(process.hrtime.bigint() - start) / 1e6;
+        logger.log(
+          `${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(0)}ms`,
+        );
+      });
+      next();
+    });
+  }
 
   // Orígenes permitidos separados por coma en CORS_ORIGINS; sin la variable se
   // usan los de desarrollo local.
