@@ -81,6 +81,7 @@ export class PrismaSceneRepository implements SceneRepository {
       const scene = await this.prisma.$transaction(async (tx) => {
         const created = await tx.scene.create({
           data: {
+            ...(data.id !== undefined ? { id: data.id } : {}),
             chapterId: data.chapterId,
             sortKey: data.sortKey,
             ...(data.title !== undefined ? { title: data.title } : {}),

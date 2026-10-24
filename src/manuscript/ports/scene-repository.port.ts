@@ -19,6 +19,7 @@ export interface SceneRecord {
 }
 
 export interface CreateSceneData {
+  id?: string;
   chapterId: string;
   title?: string;
   sortKey: string;

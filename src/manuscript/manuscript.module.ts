@@ -12,6 +12,7 @@ import { BookCoverController } from './controllers/book-cover.controller';
 import { AuthorAnnotationsController } from './controllers/author-annotations.controller';
 import { ChaptersController } from './controllers/chapters.controller';
 import { EditorTextStylesController } from './controllers/editor-text-styles.controller';
+import { EpubImportController } from './controllers/epub-import.controller';
 import { ProjectsController } from './controllers/projects.controller';
 import { ScenesController } from './controllers/scenes.controller';
 import { StoryboardCardsController } from './controllers/storyboard-cards.controller';
@@ -27,6 +28,7 @@ import { BookCoverService } from './services/book-cover.service';
 import { AuthorAnnotationsService } from './services/author-annotations.service';
 import { ChapterService } from './services/chapter.service';
 import { EditorTextStylesService } from './services/editor-text-styles.service';
+import { EpubImportService } from './services/epub-import.service';
 import { ProjectService } from './services/project.service';
 import { SceneService } from './services/scene.service';
 import { StoryboardCardService } from './services/storyboard-card.service';
@@ -41,6 +43,7 @@ import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup
     BookCoverController,
     ChaptersController,
     EditorTextStylesController,
+    EpubImportController,
     ScenesController,
     StoryboardCardsController,
     StoryboardMatrixController,
@@ -52,6 +55,7 @@ import { StoryboardAudioCleanupPoller } from './workers/storyboard-audio-cleanup
     BookCoverService,
     ChapterService,
     EditorTextStylesService,
+    EpubImportService,
     SceneService,
     StoryboardCardService,
     StoryboardMatrixService,
