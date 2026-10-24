@@ -7,6 +7,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Request as ExpressRequest } from 'express';
 import type { CreateProjectDto } from '../dto/projects/create-project.dto';
 import { ProjectResponseDto } from '../dto/responses/project-response.dto';
 import { MAX_EPUB_FILE_SIZE } from '../domain/epub-import.parser';
@@ -17,6 +18,8 @@ interface UploadedEpubFile {
   buffer: Buffer;
   originalname: string;
 }
+
+type EpubAuthenticatedRequest = AuthenticatedRequest & ExpressRequest;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -82,7 +85,7 @@ export class EpubImportController {
     }),
   )
   async importEpub(
-    @Request() req: AuthenticatedRequest,
+    @Request() req: EpubAuthenticatedRequest,
     @UploadedFile() file: UploadedEpubFile | undefined,
   ) {
     if (!file || !file.originalname.toLowerCase().endsWith('.epub')) {

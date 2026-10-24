@@ -158,32 +158,36 @@ export class EpubImportService {
           title: chapterInput.title.slice(0, 200),
           sortKey: String(index + 1).padStart(3, '0'),
         });
-        const sceneId = randomUUID();
-        const transformed = await attachImages(
-          chapterInput.content,
-          sceneId,
-          epub.images,
-          this.storageService,
-          uploadedKeys,
-        );
-        const content = transformed.value as Record<string, unknown>;
-        const wordCount = countWords(content);
-        const scene = await this.sceneRepository.createForUser(userId, {
-          id: sceneId,
-          chapterId: chapter.id,
-          title: 'Texto',
-          sortKey: '001',
-          order: 1,
-          content,
-          wordCount,
-        });
-        if (!scene) {
-          throw new NotFoundException('No se pudo crear una escena del EPUB.');
-        }
+        for (const [sceneIndex, sceneInput] of chapterInput.scenes.entries()) {
+          const sceneId = randomUUID();
+          const transformed = await attachImages(
+            sceneInput.content,
+            sceneId,
+            epub.images,
+            this.storageService,
+            uploadedKeys,
+          );
+          const content = transformed.value as Record<string, unknown>;
+          const wordCount = countWords(content);
+          const scene = await this.sceneRepository.createForUser(userId, {
+            id: sceneId,
+            chapterId: chapter.id,
+            title: sceneInput.title.slice(0, 200),
+            sortKey: String(sceneIndex + 1).padStart(3, '0'),
+            order: sceneIndex + 1,
+            content,
+            wordCount,
+          });
+          if (!scene) {
+            throw new NotFoundException(
+              'No se pudo crear una escena del EPUB.',
+            );
+          }
 
-        importedImages += transformed.stats.imported;
-        skippedImages += transformed.stats.skipped;
-        importedWords += wordCount;
+          importedImages += transformed.stats.imported;
+          skippedImages += transformed.stats.skipped;
+          importedWords += wordCount;
+        }
       }
 
       return {
