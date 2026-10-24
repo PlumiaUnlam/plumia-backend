@@ -34,23 +34,22 @@ export async function prepareEpubImage(
     return { ...sourceFormat, buffer };
   }
 
-  let hasAlpha: boolean | undefined;
   try {
-    hasAlpha = (await sharp(buffer).metadata()).hasAlpha;
+    const metadata = await sharp(buffer).metadata();
+    if (metadata.hasAlpha) {
+      return {
+        extension: 'png',
+        mimeType: 'image/png',
+        buffer: await sharp(buffer).rotate().png().toBuffer(),
+      };
+    }
+
+    return {
+      extension: 'jpg',
+      mimeType: 'image/jpeg',
+      buffer: await sharp(buffer).rotate().jpeg({ quality: 92 }).toBuffer(),
+    };
   } catch {
     throw new Error('El contenido de la imagen no es válido para exportar');
   }
-  if (hasAlpha) {
-    return {
-      extension: 'png',
-      mimeType: 'image/png',
-      buffer: await sharp(buffer).rotate().png().toBuffer(),
-    };
-  }
-
-  return {
-    extension: 'jpg',
-    mimeType: 'image/jpeg',
-    buffer: await sharp(buffer).rotate().jpeg({ quality: 92 }).toBuffer(),
-  };
 }

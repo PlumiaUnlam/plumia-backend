@@ -27,6 +27,28 @@ async function createAvif(): Promise<Buffer> {
     .toBuffer();
 }
 
+async function createWebpWithCorruptPixels(): Promise<Buffer> {
+  const source = await sharp({
+    create: {
+      width: 32,
+      height: 32,
+      channels: 3,
+      background: { r: 70, g: 120, b: 190 },
+    },
+  })
+    .webp()
+    .toBuffer();
+  const vp8ChunkOffset = source.indexOf('VP8 ');
+  if (vp8ChunkOffset < 0) {
+    throw new Error('Expected a lossy WebP frame');
+  }
+
+  const corrupted = Buffer.from(source);
+  const pixelDataOffset = vp8ChunkOffset + 8 + 10 + 10;
+  corrupted[pixelDataOffset] = corrupted[pixelDataOffset]! ^ 0xff;
+  return corrupted;
+}
+
 describe('EPUB image preparation', () => {
   it('converts opaque WebP images to JPEG without changing the source buffer', async () => {
     const source = await createWebp();
@@ -58,6 +80,18 @@ describe('EPUB image preparation', () => {
     expect(result.extension).toBe('jpg');
     expect(result.mimeType).toBe('image/jpeg');
     expect((await sharp(result.buffer).metadata()).format).toBe('jpeg');
+  });
+
+  it('reports a clear error when WebP pixel decoding fails after metadata succeeds', async () => {
+    const source = await createWebpWithCorruptPixels();
+
+    await expect(sharp(source).metadata()).resolves.toMatchObject({
+      width: 32,
+      height: 32,
+    });
+    await expect(
+      prepareEpubImage('scenes/scene/image.webp', source),
+    ).rejects.toThrow('El contenido de la imagen no es válido para exportar');
   });
 
   it('passes supported PNG data through without recompressing it', async () => {
