@@ -417,12 +417,14 @@ function blockHtml(block: ExportBlock, renderers: HtmlRenderers): string {
       renderers.sceneDividerSrc(block.variant, color),
     )}" alt="Separador ornamental" /></span><span class="scene-divider__line" aria-hidden="true"></span></p>`;
   }
-  const imageClass =
-    block.textFlow === 'break'
-      ? 'image--break'
-      : block.textFlow === 'text-right'
-        ? 'image--float-left'
-        : 'image--float-right';
+  let imageClass: string;
+  if (block.textFlow === 'break') {
+    imageClass = 'image--break';
+  } else if (block.textFlow === 'text-right') {
+    imageClass = 'image--float-left';
+  } else {
+    imageClass = 'image--float-right';
+  }
   const widthStyle =
     block.textFlow !== 'break' && block.width !== null
       ? ` style="width:${block.width}px"`
