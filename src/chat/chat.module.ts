@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { AnthropicChatGenerationAdapter } from './adapters/anthropic-chat-generation.adapter';
 import { GeminiChatGenerationAdapter } from './adapters/gemini-chat-generation.adapter';
 import { GeminiEmbeddingAdapter } from './adapters/gemini-embedding.adapter';
 import { PgVectorStore } from './adapters/pg-vector-store.adapter';
@@ -18,7 +20,13 @@ import { VECTOR_STORE } from './ports/vector-store.port';
     ChatEmbeddingIndexService,
     {
       provide: CHAT_GENERATION_PROVIDER,
-      useClass: GeminiChatGenerationAdapter,
+      inject: [ConfigService],
+      // CHAT_PROVIDER: gemini (default) | anthropic
+      useFactory: (config: ConfigService) =>
+        config.get<string>('CHAT_PROVIDER')?.trim().toLowerCase() ===
+        'anthropic'
+          ? new AnthropicChatGenerationAdapter(config)
+          : new GeminiChatGenerationAdapter(config),
     },
     {
       provide: EMBEDDING_PROVIDER,

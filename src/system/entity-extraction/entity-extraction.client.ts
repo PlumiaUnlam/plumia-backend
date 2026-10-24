@@ -17,6 +17,7 @@ const ANTHROPIC_MAX_TOKENS = 16_000;
 const ANTHROPIC_FALLBACK_MODELS = new Set([
   'claude-opus-5-5',
   'claude-sonnet-5-5',
+  'claude-haiku-5-5',
 ]);
 
 type ExtractionProvider = 'gemini' | 'anthropic';
