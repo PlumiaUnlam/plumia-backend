@@ -34,8 +34,13 @@ export async function prepareEpubImage(
     return { ...sourceFormat, buffer };
   }
 
-  const metadata = await sharp(buffer).metadata();
-  if (metadata.hasAlpha) {
+  let hasAlpha: boolean | undefined;
+  try {
+    hasAlpha = (await sharp(buffer).metadata()).hasAlpha;
+  } catch {
+    throw new Error('El contenido de la imagen no es válido para exportar');
+  }
+  if (hasAlpha) {
     return {
       extension: 'png',
       mimeType: 'image/png',

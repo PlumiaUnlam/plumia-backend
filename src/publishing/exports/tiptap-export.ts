@@ -49,7 +49,8 @@ function normalizeImageWidth(value: unknown): number | null {
       : typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)
         ? Number(value)
         : Number.NaN;
-  return Number.isFinite(width) && width > 0 ? Math.round(width) : null;
+  const roundedWidth = Math.round(width);
+  return Number.isFinite(width) && roundedWidth > 0 ? roundedWidth : null;
 }
 
 function textMarks(node: JsonRecord): ExportInline {
@@ -404,8 +405,9 @@ function blockHtml(block: ExportBlock, renderers: HtmlRenderers): string {
     return '<hr />';
   }
   if (block.kind === 'sceneDivider') {
-    return `<p class="scene-divider" style="color:${block.color}"><span class="scene-divider__line" aria-hidden="true"></span><span class="scene-divider__artwork"><img src="${escapeHtml(
-      renderers.sceneDividerSrc(block.variant, block.color),
+    const color = normalizeSceneDividerColor(block.color);
+    return `<p class="scene-divider" style="color:${color}"><span class="scene-divider__line" aria-hidden="true"></span><span class="scene-divider__artwork"><img src="${escapeHtml(
+      renderers.sceneDividerSrc(block.variant, color),
     )}" alt="Separador ornamental" /></span><span class="scene-divider__line" aria-hidden="true"></span></p>`;
   }
   const imageClass =

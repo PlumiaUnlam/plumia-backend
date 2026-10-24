@@ -379,7 +379,7 @@ describe('ExportService', () => {
       });
       await expect(service.processExport('job-id')).rejects.toThrow(
         storageKey.endsWith('.webp')
-          ? 'Las exportaciones actualmente requieren imágenes JPG o PNG'
+          ? 'El contenido de la imagen no es válido para exportar'
           : 'Invalid image reference in export',
       );
       expect(prisma.exportJob.update).toHaveBeenLastCalledWith(
