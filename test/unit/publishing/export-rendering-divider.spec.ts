@@ -49,7 +49,11 @@ describe('export scene dividers', () => {
       noImage,
     );
     expect(document.chapters[0]?.scenes[0]?.content).toEqual(
-      variants.map((variant) => ({ kind: 'sceneDivider', variant })),
+      variants.map((variant) => ({
+        kind: 'sceneDivider',
+        variant,
+        color: '#5b3d6f',
+      })),
     );
 
     const epub = await new EpubExportRenderer().render(document);
@@ -76,7 +80,7 @@ describe('export scene dividers', () => {
       noImage,
     );
     expect(document.chapters[0]?.scenes[0]?.content).toEqual([
-      { kind: 'sceneDivider', variant: 'stars' },
+      { kind: 'sceneDivider', variant: 'stars', color: '#5b3d6f' },
     ]);
 
     const epub = await new EpubExportRenderer().render(document);
@@ -90,6 +94,39 @@ describe('export scene dividers', () => {
     const scene =
       await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
     expect(scene).toContain('src="images/divider-stars.svg"');
+    expect(scene).toContain('style="color:#5b3d6f"');
+    expect(scene).toContain('class="scene-divider__line"');
+    expect(scene).toContain('class="scene-divider__artwork"');
+  });
+
+  it('preserves a custom divider color in both the packaged SVG and XHTML', async () => {
+    const document = await prepareExportDocument(
+      sourceWith([
+        {
+          type: 'sceneDivider',
+          attrs: { variant: 'stars', color: '#aabbcc' },
+        },
+      ]),
+      noImage,
+    );
+    expect(document.chapters[0]?.scenes[0]?.content).toEqual([
+      { kind: 'sceneDivider', variant: 'stars', color: '#aabbcc' },
+    ]);
+
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
+    const svg =
+      await zip.files['OEBPS/images/divider-stars-aabbcc.svg']!.async('string');
+    const scene =
+      await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
+    const opf = await zip.files['OEBPS/content.opf']!.async('string');
+
+    expect(svg).toContain('#aabbcc');
+    expect(scene).toContain('src="images/divider-stars-aabbcc.svg"');
+    expect(scene).toContain('style="color:#aabbcc"');
+    expect(opf).toContain(
+      'href="images/divider-stars-aabbcc.svg" media-type="image/svg+xml"',
+    );
   });
 
   it('renders a horizontal rule as <hr />, not a Unicode glyph', async () => {

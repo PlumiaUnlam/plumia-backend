@@ -3,10 +3,12 @@ import type {
   ExportDocument,
   ExportImage,
   ExportInline,
+  ImageTextFlow,
 } from './export.types';
 import type { ExportContentSource } from './export-source.port';
 import {
   normalizeSceneDividerVariant,
+  normalizeSceneDividerColor,
   sceneDividerSvg,
   type SceneDividerVariant,
 } from './scene-divider';
@@ -31,6 +33,23 @@ function stringValue(value: unknown): string | undefined {
 
 function nodeAttributes(node: JsonRecord): JsonRecord {
   return isRecord(node['attrs']) ? node['attrs'] : {};
+}
+
+function normalizeImageTextFlow(value: unknown): ImageTextFlow {
+  if (value === 'text-right' || value === 'wrap') {
+    return 'text-right';
+  }
+  return value === 'text-left' ? 'text-left' : 'break';
+}
+
+function normalizeImageWidth(value: unknown): number | null {
+  const width =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)
+        ? Number(value)
+        : Number.NaN;
+  return Number.isFinite(width) && width > 0 ? Math.round(width) : null;
 }
 
 function textMarks(node: JsonRecord): ExportInline {
@@ -194,10 +213,12 @@ async function parseBlock(
     return [{ kind: 'horizontalRule' }];
   }
   if (type === 'sceneDivider') {
+    const attrs = nodeAttributes(value);
     return [
       {
         kind: 'sceneDivider',
-        variant: normalizeSceneDividerVariant(nodeAttributes(value)['variant']),
+        variant: normalizeSceneDividerVariant(attrs['variant']),
+        color: normalizeSceneDividerColor(attrs['color']),
       },
     ];
   }
@@ -282,6 +303,8 @@ async function parseImageBlock(
     kind: 'image',
     image,
     alt: stringValue(attrs['alt']) ?? 'Imagen de la obra',
+    width: normalizeImageWidth(attrs['width']),
+    textFlow: normalizeImageTextFlow(attrs['textFlow']),
   };
 }
 
@@ -332,7 +355,7 @@ type NoteInline = Extract<ExportInline, { kind: 'note' }>;
 
 interface HtmlRenderers {
   imageSrc: (image: ExportImage) => string;
-  sceneDividerSrc: (variant: SceneDividerVariant) => string;
+  sceneDividerSrc: (variant: SceneDividerVariant, color: string) => string;
   noteRef: (note: NoteInline) => string;
 }
 
@@ -381,11 +404,26 @@ function blockHtml(block: ExportBlock, renderers: HtmlRenderers): string {
     return '<hr />';
   }
   if (block.kind === 'sceneDivider') {
-    return `<p class="scene-divider"><img src="${escapeHtml(
-      renderers.sceneDividerSrc(block.variant),
-    )}" alt="Separador ornamental" /></p>`;
+    return `<p class="scene-divider" style="color:${block.color}"><span class="scene-divider__line" aria-hidden="true"></span><span class="scene-divider__artwork"><img src="${escapeHtml(
+      renderers.sceneDividerSrc(block.variant, block.color),
+    )}" alt="Separador ornamental" /></span><span class="scene-divider__line" aria-hidden="true"></span></p>`;
   }
-  return `<p class="image"><img src="${escapeHtml(renderers.imageSrc(block.image))}" alt="${escapeHtml(block.alt)}" /></p>`;
+  const imageClass =
+    block.textFlow === 'break'
+      ? 'image--break'
+      : block.textFlow === 'text-right'
+        ? 'image--float-left'
+        : 'image--float-right';
+  const widthStyle =
+    block.textFlow !== 'break' && block.width !== null
+      ? ` style="width:${block.width}px"`
+      : '';
+  const widthAttribute = block.width === null ? '' : ` width="${block.width}"`;
+  const imageStyle =
+    block.width === null ? '' : ` style="width:${block.width}px"`;
+  return `<p class="image ${imageClass}"${widthStyle}><img src="${escapeHtml(
+    renderers.imageSrc(block.image),
+  )}"${widthAttribute} alt="${escapeHtml(block.alt)}"${imageStyle} /></p>`;
 }
 
 function textBlockHtml(
@@ -426,9 +464,9 @@ export function blocksToHtml(
   return blocksHtml(blocks, {
     imageSrc: (image) =>
       `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
-    sceneDividerSrc: (variant) =>
+    sceneDividerSrc: (variant, color) =>
       `data:image/svg+xml;base64,${Buffer.from(
-        sceneDividerSvg(variant),
+        sceneDividerSvg(variant, color),
       ).toString('base64')}`,
     noteRef: () => '',
     ...renderers,
