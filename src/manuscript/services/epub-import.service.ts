@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { mapSequentially } from '../../common/async.utils';
 import { StorageService } from '../../storage/storage.service';
 import { ChapterService } from './chapter.service';
 import { ProjectService } from './project.service';
@@ -39,20 +40,6 @@ interface ImageImportStats {
 
 interface ImportedCounts extends ImageImportStats {
   importedWords: number;
-}
-
-function mapSequentially<T, R>(
-  values: readonly T[],
-  map: (value: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  let sequence = Promise.resolve();
-  values.forEach((value, index) => {
-    sequence = sequence.then(async () => {
-      results.push(await map(value, index));
-    });
-  });
-  return sequence.then(() => results);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

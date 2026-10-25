@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { mapSequentially } from '../../common/async.utils';
 
 type JSZipObject = JSZip.JSZipObject;
 
@@ -799,20 +800,6 @@ async function loadImageAsset(
 
   const imageType = imageTypeFromBytes(buffer);
   return imageType ? { id: '', buffer, ...imageType } : null;
-}
-
-function mapSequentially<T, R>(
-  values: readonly T[],
-  map: (value: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  let sequence = Promise.resolve();
-  values.forEach((value, index) => {
-    sequence = sequence.then(async () => {
-      results.push(await map(value, index));
-    });
-  });
-  return sequence.then(() => results);
 }
 
 async function catalogImages(
