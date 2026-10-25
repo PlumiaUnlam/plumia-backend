@@ -10,14 +10,22 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApplicationHelpIndexService } from './application-help-index.service';
 import { ChatEmbeddingIndexService } from './chat-embedding-index.service';
-import { isApplicationHelpIntent } from './domain/application-guide';
+import { ChatRoutingService } from './chat-routing.service';
+import { ChatConflictService } from './chat-conflict.service';
 import {
+  CHAT_CLARIFICATION_RESPONSE,
   CHAT_OUT_OF_SCOPE_RESPONSE,
-  getPolicyRefusal,
-  getSocialResponse,
-  isCreativeRequest,
 } from './domain/chat-policy';
 import { buildGroundedResponse } from './domain/grounded-response';
+import {
+  buildNavigationAction,
+  isSafeChatRoute,
+} from './domain/chat-navigation';
+import {
+  PRIMARY_CHAT_SOURCE_LIMIT,
+  presentReviewedSources,
+  withConflictNotice,
+} from './domain/chat-source-presentation';
 import type {
   ChatExchange,
   ChatAction,
@@ -31,6 +39,10 @@ import {
   type ChatGenerationProvider,
   type ChatHistoryEntry,
 } from './ports/chat-generation-provider.port';
+import {
+  CHAT_EVIDENCE_VERIFIER,
+  type ChatEvidenceVerifier,
+} from './ports/chat-evidence-verifier.port';
 import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
@@ -74,6 +86,8 @@ interface RetrievedEntity {
 interface RetrievedChunk {
   id: string;
   content: string;
+  chunkIndex: number;
+  contentHash: string | null;
   scene: {
     id: string;
     title: string | null;
@@ -125,6 +139,7 @@ const MAX_ENTITY_CANDIDATES = 40;
 const MAX_RELATIONSHIP_CANDIDATES = 80;
 const MAX_TIMELINE_CANDIDATES = 80;
 const MAX_CONTEXT_CHARS = 48_000;
+const MAX_CONTEXT_SOURCES = 20;
 
 const TIMELINE_GENERIC_TERMS = new Set([
   'cronologia',
@@ -156,6 +171,19 @@ const ENTITY_GENERIC_TERMS = new Set([
   'vinculo',
   'vinculos',
   'wiki',
+]);
+const FIRST_MENTION_GENERIC_TERMS = new Set([
+  'aparece',
+  'aparecio',
+  'capitulo',
+  'escena',
+  'mencion',
+  'menciona',
+  'mencionada',
+  'mencionado',
+  'primer',
+  'referencia',
+  'vez',
 ]);
 const STOP_WORDS = new Set([
   'a',
@@ -223,11 +251,15 @@ export class ChatService {
     private readonly prisma: PrismaService,
     @Inject(CHAT_GENERATION_PROVIDER)
     private readonly generator: ChatGenerationProvider,
+    @Inject(CHAT_EVIDENCE_VERIFIER)
+    private readonly evidenceVerifier: ChatEvidenceVerifier,
     @Inject(VECTOR_STORE) private readonly vectorStore: VectorStore,
     @Inject(EMBEDDING_PROVIDER)
     private readonly embeddingProvider: Pick<EmbeddingProvider, 'model'>,
     private readonly embeddingIndex: ChatEmbeddingIndexService,
     private readonly applicationHelpIndex: ApplicationHelpIndexService,
+    private readonly routing: ChatRoutingService,
+    private readonly conflicts: ChatConflictService,
   ) {}
 
   searchSimilarChunks(
@@ -368,146 +400,222 @@ export class ChatService {
     }));
     throwIfAborted(signal);
 
-    const applicationHelpIntent =
-      isApplicationHelpIntent(question, { history }) ||
-      (await this.applicationHelpIndex.matchesApplicationHelpIntent(question));
-    const policyRefusal = getPolicyRefusal(question, { applicationHelpIntent });
-    if (policyRefusal) {
+    const route = await this.routing.route(question, history, signal);
+    throwIfAborted(signal);
+    if (route.kind === 'immediate') {
       return this.persistExchange(
         thread,
         question,
         {
-          answer: policyRefusal,
+          answer: route.answer,
           sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
+          inputTokens: route.inputTokens,
+          outputTokens: route.outputTokens,
         },
         signal,
       );
     }
 
-    const socialResponse = applicationHelpIntent
-      ? null
-      : getSocialResponse(question);
-    if (socialResponse) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: socialResponse,
-          sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    if (isCreativeRequest(question)) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer:
-            'Puedo ayudarte a consultar y auditar tu obra, pero no escribir, continuar ni autocompletar el manuscrito. Tu voz y tus decisiones creativas siguen siendo exclusivamente tuyas.',
-          sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    const sources = applicationHelpIntent
-      ? await this.applicationHelpIndex.search(
+    let domain: 'work' | 'application_help' = route.kind;
+    let inputTokens = route.inputTokens;
+    let outputTokens = route.outputTokens;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const sources =
+        domain === 'application_help'
+          ? await this.applicationHelpIndex.search(
+              question,
+              thread.projectId,
+              signal,
+            )
+          : await this.retrieveSources(
+              thread.projectId,
+              question,
+              history,
+              signal,
+            );
+      throwIfAborted(signal);
+      if (sources.length === 0) {
+        return this.persistExchange(
+          thread,
           question,
-          thread.projectId,
-          signal,
-        )
-      : await this.retrieveSources(thread.projectId, question, history, signal);
-    throwIfAborted(signal);
-
-    const deterministicAnswer = buildDeterministicEvidenceAnswer(
-      question,
-      sources,
-    );
-    if (deterministicAnswer) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: deterministicAnswer.answer,
-          sources: deterministicAnswer.sources,
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    throwIfAborted(signal);
-    const result = await this.generator.generate({
-      question,
-      history,
-      sources,
-      ...(signal ? { signal } : {}),
-    });
-    throwIfAborted(signal);
-    if (result.outOfScope) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: CHAT_OUT_OF_SCOPE_RESPONSE,
-          sources: [],
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-        },
-        signal,
-      );
-    }
-    if (result.claims.length === 0) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: noEvidenceAnswer(applicationHelpIntent),
-          sources: [],
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-        },
-        signal,
-      );
-    }
-    const groundedResponse = buildGroundedResponse(result, sources);
-    const navigationSource = applicationHelpIntent
-      ? groundedResponse.sources.find(
-          (source) => source.kind === 'application_help' && source.route,
-        )
-      : undefined;
-    const actions: ChatAction[] = navigationSource?.route
-      ? [
           {
-            id: `navigation:${navigationSource.route}`,
-            kind: 'navigation',
-            label:
-              navigationSource.label.split(' › ').at(-1) ??
-              navigationSource.label,
-            description: 'Abrir esta sección de PlumIA',
-            route: navigationSource.route,
+            answer: noEvidenceAnswer(domain === 'application_help'),
+            sources: [],
+            inputTokens,
+            outputTokens,
           },
-        ]
-      : [];
+          signal,
+        );
+      }
 
+      const openConflicts =
+        domain === 'work'
+          ? await this.conflicts.findRelevant(
+              thread.projectId,
+              question,
+              sources,
+              signal,
+            )
+          : [];
+      throwIfAborted(signal);
+
+      const deterministicAnswer =
+        domain === 'work'
+          ? buildDeterministicEvidenceAnswer(question, sources)
+          : null;
+      if (deterministicAnswer) {
+        const notice = withConflictNotice(
+          deterministicAnswer.answer,
+          openConflicts,
+          thread.projectId,
+        );
+        return this.persistExchange(
+          thread,
+          question,
+          {
+            answer: notice.answer,
+            sources: presentReviewedSources(
+              deterministicAnswer.sources,
+              sources,
+            ),
+            actions: notice.actions,
+            inputTokens,
+            outputTokens,
+          },
+          signal,
+        );
+      }
+
+      const result = await this.generator.generate({
+        question,
+        history,
+        sources,
+        openConflicts,
+        expectedDomain: domain,
+        ...(signal ? { signal } : {}),
+      });
+      throwIfAborted(signal);
+      inputTokens += result.inputTokens;
+      outputTokens += result.outputTokens;
+
+      if (result.outOfScope) {
+        return this.persistExchange(
+          thread,
+          question,
+          {
+            answer: CHAT_OUT_OF_SCOPE_RESPONSE,
+            sources: [],
+            inputTokens,
+            outputTokens,
+          },
+          signal,
+        );
+      }
+      if (result.sourceMismatch) {
+        if (attempt === 0) {
+          domain = domain === 'work' ? 'application_help' : 'work';
+          continue;
+        }
+        return this.persistExchange(
+          thread,
+          question,
+          {
+            answer: CHAT_CLARIFICATION_RESPONSE,
+            sources: [],
+            inputTokens,
+            outputTokens,
+          },
+          signal,
+        );
+      }
+      if (result.claims.length === 0) {
+        const notice = withConflictNotice(
+          noEvidenceAnswer(domain === 'application_help'),
+          openConflicts,
+          thread.projectId,
+        );
+        return this.persistExchange(
+          thread,
+          question,
+          {
+            answer: notice.answer,
+            sources: [],
+            actions: notice.actions,
+            inputTokens,
+            outputTokens,
+          },
+          signal,
+        );
+      }
+
+      const groundedResponse = buildGroundedResponse(result, sources);
+      if (groundedResponse.sources.length > 0) {
+        const verification = await this.evidenceVerifier.verify({
+          question,
+          claims: result.claims,
+          sources,
+          openConflicts,
+          ...(signal ? { signal } : {}),
+        });
+        throwIfAborted(signal);
+        inputTokens += verification.inputTokens;
+        outputTokens += verification.outputTokens;
+        if (!verification.supported) {
+          const notice = withConflictNotice(
+            noEvidenceAnswer(domain === 'application_help'),
+            openConflicts,
+            thread.projectId,
+          );
+          return this.persistExchange(
+            thread,
+            question,
+            {
+              answer: notice.answer,
+              sources: [],
+              actions: notice.actions,
+              inputTokens,
+              outputTokens,
+            },
+            signal,
+          );
+        }
+      }
+      const navigationAction =
+        domain === 'application_help'
+          ? buildNavigationAction(groundedResponse.sources)
+          : null;
+      const notice = withConflictNotice(
+        groundedResponse.answer,
+        openConflicts,
+        thread.projectId,
+      );
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: notice.answer,
+          sources:
+            groundedResponse.sources.length > 0
+              ? presentReviewedSources(groundedResponse.sources, sources)
+              : [],
+          actions: [
+            ...(navigationAction ? [navigationAction] : []),
+            ...notice.actions,
+          ],
+          inputTokens,
+          outputTokens,
+        },
+        signal,
+      );
+    }
     return this.persistExchange(
       thread,
       question,
       {
-        answer: groundedResponse.answer,
-        sources: groundedResponse.sources,
-        ...(actions.length > 0 ? { actions } : {}),
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
+        answer: CHAT_CLARIFICATION_RESPONSE,
+        sources: [],
+        inputTokens,
+        outputTokens,
       },
       signal,
     );
@@ -626,10 +734,18 @@ export class ChatService {
       return aggregateCountSources(manuscriptSources);
     }
 
+    if (plan.broadTimelineIntent) {
+      return fitContext([
+        ...timelineSources.slice(0, 12),
+        ...manuscriptSources.slice(0, 6),
+        ...wikiSources.slice(0, 2),
+        ...timelineSources.slice(12),
+      ]);
+    }
     return fitContext([
       ...manuscriptSources,
-      ...timelineSources,
       ...wikiSources,
+      ...timelineSources,
     ]);
   }
 
@@ -638,11 +754,22 @@ export class ChatService {
     plan: RetrievalPlan,
     signal?: AbortSignal,
   ): Promise<RetrievalCandidates> {
+    const chunksOrderBy = plan.countTerm
+      ? [{ id: 'asc' as const }]
+      : plan.firstMentionIntent
+        ? [
+            { scene: { chapter: { book: { sortKey: 'asc' as const } } } },
+            { scene: { chapter: { sortKey: 'asc' as const } } },
+            { scene: { sortKey: 'asc' as const } },
+            { chunkIndex: 'asc' as const },
+          ]
+        : null;
     const chunksQuery = {
       where: buildChunkWhere(projectId, plan),
       include: {
         scene: { include: { chapter: { include: { book: true } } } },
       },
+      ...(chunksOrderBy ? { orderBy: chunksOrderBy } : {}),
       take:
         plan.countTerm || plan.firstMentionIntent
           ? MAX_ORDERED_CHUNK_CANDIDATES
@@ -700,6 +827,21 @@ export class ChatService {
       ],
     );
     throwIfAborted(signal);
+    if (plan.countTerm) {
+      let lastChunkId = chunks.at(-1)?.id;
+      let pageLength = chunks.length;
+      while (pageLength === MAX_ORDERED_CHUNK_CANDIDATES && lastChunkId) {
+        const nextPage = await this.prisma.chunk.findMany({
+          ...chunksQuery,
+          cursor: { id: lastChunkId },
+          skip: 1,
+        });
+        throwIfAborted(signal);
+        chunks.push(...nextPage);
+        pageLength = nextPage.length;
+        lastChunkId = nextPage.at(-1)?.id;
+      }
+    }
     return [
       chunks,
       entities,
@@ -814,10 +956,7 @@ function buildRetrievalPlan(
 ): RetrievalPlan {
   const normalizedQuestion = normalize(question);
   const countTerm = extractCountTerm(question);
-  const firstMentionIntent = hasAnyWord(normalizedQuestion, [
-    'primera',
-    'primer',
-  ]);
+  const firstMentionIntent = isFirstMentionIntent(question);
   const timelineIntent =
     normalizedQuestion.includes('linea de tiempo') ||
     normalizedQuestion.includes('cronolog') ||
@@ -844,11 +983,19 @@ function buildRetrievalPlan(
     'imagenes',
     'protagonista',
   ]);
-  const semanticChunkIds = semanticMatches.map((match) => match.chunkId);
+  const semanticChunkIds = firstMentionIntent
+    ? []
+    : semanticMatches.map((match) => match.chunkId);
   const semanticRanks = new Map(
     semanticMatches.map((match, index) => [match.chunkId, index]),
   );
-  const chunkTextTerms = (countTerm ? [countTerm] : terms).slice(0, 10);
+  const chunkTextTerms = (
+    countTerm
+      ? [countTerm]
+      : firstMentionIntent
+        ? firstMentionTerms(terms)
+        : terms
+  ).slice(0, 10);
   const chunkCandidateFilters: Prisma.ChunkWhereInput[] = [
     ...(semanticChunkIds.length > 0 ? [{ id: { in: semanticChunkIds } }] : []),
     ...chunkTextTerms.map((term) => ({
@@ -1228,23 +1375,35 @@ function buildDeterministicEvidenceAnswer(
         .join(', ');
       const occurrenceWord = total === 1 ? 'vez' : 'veces';
       const breakdownText = breakdown ? `: ${breakdown}` : '';
-      const citation = manuscriptSources
-        .map((_, index) => index + 1)
-        .join(', ');
+      const principalSources = manuscriptSources.slice(
+        0,
+        PRIMARY_CHAT_SOURCE_LIMIT,
+      );
+      const citation = principalSources.map((_, index) => index + 1).join(', ');
+      const additionalCount =
+        manuscriptSources.length - principalSources.length;
+      const reviewedText =
+        additionalCount > 0
+          ? ` Hay ${additionalCount} fuentes adicionales revisadas.`
+          : '';
       return {
-        answer: `“${countTerm}” aparece ${total} ${occurrenceWord} en el manuscrito consultado${breakdownText}. [${citation}]`,
-        sources: manuscriptSources,
+        answer: `“${countTerm}” aparece ${total} ${occurrenceWord} en el manuscrito consultado${breakdownText}. [${citation}]${reviewedText}`,
+        sources: principalSources,
       };
     }
   }
 
-  if (/\b(primera|primer)\b/i.test(question)) {
+  if (isFirstMentionIntent(question)) {
     const firstMention = sources.find(
       (source) => source.kind === 'manuscript' && source.textQuote,
     );
     if (firstMention) {
+      const focusTerm = firstMentionTerms(extractSearchTerms(question)).find((term) =>
+        includesTerm(firstMention.textQuote ?? '', term),
+      );
+      const displayQuote = quoteAround(firstMention.textQuote ?? '', focusTerm);
       return {
-        answer: `La primera referencia encontrada está en ${firstMention.label}: “${firstMention.textQuote}” [1]`,
+        answer: `La primera referencia encontrada está en ${firstMention.label}: “${displayQuote}” [1]`,
         sources: [firstMention],
       };
     }
@@ -1256,6 +1415,8 @@ function rankManuscriptSources<
   T extends {
     id: string;
     content: string;
+    chunkIndex: number;
+    contentHash: string | null;
     scene: {
       id: string;
       title: string | null;
@@ -1276,7 +1437,8 @@ function rankManuscriptSources<
   question: string,
   semanticRanks: ReadonlyMap<string, number>,
 ): ChatSource[] {
-  const wantsFirst = /\b(primera|primer)\b/i.test(question);
+  const wantsFirst = isFirstMentionIntent(question);
+  const matchTerms = wantsFirst ? firstMentionTerms(terms) : terms;
   const candidates = chunks
     .map((chunk) => {
       const occurrenceCount = countTerm
@@ -1286,14 +1448,17 @@ function rankManuscriptSources<
         chunk,
         occurrenceCount,
         lexicalScore:
-          scoreText(chunk.content, terms, question) +
+          scoreText(chunk.content, matchTerms, question) +
           (occurrenceCount ? occurrenceCount * 2 : 0),
       };
     })
     .filter((entry) =>
       countTerm
         ? (entry.occurrenceCount ?? 0) > 0
-        : entry.lexicalScore > 0 || semanticRanks.has(entry.chunk.id),
+        : wantsFirst
+          ? matchTerms.length > 0 &&
+            matchTerms.some((term) => includesTerm(entry.chunk.content, term))
+          : entry.lexicalScore > 0 || semanticRanks.has(entry.chunk.id),
     );
 
   const lexicalRanks = new Map(
@@ -1322,7 +1487,7 @@ function rankManuscriptSources<
   return ranked.slice(0, limit).map(({ chunk, occurrenceCount }) => {
     const chapter = chunk.scene.chapter;
     const focusTerm =
-      countTerm ?? terms.find((term) => includesTerm(chunk.content, term));
+      countTerm ?? matchTerms.find((term) => includesTerm(chunk.content, term));
     return {
       id: `manuscript:${chunk.id}`,
       kind: 'manuscript',
@@ -1336,7 +1501,9 @@ function rankManuscriptSources<
       chapterTitle: chapter.title,
       sceneId: chunk.scene.id,
       sceneTitle: chunk.scene.title,
-      textQuote: quoteAround(chunk.content, focusTerm),
+      chunkIndex: chunk.chunkIndex,
+      contentHash: chunk.contentHash,
+      textQuote: compactText(chunk.content, Number.MAX_SAFE_INTEGER),
       ...(occurrenceCount === undefined ? {} : { occurrenceCount }),
     };
   });
@@ -1351,6 +1518,26 @@ function extractSearchTerms(value: string): string[] {
   return [...new Set(extractWordTokens(normalized))]
     .filter((term) => !STOP_WORDS.has(term))
     .slice(0, 20);
+}
+
+function isFirstMentionIntent(question: string): boolean {
+  const normalized = normalize(question);
+  return (
+    hasAnyWord(normalized, ['primera', 'primer']) &&
+    hasAnyWord(normalized, [
+      'aparece',
+      'aparecio',
+      'menciona',
+      'mencion',
+      'mencionada',
+      'mencionado',
+      'referencia',
+    ])
+  );
+}
+
+function firstMentionTerms(terms: readonly string[]): string[] {
+  return terms.filter((term) => !FIRST_MENTION_GENERIC_TERMS.has(term));
 }
 
 function extractCountTerm(question: string): string | null {
@@ -1650,9 +1837,12 @@ function fitContext(sources: ChatSource[]): ChatSource[] {
   let length = 0;
   const result: ChatSource[] = [];
   for (const source of sources) {
+    if (result.length >= MAX_CONTEXT_SOURCES) {
+      break;
+    }
     const sourceLength = source.label.length + source.excerpt.length;
     if (length + sourceLength > MAX_CONTEXT_CHARS) {
-      break;
+      continue;
     }
     result.push(source);
     length += sourceLength;
@@ -1685,6 +1875,9 @@ function parseSource(value: Prisma.JsonValue): ChatSource | null {
   const sceneTitle = readNullableString(value, 'sceneTitle');
   const imageUrl = readNullableString(value, 'imageUrl');
   const occurrenceCount = readFiniteNumber(value, 'occurrenceCount');
+  const chunkIndex = readFiniteNumber(value, 'chunkIndex');
+  const contentHash = readNullableString(value, 'contentHash');
+  const route = readString(value, 'route');
   return {
     id,
     kind: kind as ChatSource['kind'],
@@ -1699,8 +1892,14 @@ function parseSource(value: Prisma.JsonValue): ChatSource | null {
     ...optionalProperty(readString(value, 'entityId'), 'entityId'),
     ...(imageUrl !== undefined ? { imageUrl } : {}),
     ...(occurrenceCount === undefined ? {} : { occurrenceCount }),
+    ...(typeof value['cited'] === 'boolean' ? { cited: value['cited'] } : {}),
+    ...(typeof value['primary'] === 'boolean'
+      ? { primary: value['primary'] }
+      : {}),
+    ...(chunkIndex === undefined ? {} : { chunkIndex }),
+    ...(contentHash === undefined ? {} : { contentHash }),
     ...optionalProperty(readString(value, 'textQuote'), 'textQuote'),
-    ...optionalProperty(readString(value, 'route'), 'route'),
+    ...(route && isSafeChatRoute(route) ? { route } : {}),
   };
 }
 
@@ -1755,7 +1954,8 @@ function isChatAction(value: unknown): value is ChatAction {
     typeof candidate['id'] === 'string' &&
     typeof candidate['label'] === 'string' &&
     typeof candidate['description'] === 'string' &&
-    typeof candidate['route'] === 'string'
+    typeof candidate['route'] === 'string' &&
+    isSafeChatRoute(candidate['route'])
   );
 }
 

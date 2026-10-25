@@ -99,9 +99,11 @@ describe('Chat endpoints e2e', () => {
             kind: 'manuscript',
             chapterId: chapter.id,
             sceneId: scene.id,
-            textQuote: 'La cicatriz sobre su ceja brilló bajo la luz.',
           }),
         ]);
+        expect(exchange.assistantMessage.sources[0]?.textQuote).toContain(
+          'La cicatriz sobre su ceja brilló bajo la luz.',
+        );
       });
   });
 

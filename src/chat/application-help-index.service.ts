@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { ChatSource } from './domain/chat.types';
+import { isSafeChatRoute } from './domain/chat-navigation';
 import {
   APPLICATION_HELP_EMBEDDING_PROVIDER,
   type ApplicationHelpEmbeddingProvider,
@@ -67,22 +68,26 @@ export class ApplicationHelpIndexService implements OnModuleInit {
       ...(embedding ? { embedding } : {}),
       limit: SEARCH_RESULT_LIMIT,
     });
-    const existingIds = new Set(snapshot.map((chunk) => chunk.id));
-    return matches
-      .filter((match) => existingIds.has(match.id))
-      .map((match) => {
-        const route = match.route.replaceAll(
-          '{projectId}',
-          encodeURIComponent(projectId),
-        );
-        return {
-          id: `application_help:${match.id}`,
+    const snapshotById = new Map(snapshot.map((chunk) => [chunk.id, chunk]));
+    return matches.flatMap((match) => {
+      const chunk = snapshotById.get(match.id);
+      if (!chunk) {
+        return [];
+      }
+      const route = chunk.route.replaceAll(
+        '{projectId}',
+        encodeURIComponent(projectId),
+      );
+      return [
+        {
+          id: `application_help:${chunk.id}`,
           kind: 'application_help',
-          label: match.breadcrumb,
-          excerpt: match.content,
-          ...(route.startsWith('/') && !route.includes('{') ? { route } : {}),
-        };
-      });
+          label: chunk.breadcrumb,
+          excerpt: chunk.content,
+          ...(isSafeChatRoute(route) ? { route } : {}),
+        } satisfies ChatSource,
+      ];
+    });
   }
 
   async matchesApplicationHelpIntent(question: string): Promise<boolean> {
@@ -203,7 +208,11 @@ function parseSnapshot(raw: string): ApplicationHelpChunkInput[] {
     if (ids.has(chunk.id)) {
       throw new Error(`Duplicate application help id: ${chunk.id}`);
     }
-    if (!chunk.route.startsWith('/') || chunk.route.startsWith('//')) {
+    const routeWithoutParameters = chunk.route.replaceAll(
+      /\{[a-zA-Z][a-zA-Z0-9]*\}/g,
+      'example',
+    );
+    if (!isSafeChatRoute(routeWithoutParameters)) {
       throw new Error(`Invalid application help route for ${chunk.id}`);
     }
     ids.add(chunk.id);
