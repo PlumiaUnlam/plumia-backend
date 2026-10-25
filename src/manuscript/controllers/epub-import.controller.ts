@@ -87,8 +87,14 @@ export class EpubImportController {
   async importEpub(
     @Request() req: EpubAuthenticatedRequest,
     @UploadedFile() file: UploadedEpubFile | undefined,
-  ) {
-    if (!file || !file.originalname.toLowerCase().endsWith('.epub')) {
+  ): Promise<{
+    project: ProjectResponseDto;
+    importedChapters: number;
+    importedImages: number;
+    skippedImages: number;
+    importedWords: number;
+  }> {
+    if (!file?.originalname.toLowerCase().endsWith('.epub')) {
       throw new BadRequestException('Seleccioná un archivo EPUB válido.');
     }
 

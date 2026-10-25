@@ -208,18 +208,11 @@ interface JSZipNodeStream extends NodeJS.ReadableStream {
   destroy(error?: Error): this;
   _helper?: {
     pause(): unknown;
-    _worker?: { error(error: Error): unknown };
   };
 }
 
 function abortArchiveStream(stream: JSZipNodeStream): void {
-  // JSZip's Node adapter exposes no public cancellation method for its worker.
-  const worker = stream._helper?._worker;
-  if (worker) {
-    worker.error(new Error('EPUB entry exceeded its limit.'));
-  } else {
-    stream._helper?.pause();
-  }
+  stream._helper?.pause();
   stream.destroy();
 }
 
@@ -764,43 +757,46 @@ function imageTypeFromBytes(
   return null;
 }
 
+async function loadArchiveImageBuffer(
+  zip: JSZip,
+  source: string,
+  key: string,
+  budget: DecompressionBudget,
+): Promise<Buffer | null> {
+  if (
+    /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source) ||
+    !imageTypeFromSource(key)
+  ) {
+    return null;
+  }
+
+  const file = zip.file(key);
+  if (!file || file.dir) {
+    return null;
+  }
+  try {
+    return await readArchiveBytes(file, MAX_IMAGE_SIZE, budget);
+  } catch (error) {
+    if (error instanceof ArchiveEntryTooLargeError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function loadImageAsset(
   zip: JSZip,
   source: string,
   key: string,
   budget: DecompressionBudget,
 ): Promise<EpubImportImage | null> {
-  let buffer: Buffer;
-  if (source.startsWith('data:')) {
-    const image = dataImage(source);
-    if (!image) {
-      return null;
-    }
-    buffer = image;
-  } else {
-    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source)) {
-      return null;
-    }
-    if (!imageTypeFromSource(key)) {
-      return null;
-    }
-    const file = zip.file(key);
-    if (!file || file.dir) {
-      return null;
-    }
-    try {
-      buffer = await readArchiveBytes(file, MAX_IMAGE_SIZE, budget);
-    } catch (error) {
-      if (error instanceof ArchiveEntryTooLargeError) {
-        return null;
-      }
-      throw error;
-    }
-  }
-
-  if (!buffer.length || buffer.length > MAX_IMAGE_SIZE) {
+  const buffer = source.startsWith('data:')
+    ? dataImage(source)
+    : await loadArchiveImageBuffer(zip, source, key, budget);
+  if (!buffer?.length || buffer.length > MAX_IMAGE_SIZE) {
     return null;
   }
+
   const imageType = imageTypeFromBytes(buffer);
   return imageType ? { id: '', buffer, ...imageType } : null;
 }
