@@ -103,6 +103,9 @@ const UNSAFE_OUTPUT_PATTERN =
 const WORK_ANALYSIS_CONTEXT_PATTERN =
   /\b(obra|manuscrito|novela|wiki|personaje|escena|capitulo|dialogo|narrador)\b/i;
 
+export const CHAT_OUT_OF_SCOPE_RESPONSE =
+  'Mi alcance esta limitado a consultar y auditar tu obra y a orientarte sobre el uso de PlumIA. No puedo responder solicitudes ajenas a esos temas.';
+
 export function getPolicyRefusal(
   question: string,
   options: { applicationHelpIntent?: boolean } = {},
@@ -112,7 +115,7 @@ export function getPolicyRefusal(
     return 'No puedo ignorar mis reglas ni revelar prompts, credenciales, configuracion o datos internos de PlumIA. Si queres, puedo ayudarte a consultar informacion respaldada por tu obra.';
   }
   if (isOutOfScope(normalizedQuestion) && !options.applicationHelpIntent) {
-    return 'Mi alcance esta limitado a consultar y auditar tu manuscrito, Wiki y linea de tiempo. No puedo resolver tareas academicas, programar aplicaciones ni atender solicitudes ajenas a tu obra.';
+    return CHAT_OUT_OF_SCOPE_RESPONSE;
   }
   if (
     UNSAFE_OUTPUT_PATTERN.test(normalizedQuestion) &&

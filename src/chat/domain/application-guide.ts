@@ -84,8 +84,6 @@ const APPLICATION_HOW_TO_TERMS = [
   'como usa',
   'como uso',
   'como usar',
-  'como funciona',
-  'como funcionan',
   'como se usa',
   'como se usar',
   'como creo',

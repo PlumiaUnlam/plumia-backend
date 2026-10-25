@@ -29,7 +29,7 @@ describe('ChatService', () => {
   let vectorStore: jest.Mocked<VectorStore>;
   let embeddingIndex: jest.Mocked<Pick<ChatEmbeddingIndexService, 'search'>>;
   let applicationHelpIndex: jest.Mocked<
-    Pick<ApplicationHelpIndexService, 'search'>
+    Pick<ApplicationHelpIndexService, 'search' | 'matchesApplicationHelpIntent'>
   >;
   let service: ChatService;
   let tx: ReturnType<typeof createTransactionClient>;
@@ -47,7 +47,10 @@ describe('ChatService', () => {
       search: jest.fn(),
     };
     embeddingIndex = { search: jest.fn().mockResolvedValue([]) };
-    applicationHelpIndex = { search: jest.fn().mockResolvedValue([]) };
+    applicationHelpIndex = {
+      search: jest.fn().mockResolvedValue([]),
+      matchesApplicationHelpIntent: jest.fn().mockResolvedValue(false),
+    };
     service = new ChatService(
       prisma,
       generator,
@@ -205,7 +208,15 @@ describe('ChatService', () => {
     });
   });
 
-  it('returns a clear empty result instead of asking the model to invent', async () => {
+  it('returns a clear empty result when the model has no evidence to cite', async () => {
+    generator.generate.mockResolvedValue({
+      answer: '',
+      sourceIds: [],
+      claims: [],
+      inputTokens: 20,
+      outputTokens: 3,
+    });
+
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Dónde aparece el unicornio violeta?',
     });
@@ -214,7 +225,7 @@ describe('ChatService', () => {
       'No encontre informacion suficiente',
     );
     expect(result.assistantMessage.sources).toEqual([]);
-    expect(generator.generate).not.toHaveBeenCalled();
+    expect(generator.generate).toHaveBeenCalledTimes(1);
   });
 
   it('forwards cancellation to generation and does not persist an aborted answer', async () => {

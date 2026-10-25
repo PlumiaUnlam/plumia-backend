@@ -12,6 +12,7 @@ import { ApplicationHelpIndexService } from './application-help-index.service';
 import { ChatEmbeddingIndexService } from './chat-embedding-index.service';
 import { isApplicationHelpIntent } from './domain/application-guide';
 import {
+  CHAT_OUT_OF_SCOPE_RESPONSE,
   getPolicyRefusal,
   getSocialResponse,
   isCreativeRequest,
@@ -367,9 +368,9 @@ export class ChatService {
     }));
     throwIfAborted(signal);
 
-    const applicationHelpIntent = isApplicationHelpIntent(question, {
-      history,
-    });
+    const applicationHelpIntent =
+      isApplicationHelpIntent(question, { history }) ||
+      (await this.applicationHelpIndex.matchesApplicationHelpIntent(question));
     const policyRefusal = getPolicyRefusal(question, { applicationHelpIntent });
     if (policyRefusal) {
       return this.persistExchange(
@@ -425,21 +426,6 @@ export class ChatService {
         )
       : await this.retrieveSources(thread.projectId, question, history, signal);
     throwIfAborted(signal);
-    if (sources.length === 0) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: applicationHelpIntent
-            ? 'No encontre informacion suficiente en la documentacion de PlumIA para responder con seguridad.'
-            : 'No encontre informacion suficiente en el manuscrito, la Wiki ni la linea de tiempo para responder con seguridad.',
-          sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
 
     const deterministicAnswer = buildDeterministicEvidenceAnswer(
       question,
@@ -467,6 +453,32 @@ export class ChatService {
       ...(signal ? { signal } : {}),
     });
     throwIfAborted(signal);
+    if (result.outOfScope) {
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: CHAT_OUT_OF_SCOPE_RESPONSE,
+          sources: [],
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        },
+        signal,
+      );
+    }
+    if (result.claims.length === 0) {
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: noEvidenceAnswer(applicationHelpIntent),
+          sources: [],
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        },
+        signal,
+      );
+    }
     const groundedResponse = buildGroundedResponse(result, sources);
     const navigationSource = applicationHelpIntent
       ? groundedResponse.sources.find(
@@ -711,7 +723,11 @@ export class ChatService {
         score: scoreText(buildTimelineSearchText(event), terms, question),
       }))
       .filter((entry) => entry.score > 0 || broadTimelineIntent)
-      .sort((left, right) => left.index - right.index)
+      .sort((left, right) =>
+        broadTimelineIntent
+          ? left.index - right.index
+          : right.score - left.score || left.index - right.index,
+      )
       .slice(0, MAX_TIMELINE_SOURCES);
     const sceneIds = [
       ...new Set(
@@ -783,6 +799,12 @@ export class ChatService {
       actions: parseActions(message.actions ?? null),
     };
   }
+}
+
+function noEvidenceAnswer(applicationHelpIntent: boolean): string {
+  return applicationHelpIntent
+    ? 'No puedo responder eso con seguridad: no encontre informacion suficiente en la documentacion de PlumIA.'
+    : 'No puedo responder eso con seguridad: no encontre informacion suficiente sobre esta obra en el manuscrito, la Wiki ni la linea de tiempo.';
 }
 
 function buildRetrievalPlan(

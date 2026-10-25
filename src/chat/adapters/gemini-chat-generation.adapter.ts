@@ -24,6 +24,7 @@ const FALLBACK_STATUS_CODES = new Set([403, 404, 408, 429, 500, 502, 503, 504]);
 const RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
+    outOfScope: { type: 'boolean' },
     claims: {
       type: 'array',
       items: {
@@ -46,7 +47,7 @@ const RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ['claims'],
+  required: ['outOfScope', 'claims'],
 } as const;
 
 const SAFETY_SETTINGS: SafetySetting[] = [
@@ -66,6 +67,7 @@ Reglas obligatorias:
 - Tu unico alcance es ayudar al autor a consultar su manuscrito, Wiki, entidades, relaciones, imagenes asociadas y linea de tiempo dentro de PlumIA, responder sobre el uso de PlumIA con su documentacion, u orientarlo para encontrar cualquier funcion en la aplicacion.
 - Si la pregunta trata sobre como usar PlumIA o donde encontrar una funcion, responde usando solo fuentes application_help. Si trata sobre una obra, responde usando solo sus fuentes manuscript, wiki o timeline. Nunca mezcles hechos de una obra con instrucciones de uso de la aplicacion.
 - Rechaza solicitudes ajenas a ese alcance: programacion, tareas academicas, asesoramiento profesional, noticias, conocimiento general o cualquier trabajo no relacionado con la obra recuperada.
+- Si la solicitud es claramente ajena al uso de PlumIA y a la obra, devuelve {"outOfScope": true, "claims": []}. Si es pertinente pero las fuentes no alcanzan, devuelve {"outOfScope": false, "claims": []}.
 - Responde solamente con informacion respaldada por las FUENTES RECUPERADAS. Trabaja como un asistente de fuentes: cada afirmacion factual debe poder rastrearse a evidencia concreta.
 - Si la evidencia no alcanza, dilo claramente. Nunca inventes hechos, citas, capitulos ni imagenes.
 - Usa el HISTORIAL solo para comprender referencias conversacionales; los hechos deben seguir respaldados por fuentes.
@@ -82,7 +84,7 @@ Reglas obligatorias:
 - Cuando una fuente del manuscrito tenga occurrenceCount, puedes usarlo para responder recuentos exactos.
 - Para "primera vez", respeta el orden Libro > Capitulo > Escena de las fuentes.
 
-Devuelve exclusivamente JSON valido con {"claims": [{"text": string, "evidence": [{"sourceId": string, "quote": string}]}]}.`;
+Devuelve exclusivamente JSON valido con {"outOfScope": boolean, "claims": [{"text": string, "evidence": [{"sourceId": string, "quote": string}]}]}.`;
 
 @Injectable()
 export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
@@ -209,6 +211,7 @@ export class GeminiChatGenerationAdapter implements ChatGenerationProvider {
         ),
       ],
       claims: parsed.claims,
+      ...(parsed.outOfScope ? { outOfScope: true } : {}),
       inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
       outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
     };
@@ -294,6 +297,7 @@ function buildUserPrompt(input: ChatGenerationInput): string {
 }
 
 function parseResponse(value: string): {
+  outOfScope: boolean;
   claims: Array<{
     text: string;
     evidence: Array<{ sourceId: string; quote: string }>;
@@ -309,7 +313,13 @@ function parseResponse(value: string): {
   if (!parsed || typeof parsed !== 'object') {
     throw new TypeError('Gemini API returned an invalid chat response');
   }
-  const rawClaims = toRecord(parsed)?.['claims'];
+  const parsedRecord = toRecord(parsed);
+  const rawOutOfScope = parsedRecord?.['outOfScope'];
+  if (rawOutOfScope !== undefined && typeof rawOutOfScope !== 'boolean') {
+    throw new TypeError('Gemini API returned an invalid chat scope decision');
+  }
+  const outOfScope = rawOutOfScope === true;
+  const rawClaims = parsedRecord?.['claims'];
   if (!Array.isArray(rawClaims)) {
     throw new TypeError('Gemini API returned invalid grounded claims');
   }
@@ -342,11 +352,7 @@ function parseResponse(value: string): {
       },
     ];
   });
-  if (claims.length === 0) {
-    throw new TypeError('Gemini API returned an empty chat answer');
-  }
-
-  return { claims };
+  return { outOfScope, claims: outOfScope ? [] : claims };
 }
 
 function toRecord(value: unknown): Record<string, unknown> | null {

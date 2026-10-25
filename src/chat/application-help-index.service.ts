@@ -12,6 +12,7 @@ import {
   type ApplicationHelpChunkInput,
   type ApplicationHelpStore,
 } from './ports/application-help-store.port';
+import { matchesApplicationHelpQuestion } from './domain/application-help-intent';
 
 const EMBEDDING_BATCH_SIZE = 24;
 const SEARCH_RESULT_LIMIT = 6;
@@ -82,6 +83,11 @@ export class ApplicationHelpIndexService implements OnModuleInit {
           ...(route.startsWith('/') && !route.includes('{') ? { route } : {}),
         };
       });
+  }
+
+  async matchesApplicationHelpIntent(question: string): Promise<boolean> {
+    const snapshot = await this.ensureSnapshot();
+    return matchesApplicationHelpQuestion(question, snapshot);
   }
 
   private ensureSnapshot(): Promise<ApplicationHelpChunkInput[]> {

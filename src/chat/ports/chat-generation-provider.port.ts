@@ -26,6 +26,7 @@ export interface ChatGenerationResult {
   answer: string;
   sourceIds: string[];
   claims: ChatGroundedClaim[];
+  outOfScope?: boolean;
   inputTokens: number;
   outputTokens: number;
 }

@@ -2,9 +2,9 @@ import type { ChatGenerationResult } from '../ports/chat-generation-provider.por
 import type { ChatSource } from './chat.types';
 
 const SAFE_UNGROUNDED_ANSWER =
-  'No pude respaldar una respuesta con referencias de tu manuscrito, Wiki o linea de tiempo. Prefiero no afirmar algo que la obra no demuestra.';
+  'No puedo responder eso con seguridad: no pude respaldarlo con referencias de tu manuscrito, Wiki o linea de tiempo. Prefiero no afirmar algo que la obra no demuestra.';
 const SAFE_UNGROUNDED_HELP_ANSWER =
-  'No pude respaldar una respuesta con referencias de la documentación de PlumIA. Prefiero no afirmar algo que la guía no confirma.';
+  'No puedo responder eso con seguridad: no pude respaldarlo con referencias de la documentación de PlumIA. Prefiero no afirmar algo que la guía no confirma.';
 
 export function buildGroundedResponse(
   result: ChatGenerationResult,
