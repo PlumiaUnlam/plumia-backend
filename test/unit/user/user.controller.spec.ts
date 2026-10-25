@@ -1,15 +1,24 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { UserController } from '../../../src/user/user.controller';
 import { UserService } from '../../../src/user/user.service';
+import { UserApiKeyService } from '../../../src/user/user-api-key.service';
 
 describe('UserController', () => {
   let userController: UserController;
   const userService = { updateProfile: jest.fn(), deleteAccount: jest.fn() };
+  const userApiKeys = {
+    getGeminiSettings: jest.fn(),
+    saveGeminiKey: jest.fn(),
+    removeGeminiKey: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UserController],
-      providers: [{ provide: UserService, useValue: userService }],
+      providers: [
+        { provide: UserService, useValue: userService },
+        { provide: UserApiKeyService, useValue: userApiKeys },
+      ],
     }).compile();
 
     userController = module.get(UserController);
@@ -55,6 +64,44 @@ describe('UserController', () => {
         'uuid-1',
         'token-uid-1',
       );
+    });
+  });
+
+  describe('AI settings', () => {
+    it('returns masked Gemini key metadata for the authenticated user', async () => {
+      const settings = {
+        configured: true,
+        keyPrefix: 'AIzaTest...',
+        updatedAt: new Date(),
+      };
+      userApiKeys.getGeminiSettings.mockResolvedValue(settings);
+
+      await expect(
+        userController.getAiSettings({ user: { id: 'uuid-1' } }),
+      ).resolves.toBe(settings);
+      expect(userApiKeys.getGeminiSettings).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('trims and stores the submitted Gemini key for the authenticated user', async () => {
+      userApiKeys.saveGeminiKey.mockResolvedValue({ configured: true });
+
+      await userController.saveGeminiApiKey(
+        { user: { id: 'uuid-1' } },
+        { apiKey: '  user-key  ' },
+      );
+
+      expect(userApiKeys.saveGeminiKey).toHaveBeenCalledWith(
+        'uuid-1',
+        'user-key',
+      );
+    });
+
+    it('removes the Gemini key for the authenticated user', async () => {
+      userApiKeys.removeGeminiKey.mockResolvedValue(undefined);
+
+      await userController.removeGeminiApiKey({ user: { id: 'uuid-1' } });
+
+      expect(userApiKeys.removeGeminiKey).toHaveBeenCalledWith('uuid-1');
     });
   });
 });

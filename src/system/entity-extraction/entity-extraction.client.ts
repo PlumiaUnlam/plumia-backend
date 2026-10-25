@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
+import { UserApiKeyService } from '../../user/user-api-key.service';
 import { ENTITY_EXTRACTION_PROMPT } from './prompts/entity-extraction.prompt';
 import type {
   ExtractionResponse,
@@ -165,7 +166,10 @@ export class EntityExtractionClient {
   private readonly embeddingModel: string;
   private readonly timeoutMs: number;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly userApiKeys: UserApiKeyService,
+  ) {
     this.apiKey = this.config
       .get<string>('ENTITY_EXTRACTION_API_KEY', '')
       .trim();
@@ -187,7 +191,7 @@ export class EntityExtractionClient {
   }
 
   hasExtractionModel(): boolean {
-    return Boolean(this.apiKey && this.model);
+    return Boolean(this.model);
   }
 
   hasEmbeddingModel(): boolean {
@@ -195,6 +199,7 @@ export class EntityExtractionClient {
   }
 
   async extractEntities(input: {
+    userId?: string;
     sceneText: string;
     knownEntities: Array<{
       canonicalName: string;
@@ -205,9 +210,10 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractionResponse> {
-    if (!this.hasExtractionModel()) {
+    const ai = await this.getGenerationClient(input.userId);
+    if (!this.model || !ai) {
       throw new Error(
-        'ENTITY_EXTRACTION_API_KEY or ENTITY_EXTRACTION_MODEL is not configured',
+        'No extraction API key is configured for this user or the server',
       );
     }
 
@@ -215,7 +221,7 @@ export class EntityExtractionClient {
       `Running extraction with model ${this.model || DEFAULT_CHAT_MODEL}`,
     );
 
-    const response = await this.ai.models.generateContent({
+    const response = await ai.models.generateContent({
       model: this.model || DEFAULT_CHAT_MODEL,
       contents: [
         {
@@ -257,6 +263,21 @@ export class EntityExtractionClient {
         ? parsed.inconsistencies
         : [],
     };
+  }
+
+  private async getGenerationClient(
+    userId?: string,
+  ): Promise<GoogleGenAI | null> {
+    const userApiKey = userId
+      ? await this.userApiKeys.getActiveGeminiKey(userId)
+      : null;
+    if (userApiKey) {
+      return new GoogleGenAI({
+        apiKey: userApiKey,
+        httpOptions: { timeout: this.timeoutMs },
+      });
+    }
+    return this.apiKey ? this.ai : null;
   }
 
   async createEmbedding(text: string): Promise<number[] | null> {

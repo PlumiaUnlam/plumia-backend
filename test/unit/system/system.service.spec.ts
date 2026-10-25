@@ -154,7 +154,7 @@ describe('SystemService', () => {
     await service.start();
 
     expect(warnSpy).toHaveBeenCalledWith(
-      'Entity extraction worker disabled: ENTITY_EXTRACTION_API_KEY or ENTITY_EXTRACTION_MODEL is missing',
+      'Entity extraction worker disabled: ENTITY_EXTRACTION_MODEL is missing',
     );
     expect(Worker).not.toHaveBeenCalled();
   });

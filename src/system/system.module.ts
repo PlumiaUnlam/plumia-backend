@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { UserModule } from '../user/user.module';
 import { EntityExtractionClient } from './entity-extraction/entity-extraction.client';
 import { EntityExtractionPipelineService } from './entity-extraction/entity-extraction-pipeline.service';
 import { EntityResolutionService } from './entity-extraction/entity-resolution.service';
@@ -9,7 +10,7 @@ import { SystemController } from './system.controller';
 import { SystemService } from './system.service';
 
 @Module({
-  imports: [PrismaModule, AuditModule, KnowledgeModule],
+  imports: [PrismaModule, AuditModule, KnowledgeModule, UserModule],
   controllers: [SystemController],
   providers: [
     SystemService,
