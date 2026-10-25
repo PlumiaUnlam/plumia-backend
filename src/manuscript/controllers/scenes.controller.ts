@@ -15,6 +15,7 @@ import { CreateSceneVersionDto } from '../dto/scenes/create-scene-version.dto';
 import { PatchSceneDto } from '../dto/scenes/patch-scene.dto';
 import { UpdateSceneVersionDto } from '../dto/scenes/update-scene-version.dto';
 import { SaveSceneResultDto } from '../dto/responses/save-scene-result.dto';
+import { SceneAnalysisResponseDto } from '../dto/responses/scene-analysis-response.dto';
 import { SceneResponseDto } from '../dto/responses/scene-response.dto';
 import {
   SaveSceneVersionResultDto,
@@ -74,6 +75,15 @@ export class ScenesController {
     return versions.map((version) =>
       SceneVersionSummaryResponseDto.from(version),
     );
+  }
+
+  @Post('scenes/:id/analyze')
+  async analyzeScene(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<SceneAnalysisResponseDto> {
+    const result = await this.sceneService.requestAnalysis(req.user.id, id);
+    return SceneAnalysisResponseDto.fromResult(result);
   }
 
   @Post('scenes/:id/versions')

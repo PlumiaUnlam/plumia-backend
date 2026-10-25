@@ -10,13 +10,11 @@ import {
   UserService,
   type UserEntity,
 } from '../../../src/user/user.service';
-
 const rec = (key: string, order: string[]): jest.Mock =>
   jest.fn(() => {
     order.push(key);
     return Promise.resolve({ count: 0 });
   });
-
 interface PrismaMock {
   user: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
   project: { findMany: jest.Mock; deleteMany: jest.Mock };
@@ -146,7 +144,6 @@ function buildPrisma(order: string[]): PrismaMock {
     }),
   };
 }
-
 describe('UserService', () => {
   let userService: UserService;
   let prisma: PrismaMock;
@@ -169,6 +166,7 @@ describe('UserService', () => {
     avatarUrl: null,
     role: 'AUTHOR' as const,
     plan: 'FREE' as const,
+    autoAnalyzeOnAutosave: true,
     deletedAt: null,
   };
 

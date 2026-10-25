@@ -9,6 +9,7 @@ import { toSceneStatus } from '../domain/scene-status';
 import {
   CreateSceneData,
   SceneContentUpdateResult,
+  SceneAnalysisRequestResult,
   SceneRecord,
   SceneRepository,
   SceneVersionContentUpdateResult,
@@ -204,6 +205,7 @@ export class PrismaSceneRepository implements SceneRepository {
             scene: this.toSceneRecord(existing),
             contentChanged: false,
             previousWordCount: existing.wordCount,
+            analysisStatus: 'NOT_REQUESTED',
           };
         }
 
@@ -227,27 +229,94 @@ export class PrismaSceneRepository implements SceneRepository {
           markDirty: true,
         });
 
-        await tx.outbox.create({
-          data: {
-            aggregateType: 'Scene',
-            aggregateId: scene.id,
-            eventType: 'scene_changed',
-            payload: {
-              sceneId: scene.id,
-              chapterId: scene.chapterId,
-              contentHash: newHash,
-              wordCount: scene.wordCount,
-              userId,
-            },
-            createdAt: new Date(),
-          },
+        const userSettings = await tx.user.findUnique({
+          where: { id: userId },
+          select: { autoAnalyzeOnAutosave: true },
         });
+        const shouldQueueAnalysis = userSettings?.autoAnalyzeOnAutosave ?? true;
+
+        if (shouldQueueAnalysis) {
+          await this.enqueueSceneChanged(tx, {
+            sceneId: scene.id,
+            chapterId: scene.chapterId,
+            contentHash: newHash,
+            wordCount: scene.wordCount,
+            userId,
+            trigger: 'AUTO_SAVE',
+          });
+        }
 
         return {
           scene: this.toSceneRecord(scene),
           contentChanged: true,
           previousWordCount: existing.wordCount,
+          analysisStatus: shouldQueueAnalysis ? 'QUEUED' : 'NOT_REQUESTED',
         };
+      });
+    } catch (error: unknown) {
+      return translatePrismaConflict(error);
+    }
+  }
+
+  async requestAnalysisForUser(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisRequestResult | null> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const scene = await tx.scene.findFirst({
+          where: {
+            id: sceneId,
+            deletedAt: null,
+            chapter: { book: { project: { userId } } },
+          },
+          select: {
+            id: true,
+            chapterId: true,
+            contentHash: true,
+            wordCount: true,
+          },
+        });
+
+        if (!scene) {
+          return null;
+        }
+
+        const pendingEvent = await tx.outbox.findFirst({
+          where: {
+            aggregateType: 'Scene',
+            aggregateId: scene.id,
+            eventType: 'scene_changed',
+            processedAt: null,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { payload: true },
+        });
+        const pendingChunks = await tx.chunk.count({
+          where: { sceneId: scene.id, isDirty: true },
+        });
+
+        if (
+          pendingEvent &&
+          this.eventMatchesContentHash(pendingEvent.payload, scene.contentHash)
+        ) {
+          return { status: 'ALREADY_QUEUED', pendingChunks };
+        }
+
+        if (pendingChunks === 0) {
+          return { status: 'NO_CHANGES', pendingChunks: 0 };
+        }
+
+        await this.enqueueSceneChanged(tx, {
+          sceneId: scene.id,
+          chapterId: scene.chapterId,
+          contentHash: scene.contentHash,
+          wordCount: scene.wordCount,
+          userId,
+          trigger: 'MANUAL',
+        });
+
+        return { status: 'QUEUED', pendingChunks };
       });
     } catch (error: unknown) {
       return translatePrismaConflict(error);
@@ -642,6 +711,7 @@ export class PrismaSceneRepository implements SceneRepository {
           scene: this.toSceneRecord(scene),
           contentChanged: true,
           previousWordCount: existingScene.wordCount,
+          analysisStatus: 'QUEUED',
         };
       });
     } catch (error: unknown) {
@@ -708,6 +778,68 @@ export class PrismaSceneRepository implements SceneRepository {
         createdAt: new Date(),
       })),
     });
+  }
+
+  private async enqueueSceneChanged(
+    tx: Prisma.TransactionClient,
+    data: {
+      sceneId: string;
+      chapterId: string;
+      contentHash: string | null;
+      wordCount: number;
+      userId: string;
+      trigger: 'AUTO_SAVE' | 'MANUAL';
+    },
+  ): Promise<void> {
+    const pendingEvent = await tx.outbox.findFirst({
+      where: {
+        aggregateType: 'Scene',
+        aggregateId: data.sceneId,
+        eventType: 'scene_changed',
+        processedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { payload: true },
+    });
+
+    if (
+      pendingEvent &&
+      this.eventMatchesContentHash(pendingEvent.payload, data.contentHash)
+    ) {
+      return;
+    }
+
+    await tx.outbox.create({
+      data: {
+        aggregateType: 'Scene',
+        aggregateId: data.sceneId,
+        eventType: 'scene_changed',
+        payload: {
+          sceneId: data.sceneId,
+          chapterId: data.chapterId,
+          contentHash: data.contentHash,
+          wordCount: data.wordCount,
+          userId: data.userId,
+          trigger: data.trigger,
+        },
+        createdAt: new Date(),
+      },
+    });
+  }
+
+  private eventMatchesContentHash(
+    payload: Prisma.JsonValue,
+    contentHash: string | null,
+  ): boolean {
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      Array.isArray(payload)
+    ) {
+      return false;
+    }
+
+    return (payload as { contentHash?: unknown }).contentHash === contentHash;
   }
 
   private toSceneRecord(scene: Scene): SceneRecord {

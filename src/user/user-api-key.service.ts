@@ -28,17 +28,36 @@ export class UserApiKeyService {
   ) {}
 
   async getGeminiSettings(userId: string): Promise<AiSettingsResponseDto> {
-    const record = await this.prisma.userApiKey.findFirst({
-      where: { userId, provider: GEMINI_PROVIDER, isActive: true },
-      select: { keyPrefix: true, updatedAt: true },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const [record, user] = await Promise.all([
+      this.prisma.userApiKey.findFirst({
+        where: { userId, provider: GEMINI_PROVIDER, isActive: true },
+        select: { keyPrefix: true, updatedAt: true },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { autoAnalyzeOnAutosave: true },
+      }),
+    ]);
 
     return {
       configured: Boolean(record),
       keyPrefix: record?.keyPrefix ?? null,
       updatedAt: record?.updatedAt ?? null,
+      autoAnalyzeOnAutosave: user?.autoAnalyzeOnAutosave ?? true,
     };
+  }
+
+  async updateAutoAnalyzeOnAutosave(
+    userId: string,
+    enabled: boolean,
+  ): Promise<AiSettingsResponseDto> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { autoAnalyzeOnAutosave: enabled },
+    });
+
+    return this.getGeminiSettings(userId);
   }
 
   async saveGeminiKey(
@@ -52,7 +71,7 @@ export class UserApiKeyService {
 
     const encrypted = this.encrypt(normalizedKey);
     const keyPrefix = this.toKeyPrefix(normalizedKey);
-    const record = await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.userApiKey.updateMany({
         where: { userId, provider: GEMINI_PROVIDER, isActive: true },
         data: { isActive: false },
@@ -72,11 +91,7 @@ export class UserApiKeyService {
       });
     });
 
-    return {
-      configured: true,
-      keyPrefix: record.keyPrefix,
-      updatedAt: record.updatedAt,
-    };
+    return this.getGeminiSettings(userId);
   }
 
   async removeGeminiKey(userId: string): Promise<void> {

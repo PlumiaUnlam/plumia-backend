@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { AiSettingsResponseDto } from './dto/ai-settings-response.dto';
 import { UpdateGeminiApiKeyDto } from './dto/update-gemini-api-key.dto';
+import { UpdateAutoAnalysisDto } from './dto/update-auto-analysis.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UserService, type UserEntity } from './user.service';
 import { UserApiKeyService } from './user-api-key.service';
@@ -56,6 +57,17 @@ export class UserController {
     @Body() dto: UpdateGeminiApiKeyDto,
   ): Promise<AiSettingsResponseDto> {
     return this.userApiKeys.saveGeminiKey(req.user.id, dto.apiKey.trim());
+  }
+
+  @Put('me/ai-settings/auto-analysis')
+  updateAutoAnalysis(
+    @Request() req: { user: { id: string } },
+    @Body() dto: UpdateAutoAnalysisDto,
+  ): Promise<AiSettingsResponseDto> {
+    return this.userApiKeys.updateAutoAnalyzeOnAutosave(
+      req.user.id,
+      dto.enabled,
+    );
   }
 
   @Delete('me/ai-settings/gemini')

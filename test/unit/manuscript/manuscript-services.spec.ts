@@ -103,6 +103,7 @@ describe('Manuscript child services', () => {
             findByIdForUser: jest.fn(),
             updateForUser: jest.fn(),
             updateContentForUser: jest.fn(),
+            requestAnalysisForUser: jest.fn(),
             softDeleteForUser: jest.fn(),
           },
         },
@@ -193,6 +194,7 @@ describe('Manuscript child services', () => {
       scene: { ...scene, wordCount: 25 },
       contentChanged: true,
       previousWordCount: 10,
+      analysisStatus: 'QUEUED',
     });
 
     await sceneService.updateContent('user-1', scene.id, {

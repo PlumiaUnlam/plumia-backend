@@ -12,7 +12,7 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto): Promise<{
-    user: Omit<User, 'deletedAt'>;
+    user: Omit<User, 'deletedAt' | 'autoAnalyzeOnAutosave'>;
   }> {
     const result = await this.authService.login(dto.idToken, {
       ...(dto.firstName ? { firstName: dto.firstName } : {}),
@@ -20,8 +20,10 @@ export class AuthController {
       ...(dto.username ? { username: dto.username } : {}),
     });
     const safeUser = Object.fromEntries(
-      Object.entries(result).filter(([key]) => key !== 'deletedAt'),
-    ) as Omit<User, 'deletedAt'>;
+      Object.entries(result).filter(
+        ([key]) => key !== 'deletedAt' && key !== 'autoAnalyzeOnAutosave',
+      ),
+    ) as Omit<User, 'deletedAt' | 'autoAnalyzeOnAutosave'>;
     return { user: safeUser };
   }
 }

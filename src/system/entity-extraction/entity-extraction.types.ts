@@ -10,6 +10,7 @@ export interface SceneChangedOutboxPayload {
   wordCount: number;
   userId: string;
   restoredFromVersionId?: string;
+  trigger?: 'AUTO_SAVE' | 'MANUAL';
 }
 
 export interface ExtractionCandidate {

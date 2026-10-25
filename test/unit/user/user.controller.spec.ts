@@ -10,6 +10,7 @@ describe('UserController', () => {
     getGeminiSettings: jest.fn(),
     saveGeminiKey: jest.fn(),
     removeGeminiKey: jest.fn(),
+    updateAutoAnalyzeOnAutosave: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -73,6 +74,7 @@ describe('UserController', () => {
         configured: true,
         keyPrefix: 'AIzaTest...',
         updatedAt: new Date(),
+        autoAnalyzeOnAutosave: true,
       };
       userApiKeys.getGeminiSettings.mockResolvedValue(settings);
 
@@ -102,6 +104,27 @@ describe('UserController', () => {
       await userController.removeGeminiApiKey({ user: { id: 'uuid-1' } });
 
       expect(userApiKeys.removeGeminiKey).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('updates the automatic analysis preference for the authenticated user', async () => {
+      const settings = {
+        configured: false,
+        keyPrefix: null,
+        updatedAt: null,
+        autoAnalyzeOnAutosave: false,
+      };
+      userApiKeys.updateAutoAnalyzeOnAutosave.mockResolvedValue(settings);
+
+      await expect(
+        userController.updateAutoAnalysis(
+          { user: { id: 'uuid-1' } },
+          { enabled: false },
+        ),
+      ).resolves.toBe(settings);
+      expect(userApiKeys.updateAutoAnalyzeOnAutosave).toHaveBeenCalledWith(
+        'uuid-1',
+        false,
+      );
     });
   });
 });

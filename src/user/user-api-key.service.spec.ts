@@ -19,6 +19,14 @@ describe('UserApiKeyService', () => {
       },
     };
     const prisma = {
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ autoAnalyzeOnAutosave: true }),
+      },
+      userApiKey: {
+        findFirst: jest.fn().mockResolvedValue(created),
+      },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -31,6 +39,7 @@ describe('UserApiKeyService', () => {
       configured: true,
       keyPrefix: created.keyPrefix,
       updatedAt: created.updatedAt,
+      autoAnalyzeOnAutosave: true,
     });
     expect(tx.userApiKey.updateMany).toHaveBeenCalledWith({
       where: { userId: 'user-id', provider: 'gemini', isActive: true },
@@ -50,6 +59,9 @@ describe('UserApiKeyService', () => {
     >;
     const createData = createCalls[0]?.[0]?.data;
     expect(createData).toBeDefined();
+    if (!createData) {
+      throw new Error('Expected encrypted key data');
+    }
     expect(createData).toMatchObject({
       userId: 'user-id',
       provider: 'gemini',
@@ -70,6 +82,11 @@ describe('UserApiKeyService', () => {
           updatedAt,
         }),
       },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          autoAnalyzeOnAutosave: true,
+        }),
+      },
     };
     const service = new UserApiKeyService(prisma as never, config as never);
 
@@ -77,6 +94,7 @@ describe('UserApiKeyService', () => {
       configured: true,
       keyPrefix: 'AIzaSec...',
       updatedAt,
+      autoAnalyzeOnAutosave: true,
     });
     expect(prisma.userApiKey.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -108,6 +126,35 @@ describe('UserApiKeyService', () => {
 
     expect(deleteMany).toHaveBeenCalledWith({
       where: { userId: 'user-id', provider: 'gemini' },
+    });
+  });
+
+  it('updates the automatic analysis preference without exposing the API key', async () => {
+    const update = jest.fn().mockResolvedValue({ id: 'user-id' });
+    const prisma = {
+      user: {
+        update,
+        findUnique: jest.fn().mockResolvedValue({
+          autoAnalyzeOnAutosave: false,
+        }),
+      },
+      userApiKey: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const service = new UserApiKeyService(prisma as never, config as never);
+
+    await expect(
+      service.updateAutoAnalyzeOnAutosave('user-id', false),
+    ).resolves.toEqual({
+      configured: false,
+      keyPrefix: null,
+      updatedAt: null,
+      autoAnalyzeOnAutosave: false,
+    });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'user-id' },
+      data: { autoAnalyzeOnAutosave: false },
     });
   });
 });

@@ -7,6 +7,7 @@ import { UpdateSceneContentDto } from '../dto/scenes/update-scene-content.dto';
 import { UpdateSceneMetadataDto } from '../dto/scenes/update-scene-metadata.dto';
 import {
   SCENE_REPOSITORY,
+  type SceneAnalysisRequestResult,
   type CreateSceneData,
   type SceneContentUpdateResult,
   type SceneRecord,
@@ -97,6 +98,22 @@ export class SceneService {
         previousWordCount: result.previousWordCount,
         currentWordCount: result.scene.wordCount,
       });
+    }
+
+    return result;
+  }
+
+  async requestAnalysis(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisRequestResult> {
+    const result = await this.sceneRepository.requestAnalysisForUser(
+      userId,
+      sceneId,
+    );
+
+    if (!result) {
+      throw new NotFoundException('Scene not found');
     }
 
     return result;
