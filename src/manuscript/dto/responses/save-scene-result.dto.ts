@@ -3,11 +3,13 @@ import { SceneResponseDto } from './scene-response.dto';
 
 export class SaveSceneResultDto extends SceneResponseDto {
   contentChanged!: boolean;
+  analysisStatus!: 'QUEUED' | 'NOT_REQUESTED';
 
   static fromResult(result: SceneContentUpdateResult): SaveSceneResultDto {
     return {
       ...SceneResponseDto.from(result.scene),
       contentChanged: result.contentChanged,
+      analysisStatus: result.analysisStatus,
     };
   }
 }

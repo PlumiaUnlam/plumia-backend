@@ -23,6 +23,7 @@ describe('AuthService', () => {
     avatarUrl: null,
     role: 'AUTHOR' as const,
     plan: 'FREE' as const,
+    autoAnalyzeOnAutosave: true,
     deletedAt: null,
   };
 

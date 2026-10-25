@@ -121,6 +121,9 @@ describe('manuscript child controllers', () => {
       getById: jest.fn().mockResolvedValue(scene),
       update: jest.fn().mockResolvedValue(scene),
       updateContent: jest.fn().mockResolvedValue(saved),
+      requestAnalysis: jest
+        .fn()
+        .mockResolvedValue({ status: 'QUEUED', pendingChunks: 2 }),
       remove: jest.fn().mockResolvedValue(undefined),
     };
     const controller = new ScenesController(service as never);
@@ -148,6 +151,10 @@ describe('manuscript child controllers', () => {
     await expect(
       controller.updateScene(req, 'scene-1', { content: scene.content }),
     ).resolves.toMatchObject({ contentChanged: true });
+    await expect(controller.analyzeScene(req, 'scene-1')).resolves.toEqual({
+      status: 'QUEUED',
+      pendingChunks: 2,
+    });
     await expect(
       controller.removeScene(req, 'scene-1'),
     ).resolves.toBeUndefined();
@@ -169,6 +176,7 @@ describe('manuscript child controllers', () => {
       { content: scene.content },
     );
     expect(service.remove).toHaveBeenCalledWith('user-1', 'scene-1');
+    expect(service.requestAnalysis).toHaveBeenCalledWith('user-1', 'scene-1');
   });
 
   it('maps scene version endpoints and selects content or metadata updates', async () => {

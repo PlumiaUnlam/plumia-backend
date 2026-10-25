@@ -108,6 +108,7 @@ type ResolvedEntityReferences = Map<
 
 interface DirtyChunkInput {
   scene: { id: string; title: string | null };
+  userId: string;
   projectId: string;
   confirmedEntities: ConfirmedEntityLike[];
   chunk: ChunkRow;
@@ -203,7 +204,16 @@ export class EntityExtractionPipelineService {
       select: {
         id: true,
         title: true,
-        chapter: { select: { book: { select: { projectId: true } } } },
+        chapter: {
+          select: {
+            book: {
+              select: {
+                projectId: true,
+                project: { select: { userId: true } },
+              },
+            },
+          },
+        },
       },
     });
     if (!scene) {
@@ -211,6 +221,7 @@ export class EntityExtractionPipelineService {
     }
 
     const projectId = scene.chapter.book.projectId;
+    const userId = scene.chapter.book.project.userId;
     const [chunks, entities, snapshot] = await Promise.all([
       this.prisma.chunk.findMany({
         where: { sceneId },
@@ -252,6 +263,7 @@ export class EntityExtractionPipelineService {
         return;
       }
       const extracted = await this.extractionClient.extractEntities({
+        userId,
         sceneText: text,
         knownEntities: confirmedEntities.map((entity) => ({
           canonicalName: entity.canonicalName,
@@ -480,6 +492,7 @@ export class EntityExtractionPipelineService {
       await forEachSequentially(dirtyChunks, (chunk) =>
         this.processDirtyChunk({
           scene,
+          userId: payload.userId,
           projectId,
           confirmedEntities,
           chunk,
@@ -505,6 +518,7 @@ export class EntityExtractionPipelineService {
     }
 
     const extracted = await this.extractionClient.extractEntities({
+      userId: input.userId,
       sceneText: chunkText,
       knownEntities: input.confirmedEntities.map((entity) => ({
         canonicalName: entity.canonicalName,

@@ -480,6 +480,7 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     });
 
     expect(client.extractEntities).toHaveBeenCalledWith({
+      userId: 'user-1',
       sceneText: 'Mara opens the map.',
       knownEntities: [],
     });

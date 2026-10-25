@@ -178,6 +178,7 @@ model User {
   role        UserRole  @default(AUTHOR)
   plan        PlanType  @default(FREE)
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  autoAnalyzeOnAutosave Boolean @default(true) @map("auto_analyze_on_autosave")
 
   apiKeys                       UserApiKey[]
   tokenLedgers                  TokenLedger[]

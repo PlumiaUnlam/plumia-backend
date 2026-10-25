@@ -48,6 +48,7 @@ describe('SceneService', () => {
       findByIdForUser: jest.fn(),
       updateForUser: jest.fn(),
       updateContentForUser: jest.fn(),
+      requestAnalysisForUser: jest.fn(),
       listVersionsForUser: jest.fn(),
       createVersionForUser: jest.fn(),
       findVersionForUser: jest.fn(),
@@ -139,6 +140,7 @@ describe('SceneService', () => {
       scene,
       contentChanged: true,
       previousWordCount: 10,
+      analysisStatus: 'QUEUED',
     };
     repository.updateContentForUser.mockResolvedValue(changed);
     await expect(
@@ -166,6 +168,26 @@ describe('SceneService', () => {
     await expect(
       service.updateContent('user-1', 'missing', { content: { type: 'doc' } }),
     ).rejects.toThrow(new NotFoundException('Scene not found'));
+  });
+
+  it('requests manual analysis and reports missing scenes', async () => {
+    repository.requestAnalysisForUser.mockResolvedValue({
+      status: 'QUEUED',
+      pendingChunks: 2,
+    });
+
+    await expect(service.requestAnalysis('user-1', 'scene-1')).resolves.toEqual(
+      { status: 'QUEUED', pendingChunks: 2 },
+    );
+    expect(repository.requestAnalysisForUser).toHaveBeenCalledWith(
+      'user-1',
+      'scene-1',
+    );
+
+    repository.requestAnalysisForUser.mockResolvedValue(null);
+    await expect(service.requestAnalysis('user-1', 'missing')).rejects.toThrow(
+      new NotFoundException('Scene not found'),
+    );
   });
 
   it('creates, lists, and retrieves scene versions', async () => {
@@ -274,7 +296,12 @@ describe('SceneService', () => {
       service.removeVersion('user-1', 'scene-1', 'missing'),
     ).rejects.toThrow(new NotFoundException('Scene version not found'));
 
-    const restored = { scene, contentChanged: true, previousWordCount: 12 };
+    const restored = {
+      scene,
+      contentChanged: true,
+      previousWordCount: 12,
+      analysisStatus: 'QUEUED' as const,
+    };
     repository.restoreVersionForUser.mockResolvedValue(restored);
     await expect(
       service.restoreVersion('user-1', 'scene-1', 'version-1'),

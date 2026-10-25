@@ -65,6 +65,7 @@ export async function createE2eApp(): Promise<INestApplication> {
         avatarUrl: null,
         role: 'AUTHOR',
         plan: 'FREE',
+        autoAnalyzeOnAutosave: true,
         createdAt: new Date(),
         updatedAt: new Date(),
         deletedAt: null,

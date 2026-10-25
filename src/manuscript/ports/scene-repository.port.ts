@@ -41,10 +41,22 @@ export interface UpdateSceneContentData {
   wordCount?: number;
 }
 
+export type SceneAnalysisSaveStatus = 'QUEUED' | 'NOT_REQUESTED';
+export type SceneAnalysisRequestStatus =
+  | 'QUEUED'
+  | 'ALREADY_QUEUED'
+  | 'NO_CHANGES';
+
+export interface SceneAnalysisRequestResult {
+  status: SceneAnalysisRequestStatus;
+  pendingChunks: number;
+}
+
 export interface SceneContentUpdateResult {
   scene: SceneRecord;
   contentChanged: boolean;
   previousWordCount: number;
+  analysisStatus: SceneAnalysisSaveStatus;
 }
 
 export interface SceneVersionRecord {
@@ -81,6 +93,10 @@ export interface SceneRepository {
     sceneId: string,
     data: UpdateSceneContentData,
   ): Promise<SceneContentUpdateResult | null>;
+  requestAnalysisForUser(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisRequestResult | null>;
   listVersionsForUser(
     userId: string,
     sceneId: string,
