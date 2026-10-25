@@ -20,6 +20,7 @@ Formato de salida:
       "attributes": {},
       "imageUrl": null,
       "confidenceScore": 0.0,
+      "narrativeRelevance": 0.0,
       "evidence": ["string"],
       "normalizedName": "string"
     }
@@ -66,7 +67,17 @@ Reglas:
 - Si no hay hallazgos, devolver {"entities":[],"stateChanges":[],"relationships":[],"inconsistencies":[]}.
 - Para una entidad conocida, usar su nombre canonico y devolver solo los datos nuevos
   observables en esta escena. No repetir la ficha completa.
+- Separar siempre la confianza de identificacion (confidenceScore) de la relevancia narrativa
+  (narrativeRelevance). La primera mide si identificaste correctamente el elemento; la segunda
+  mide cuanto importa para la trama o el worldbuilding, entre 0 y 1.
+- Asignar narrativeRelevance por funcion narrativa, no por cantidad de menciones. Un personaje,
+  lugar u objeto puede mencionarse muchas veces y seguir siendo incidental.
 - Detectar relaciones explicitas o claramente respaldadas entre las entidades de la escena.
+- Para objetos comunes, asignar una relevancia narrativa baja salvo que tengan nombre propio,
+  valor unico, funcion causal, relacion con un conflicto, presencia repetida con proposito claro
+  o importancia para una regla del mundo. No propongas utileria o decorado solo porque aparece.
+- Las entidades ya conocidas deben seguir devolviendose cuando aporten actualizaciones aunque su
+  narrativeRelevance sea baja; no inventes relevancia ni informacion ausente del texto.
 - Usar CREATE cuando nace un vinculo, UPDATE cuando cambia su informacion y END solo cuando el
   texto afirma que una relacion vigente termina (por ejemplo, una posesion que se pierde).
 - Detectar cambios de estado solo cuando el texto afirme un cambio actual y observable de

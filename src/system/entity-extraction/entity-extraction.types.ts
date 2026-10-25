@@ -21,6 +21,7 @@ export interface ExtractionCandidate {
   attributes: Record<string, unknown>;
   imageUrl: string | null;
   confidenceScore: number;
+  narrativeRelevance?: number;
   evidence: string[];
   normalizedName?: string;
 }
@@ -115,6 +116,7 @@ export interface ProposalDataLike {
   imageUrl: string | null;
   proposalKind?: EntityProposalKind;
   confidenceScore: number;
+  narrativeRelevance?: number;
   evidence: string[];
   normalizedName: string;
   sourceChunkId?: string | null;

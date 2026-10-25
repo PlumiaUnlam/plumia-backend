@@ -48,6 +48,10 @@ export class EntityResolutionService {
         continue;
       }
 
+      const relevance = Math.max(
+        current.narrativeRelevance ?? 0,
+        candidate.narrativeRelevance ?? 0,
+      );
       merged.set(normalizedName, {
         ...current,
         aliases: [
@@ -58,6 +62,10 @@ export class EntityResolutionService {
           current.confidenceScore ?? 0,
           candidate.confidenceScore ?? 0,
         ),
+        ...(current.narrativeRelevance !== undefined ||
+        candidate.narrativeRelevance !== undefined
+          ? { narrativeRelevance: relevance }
+          : {}),
         evidence: [
           ...new Set([...current.evidence, ...(candidate.evidence ?? [])]),
         ],
@@ -116,6 +124,10 @@ export class EntityResolutionService {
       confidenceScore: Math.max(
         current.confidenceScore ?? 0,
         candidate.confidenceScore ?? 0,
+      ),
+      narrativeRelevance: Math.max(
+        current.narrativeRelevance ?? 0,
+        candidate.narrativeRelevance ?? 0,
       ),
       evidence: [...new Set([...current.evidence, ...candidate.evidence])],
       normalizedName: current.normalizedName ?? candidate.normalizedName ?? '',

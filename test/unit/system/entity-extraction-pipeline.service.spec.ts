@@ -32,6 +32,8 @@ interface PipelinePrismaMock {
     update: jest.Mock;
   };
   relationship: { findFirst: jest.Mock };
+  userEntityRecognitionSettings: { findUnique: jest.Mock };
+  projectEntityRecognitionSettings: { findUnique: jest.Mock };
 }
 
 interface PipelineResolutionMock {
@@ -231,6 +233,12 @@ describe('EntityExtractionPipelineService outbox processing', () => {
         update: jest.fn(),
       },
       relationship: { findFirst: jest.fn() },
+      userEntityRecognitionSettings: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      projectEntityRecognitionSettings: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     client = {
       extractEntities: jest.fn().mockResolvedValue({
@@ -733,5 +741,112 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       where: { id: 'chunk-1' },
       data: { isDirty: false },
     });
+  });
+
+  it('skips a new common object below the configured relevance threshold', async () => {
+    const candidate: ExtractionCandidate = {
+      canonicalName: 'Una escalera',
+      aliases: [],
+      type: EntityType.OBJECT,
+      description: 'Una escalera de madera.',
+      attributes: {},
+      imageUrl: null,
+      confidenceScore: 0.95,
+      narrativeRelevance: 0.2,
+      evidence: ['Sube por una escalera.'],
+    };
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Sube por una escalera.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+    ]);
+    client.extractEntities.mockResolvedValue({
+      entities: [candidate],
+      relationships: [],
+      inconsistencies: [],
+    });
+    resolution.resolveCandidate.mockResolvedValue({
+      confirmedEntityId: null,
+      proposalId: null,
+      shouldCreateProposal: true,
+      candidate,
+    });
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 4,
+      userId: 'user-1',
+    });
+
+    expect(prisma.entityProposal.create).not.toHaveBeenCalled();
+    expect(prisma.chunk.update).toHaveBeenCalledWith({
+      where: { id: 'chunk-1' },
+      data: { isDirty: false },
+    });
+  });
+
+  it('keeps a low-relevance object when its exact name is in the project interest list', async () => {
+    const candidate: ExtractionCandidate = {
+      canonicalName: 'Mapa del Santuario',
+      aliases: [],
+      type: EntityType.OBJECT,
+      description: 'Un mapa antiguo.',
+      attributes: {},
+      imageUrl: null,
+      confidenceScore: 0.4,
+      narrativeRelevance: 0.1,
+      evidence: ['Mira el Mapa del Santuario.'],
+    };
+    prisma.projectEntityRecognitionSettings.findUnique.mockResolvedValue({
+      importantEntityNames: ['MAPA DEL SANTUARIO'],
+    });
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Mira el Mapa del Santuario.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+    ]);
+    client.extractEntities.mockResolvedValue({
+      entities: [candidate],
+      relationships: [],
+      inconsistencies: [],
+    });
+    resolution.resolveCandidate.mockResolvedValue({
+      confirmedEntityId: null,
+      proposalId: null,
+      shouldCreateProposal: true,
+      candidate,
+    });
+    prisma.entityProposal.create.mockResolvedValue({
+      id: 'proposal-1',
+      sceneId: 'scene-1',
+      entityId: null,
+      proposedData: candidate,
+      confidenceScore: 0.4,
+      status: ProposalStatus.PENDING,
+      sourceChunkId: 'chunk-1',
+      sourceChunkHash: 'chunk-hash',
+    });
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 4,
+      userId: 'user-1',
+    });
+
+    expect(prisma.entityProposal.create).toHaveBeenCalledTimes(1);
   });
 });

@@ -81,6 +81,63 @@ describe('EntityExtractionClient user credentials', () => {
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps narrative relevance separate from identification confidence', async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        entities: [
+          {
+            canonicalName: 'Mapa del Santuario',
+            aliases: [],
+            type: 'OBJECT',
+            description: 'Un mapa unico.',
+            attributes: {},
+            imageUrl: null,
+            confidenceScore: 0.92,
+            narrativeRelevance: 0.88,
+            evidence: ['Mira el mapa.'],
+            normalizedName: 'mapa del santuario',
+          },
+        ],
+        stateChanges: [],
+        relationships: [],
+        inconsistencies: [],
+      }),
+    });
+    const { client } = createClient({
+      ENTITY_EXTRACTION_API_KEY: 'server-key',
+      ENTITY_EXTRACTION_MODEL: 'gemini-test',
+    });
+
+    const result = await client.extractEntities(input);
+
+    expect(result.entities[0]).toMatchObject({
+      confidenceScore: 0.92,
+      narrativeRelevance: 0.88,
+    });
+    interface GenerationRequest {
+      config: {
+        responseJsonSchema: {
+          properties: {
+            entities: {
+              items: { properties: { narrativeRelevance: unknown } };
+            };
+          };
+        };
+      };
+    }
+    const calls = mockGenerateContent.mock.calls as unknown as Array<
+      [GenerationRequest]
+    >;
+    const request = calls[0]?.[0];
+    expect(request).toBeDefined();
+    if (!request) {
+      throw new Error('Expected a generation request');
+    }
+    expect(
+      request.config.responseJsonSchema.properties.entities.items.properties,
+    ).toHaveProperty('narrativeRelevance');
+  });
+
   it('falls back to the server key when the user has no key', async () => {
     const { client } = createClient(
       {

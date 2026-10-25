@@ -7,6 +7,10 @@ import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AiSettingsResponseDto } from './dto/ai-settings-response.dto';
+import {
+  normalizeEntityRecognitionThresholds,
+  type EntityRecognitionThresholds,
+} from '../system/entity-extraction/entity-recognition-settings';
 
 const GEMINI_PROVIDER = 'gemini';
 const AES_ALGORITHM = 'aes-256-gcm';
@@ -28,7 +32,12 @@ export class UserApiKeyService {
   ) {}
 
   async getGeminiSettings(userId: string): Promise<AiSettingsResponseDto> {
-    const [record, user] = await Promise.all([
+    const recognitionSettingsModel = (
+      this.prisma as PrismaService & {
+        userEntityRecognitionSettings?: PrismaService['userEntityRecognitionSettings'];
+      }
+    ).userEntityRecognitionSettings;
+    const [record, user, recognitionSettings] = await Promise.all([
       this.prisma.userApiKey.findFirst({
         where: { userId, provider: GEMINI_PROVIDER, isActive: true },
         select: { keyPrefix: true, updatedAt: true },
@@ -38,6 +47,10 @@ export class UserApiKeyService {
         where: { id: userId },
         select: { autoAnalyzeOnAutosave: true },
       }),
+      recognitionSettingsModel?.findUnique({
+        where: { userId },
+        select: { thresholds: true },
+      }) ?? Promise.resolve(null),
     ]);
 
     return {
@@ -45,7 +58,28 @@ export class UserApiKeyService {
       keyPrefix: record?.keyPrefix ?? null,
       updatedAt: record?.updatedAt ?? null,
       autoAnalyzeOnAutosave: user?.autoAnalyzeOnAutosave ?? true,
+      entityExtractionThresholds: normalizeEntityRecognitionThresholds(
+        recognitionSettings?.thresholds,
+      ),
     };
+  }
+
+  async updateEntityRecognitionThresholds(
+    userId: string,
+    thresholds: EntityRecognitionThresholds,
+  ): Promise<AiSettingsResponseDto> {
+    await this.prisma.userEntityRecognitionSettings.upsert({
+      where: { userId },
+      create: {
+        userId,
+        thresholds: normalizeEntityRecognitionThresholds(thresholds),
+      },
+      update: {
+        thresholds: normalizeEntityRecognitionThresholds(thresholds),
+      },
+    });
+
+    return this.getGeminiSettings(userId);
   }
 
   async updateAutoAnalyzeOnAutosave(

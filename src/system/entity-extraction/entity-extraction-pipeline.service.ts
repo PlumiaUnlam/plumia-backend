@@ -34,6 +34,11 @@ import type {
   SceneChangedOutboxPayload,
 } from './entity-extraction.types';
 import { toRelationType } from '../../knowledge/domain/relation-type';
+import {
+  normalizeEntityRecognitionName,
+  normalizeEntityRecognitionThresholds,
+  type EntityRecognitionThresholds,
+} from './entity-recognition-settings';
 
 interface JsonNode {
   type?: string;
@@ -117,6 +122,8 @@ interface DirtyChunkInput {
   rejectedRelationshipProposals: RelationshipProposalRecord[];
   compareEmbedding: (text: string) => Promise<number[] | null>;
   temporalSnapshot: TemporalKnowledgeSnapshot | null;
+  entityRecognitionThresholds: EntityRecognitionThresholds;
+  importantEntityNames: string[];
 }
 
 const confirmedEntitySelect = {
@@ -430,6 +437,34 @@ export class EntityExtractionPipelineService {
     const activeChunkIds = new Set(chunks.map((chunk) => chunk.id));
     const dirtyChunks = chunks.filter((chunk) => chunk.isDirty);
 
+    const settingsPrisma = this.prisma as PrismaService &
+      Partial<
+        Pick<
+          PrismaService,
+          'userEntityRecognitionSettings' | 'projectEntityRecognitionSettings'
+        >
+      >;
+    const [userSettings, projectSettings] = await Promise.all([
+      settingsPrisma.userEntityRecognitionSettings?.findUnique({
+        where: { userId: payload.userId },
+        select: { thresholds: true },
+      }) ?? Promise.resolve(null),
+      settingsPrisma.projectEntityRecognitionSettings?.findUnique({
+        where: { projectId },
+        select: { importantEntityNames: true },
+      }) ?? Promise.resolve(null),
+    ]);
+    const entityRecognitionThresholds = normalizeEntityRecognitionThresholds(
+      userSettings?.thresholds,
+    );
+    const importantEntityNames = Array.isArray(
+      projectSettings?.importantEntityNames,
+    )
+      ? projectSettings.importantEntityNames.filter(
+          (name): name is string => typeof name === 'string',
+        )
+      : [];
+
     const pendingProposals = (await this.prisma.entityProposal.findMany({
       where: {
         projectId,
@@ -501,6 +536,8 @@ export class EntityExtractionPipelineService {
           rejectedRelationshipProposals,
           compareEmbedding,
           temporalSnapshot,
+          entityRecognitionThresholds,
+          importantEntityNames,
         }),
       );
     } else {
@@ -624,13 +661,40 @@ export class EntityExtractionPipelineService {
       );
       return;
     }
-    if (resolution.shouldCreateProposal) {
+    if (
+      resolution.shouldCreateProposal &&
+      this.shouldCreateNewEntityProposal(input, resolution.candidate)
+    ) {
       await this.createCandidateProposal(
         input,
         resolution.candidate,
         references,
       );
     }
+  }
+
+  private shouldCreateNewEntityProposal(
+    input: DirtyChunkInput,
+    candidate: ExtractionCandidate,
+  ): boolean {
+    const labels = [candidate.canonicalName, ...(candidate.aliases ?? [])]
+      .map((label) => normalizeEntityRecognitionName(label))
+      .filter(Boolean);
+    const importantNames = new Set(
+      input.importantEntityNames.map((name) =>
+        normalizeEntityRecognitionName(name),
+      ),
+    );
+    if (labels.some((label) => importantNames.has(label))) {
+      return true;
+    }
+
+    const confidence = Number(candidate.confidenceScore ?? 0);
+    const relevance = Number(
+      candidate.narrativeRelevance ?? candidate.confidenceScore ?? 0,
+    );
+    const threshold = input.entityRecognitionThresholds[candidate.type];
+    return confidence >= 0.6 && relevance >= threshold;
   }
 
   private async processConfirmedEntityCandidate(
@@ -1385,6 +1449,7 @@ export class EntityExtractionPipelineService {
       imageUrl: candidate.imageUrl,
       proposalKind: 'NEW_ENTITY',
       confidenceScore: candidate.confidenceScore,
+      narrativeRelevance: candidate.narrativeRelevance ?? 0,
       evidence: [...new Set(candidate.evidence ?? [])],
       normalizedName,
       source: 'entity_extraction',
@@ -1486,6 +1551,7 @@ export class EntityExtractionPipelineService {
       imageUrl: data.imageUrl ?? null,
       proposalKind: data.proposalKind ?? 'NEW_ENTITY',
       confidenceScore: data.confidenceScore ?? 0,
+      narrativeRelevance: data.narrativeRelevance ?? 0,
       evidence: data.evidence ?? [],
       normalizedName: data.normalizedName ?? '',
       sourceChunkId: data.sourceChunkId ?? null,
@@ -1556,6 +1622,7 @@ export class EntityExtractionPipelineService {
       imageUrl: null,
       proposalKind: 'ENTITY_UPDATE',
       confidenceScore: candidate.confidenceScore,
+      narrativeRelevance: candidate.narrativeRelevance ?? 0,
       evidence: [...new Set(candidate.evidence ?? [])],
       normalizedName: this.resolution.normalize(entity.canonicalName),
       source: 'entity_extraction',
@@ -1672,6 +1739,10 @@ export class EntityExtractionPipelineService {
       confidenceScore: Math.max(
         current.confidenceScore ?? 0,
         incoming.confidenceScore ?? 0,
+      ),
+      narrativeRelevance: Math.max(
+        current.narrativeRelevance ?? 0,
+        incoming.narrativeRelevance ?? 0,
       ),
       evidence: [
         ...new Set([...(current.evidence ?? []), ...(incoming.evidence ?? [])]),

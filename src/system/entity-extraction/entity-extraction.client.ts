@@ -39,6 +39,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           attributes: { type: 'object' },
           imageUrl: { type: ['string', 'null'] },
           confidenceScore: { type: 'number' },
+          narrativeRelevance: { type: 'number', minimum: 0, maximum: 1 },
           evidence: {
             type: 'array',
             items: { type: 'string' },
@@ -53,6 +54,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           'attributes',
           'imageUrl',
           'confidenceScore',
+          'narrativeRelevance',
           'evidence',
           'normalizedName',
         ],

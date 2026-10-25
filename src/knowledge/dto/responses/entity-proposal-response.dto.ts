@@ -25,6 +25,7 @@ export interface EntityProposalPayloadDto {
   imageUrl: string | null;
   proposalKind?: EntityProposalKind;
   confidenceScore?: number;
+  narrativeRelevance?: number;
   sourceSceneId?: string;
   sourceSceneTitle?: string | null;
   evidence?: string[];
