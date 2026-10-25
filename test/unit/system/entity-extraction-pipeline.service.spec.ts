@@ -30,6 +30,7 @@ interface PipelinePrismaMock {
     findMany: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
+    updateMany: jest.Mock;
   };
   relationship: { findFirst: jest.Mock };
   userEntityRecognitionSettings: { findUnique: jest.Mock };
@@ -231,6 +232,7 @@ describe('EntityExtractionPipelineService outbox processing', () => {
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
       relationship: { findFirst: jest.fn() },
       userEntityRecognitionSettings: {
@@ -383,6 +385,40 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       data: { isDirty: false },
     });
     expect(client.extractEntities).not.toHaveBeenCalled();
+  });
+
+  it('obsoletes relationships linked to rejected entity proposals', async () => {
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([]);
+    prisma.relationshipProposal.findMany.mockResolvedValue([
+      {
+        id: 'relationship-proposal-1',
+        sourceChunkId: null,
+        sourceChunkHash: null,
+        sourceEntityId: null,
+        targetEntityId: null,
+        sourceEntityProposalId: 'entity-proposal-1',
+        targetEntityProposalId: null,
+      },
+    ]);
+    prisma.entityProposal.findMany
+      .mockResolvedValueOnce([
+        { id: 'entity-proposal-1', status: ProposalStatus.REJECTED },
+      ])
+      .mockResolvedValueOnce([]);
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 0,
+      userId: 'user-1',
+    });
+
+    expect(prisma.relationshipProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['relationship-proposal-1'] } },
+      data: { status: ProposalStatus.OBSOLETE },
+    });
   });
 
   it('ignores clean chunks and clears blank dirty chunks without sending them to extraction', async () => {
@@ -848,5 +884,58 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     });
 
     expect(prisma.entityProposal.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a new entity included in the project ignore list', async () => {
+    const candidate: ExtractionCandidate = {
+      canonicalName: 'Una escalera',
+      aliases: [],
+      type: EntityType.OBJECT,
+      description: 'Una escalera de madera.',
+      attributes: {},
+      imageUrl: null,
+      confidenceScore: 0.99,
+      narrativeRelevance: 0.99,
+      evidence: ['Sube por una escalera.'],
+    };
+    prisma.projectEntityRecognitionSettings.findUnique.mockResolvedValue({
+      importantEntityNames: [],
+      ignoredEntityNames: ['UNA ESCALERA'],
+    });
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Sube por una escalera.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+    ]);
+    client.extractEntities.mockResolvedValue({
+      entities: [candidate],
+      relationships: [],
+      inconsistencies: [],
+    });
+    resolution.resolveCandidate.mockResolvedValue({
+      confirmedEntityId: null,
+      proposalId: null,
+      shouldCreateProposal: true,
+      candidate,
+    });
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 4,
+      userId: 'user-1',
+    });
+
+    expect(prisma.entityProposal.create).not.toHaveBeenCalled();
+    expect(prisma.chunk.update).toHaveBeenCalledWith({
+      where: { id: 'chunk-1' },
+      data: { isDirty: false },
+    });
   });
 });

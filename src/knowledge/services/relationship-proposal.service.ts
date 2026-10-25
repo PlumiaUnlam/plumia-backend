@@ -65,6 +65,48 @@ export class RelationshipProposalService {
         projectId,
         status: ProposalStatus.PENDING,
         project: { userId, deletedAt: null },
+        AND: [
+          {
+            OR: [
+              { sourceEntityId: { not: null } },
+              {
+                AND: [
+                  { sourceEntityProposalId: { not: null } },
+                  {
+                    sourceEntityProposal: {
+                      status: {
+                        notIn: [
+                          ProposalStatus.REJECTED,
+                          ProposalStatus.OBSOLETE,
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            OR: [
+              { targetEntityId: { not: null } },
+              {
+                AND: [
+                  { targetEntityProposalId: { not: null } },
+                  {
+                    targetEntityProposal: {
+                      status: {
+                        notIn: [
+                          ProposalStatus.REJECTED,
+                          ProposalStatus.OBSOLETE,
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
       },
       include: {
         sourceEntity: { select: { id: true, canonicalName: true } },

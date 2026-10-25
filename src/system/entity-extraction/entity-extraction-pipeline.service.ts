@@ -124,6 +124,7 @@ interface DirtyChunkInput {
   temporalSnapshot: TemporalKnowledgeSnapshot | null;
   entityRecognitionThresholds: EntityRecognitionThresholds;
   importantEntityNames: string[];
+  ignoredEntityNames: string[];
 }
 
 const confirmedEntitySelect = {
@@ -451,7 +452,7 @@ export class EntityExtractionPipelineService {
       }) ?? Promise.resolve(null),
       settingsPrisma.projectEntityRecognitionSettings?.findUnique({
         where: { projectId },
-        select: { importantEntityNames: true },
+        select: { importantEntityNames: true, ignoredEntityNames: true },
       }) ?? Promise.resolve(null),
     ]);
     const entityRecognitionThresholds = normalizeEntityRecognitionThresholds(
@@ -461,6 +462,13 @@ export class EntityExtractionPipelineService {
       projectSettings?.importantEntityNames,
     )
       ? projectSettings.importantEntityNames.filter(
+          (name): name is string => typeof name === 'string',
+        )
+      : [];
+    const ignoredEntityNames = Array.isArray(
+      projectSettings?.ignoredEntityNames,
+    )
+      ? projectSettings.ignoredEntityNames.filter(
           (name): name is string => typeof name === 'string',
         )
       : [];
@@ -538,6 +546,7 @@ export class EntityExtractionPipelineService {
           temporalSnapshot,
           entityRecognitionThresholds,
           importantEntityNames,
+          ignoredEntityNames,
         }),
       );
     } else {
@@ -687,6 +696,15 @@ export class EntityExtractionPipelineService {
     );
     if (labels.some((label) => importantNames.has(label))) {
       return true;
+    }
+
+    const ignoredNames = new Set(
+      input.ignoredEntityNames.map((name) =>
+        normalizeEntityRecognitionName(name),
+      ),
+    );
+    if (labels.some((label) => ignoredNames.has(label))) {
+      return false;
     }
 
     const confidence = Number(candidate.confidenceScore ?? 0);
@@ -1097,19 +1115,62 @@ export class EntityExtractionPipelineService {
   }): Promise<void> {
     const proposals = await this.prisma.relationshipProposal.findMany({
       where: { sceneId: input.sceneId, status: ProposalStatus.PENDING },
-      select: { id: true, sourceChunkId: true, sourceChunkHash: true },
+      select: {
+        id: true,
+        sourceChunkId: true,
+        sourceChunkHash: true,
+        sourceEntityId: true,
+        targetEntityId: true,
+        sourceEntityProposalId: true,
+        targetEntityProposalId: true,
+      },
     });
+    const endpointProposalIds = proposals.flatMap((proposal) =>
+      [proposal.sourceEntityProposalId, proposal.targetEntityProposalId].filter(
+        (id): id is string => Boolean(id),
+      ),
+    );
+    const endpointProposals = endpointProposalIds.length
+      ? await this.prisma.entityProposal.findMany({
+          where: { id: { in: endpointProposalIds } },
+          select: { id: true, status: true },
+        })
+      : [];
+    const endpointStatusById = new Map(
+      endpointProposals.map((proposal) => [proposal.id, proposal.status]),
+    );
     const obsoleteIds = proposals
       .filter((proposal) => {
-        if (!proposal.sourceChunkId) {
-          return false;
-        }
-        const chunk = input.chunks.get(proposal.sourceChunkId);
-        return (
-          !chunk ||
-          (proposal.sourceChunkHash !== null &&
-            chunk.contentHash !== proposal.sourceChunkHash)
-        );
+        const staleChunk = proposal.sourceChunkId
+          ? (() => {
+              const chunk = input.chunks.get(proposal.sourceChunkId);
+              return (
+                !chunk ||
+                (proposal.sourceChunkHash !== null &&
+                  chunk.contentHash !== proposal.sourceChunkHash)
+              );
+            })()
+          : false;
+        const staleEndpoint = [
+          proposal.sourceEntityProposalId,
+          proposal.targetEntityProposalId,
+        ].some((proposalId) => {
+          if (proposalId === null) {
+            return false;
+          }
+          const status = endpointStatusById.get(proposalId);
+          return (
+            status === undefined ||
+            status === ProposalStatus.REJECTED ||
+            status === ProposalStatus.OBSOLETE
+          );
+        });
+        const missingEndpoint =
+          (proposal.sourceEntityId === null &&
+            proposal.sourceEntityProposalId === null) ||
+          (proposal.targetEntityId === null &&
+            proposal.targetEntityProposalId === null);
+        return staleChunk || staleEndpoint || missingEndpoint;
       })
       .map((proposal) => proposal.id);
     if (obsoleteIds.length === 0) {

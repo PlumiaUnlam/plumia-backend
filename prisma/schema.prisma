@@ -322,6 +322,7 @@ model ProjectEntityRecognitionSettings {
   id                   String   @id @default(uuid()) @db.Uuid
   projectId            String   @unique @map("project_id") @db.Uuid
   importantEntityNames Json     @default("[]") @map("important_entity_names") @db.JsonB
+  ignoredEntityNames   Json     @default("[]") @map("ignored_entity_names") @db.JsonB
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

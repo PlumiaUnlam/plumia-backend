@@ -11,8 +11,14 @@ describe('EntityRecognitionSettingsService', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 'project-1' }),
       },
       projectEntityRecognitionSettings: {
-        findUnique: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue({
+          importantEntityNames: ['Mapa del Santuario'],
+          ignoredEntityNames: [],
+        }),
         upsert,
+      },
+      entityProposal: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
     const service = new EntityRecognitionSettingsService(prisma as never);
@@ -22,7 +28,11 @@ describe('EntityRecognitionSettingsService', () => {
         'Mapa del Santuario',
         'MAPA DEL SANTUARIO',
       ]),
-    ).resolves.toEqual({ importantEntityNames: ['Mapa del Santuario'] });
+    ).resolves.toEqual({
+      importantEntityNames: ['Mapa del Santuario'],
+      ignoredEntityNames: [],
+      rejectedEntities: [],
+    });
 
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -30,6 +40,7 @@ describe('EntityRecognitionSettingsService', () => {
         create: {
           projectId: 'project-1',
           importantEntityNames: ['Mapa del Santuario'],
+          ignoredEntityNames: [],
         },
       }),
     );
@@ -45,5 +56,60 @@ describe('EntityRecognitionSettingsService', () => {
     await expect(
       service.getProjectSettings('other-user', 'project-1'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns rejected proposals and persists ignored names', async () => {
+    const prisma = {
+      project: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'project-1' }),
+      },
+      projectEntityRecognitionSettings: {
+        findUnique: jest.fn().mockResolvedValue({
+          importantEntityNames: ['Mara'],
+          ignoredEntityNames: ['Una escalera'],
+        }),
+        upsert: jest.fn().mockResolvedValue(undefined),
+      },
+      entityProposal: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'proposal-1',
+            entityId: null,
+            proposedData: {
+              canonicalName: 'La lampara',
+              aliases: ['Lámpara antigua'],
+              type: 'OBJECT',
+            },
+            createdAt: new Date('2026-10-25T00:00:00Z'),
+            scene: { title: 'Capítulo 1' },
+          },
+        ]),
+      },
+    };
+    const service = new EntityRecognitionSettingsService(prisma as never);
+
+    await expect(
+      service.updateProjectSettings(
+        'user-1',
+        'project-1',
+        ['Mara'],
+        ['Una escalera', 'UNA ESCALERA'],
+      ),
+    ).resolves.toMatchObject({
+      importantEntityNames: ['Mara'],
+      ignoredEntityNames: ['Una escalera'],
+      rejectedEntities: [
+        expect.objectContaining({ name: 'La lampara', type: 'OBJECT' }),
+      ],
+    });
+
+    expect(prisma.projectEntityRecognitionSettings.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: {
+          importantEntityNames: ['Mara'],
+          ignoredEntityNames: ['Una escalera'],
+        },
+      }),
+    );
   });
 });

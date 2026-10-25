@@ -235,24 +235,43 @@ export class EntityProposalService {
   }
 
   async rejectProposal(userId: string, proposalId: string): Promise<void> {
-    const result = await this.prisma.entityProposal.updateMany({
-      where: {
-        id: proposalId,
-        status: ProposalStatus.PENDING,
-        project: {
-          userId,
-          deletedAt: null,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.entityProposal.updateMany({
+        where: {
+          id: proposalId,
+          status: ProposalStatus.PENDING,
+          project: {
+            userId,
+            deletedAt: null,
+          },
         },
-      },
-      data: {
-        status: ProposalStatus.REJECTED,
-        reviewedById: userId,
-        reviewedAt: new Date(),
-        resolutionReason: 'rejected_by_author',
-      },
+        data: {
+          status: ProposalStatus.REJECTED,
+          reviewedById: userId,
+          reviewedAt: new Date(),
+          resolutionReason: 'rejected_by_author',
+        },
+      });
+      if (updated.count === 0) {
+        return 0;
+      }
+      await tx.relationshipProposal.updateMany({
+        where: {
+          status: ProposalStatus.PENDING,
+          OR: [
+            { sourceEntityProposalId: proposalId },
+            { targetEntityProposalId: proposalId },
+          ],
+        },
+        data: {
+          status: ProposalStatus.OBSOLETE,
+          resolutionReason: 'entity_proposal_rejected',
+        },
+      });
+      return updated.count;
     });
 
-    if (result.count === 0) {
+    if (result === 0) {
       throw new NotFoundException('Proposal not found');
     }
   }

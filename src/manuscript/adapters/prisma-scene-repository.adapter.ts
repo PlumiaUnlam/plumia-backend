@@ -1,7 +1,7 @@
 /* eslint-disable max-lines */
 
 import { Injectable } from '@nestjs/common';
-import { Prisma, type Scene } from '@prisma/client';
+import { Prisma, ProposalStatus, type Scene } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
 import { planSceneChunks } from '../domain/scene-chunking';
@@ -295,6 +295,10 @@ export class PrismaSceneRepository implements SceneRepository {
         const pendingChunks = await tx.chunk.count({
           where: { sceneId: scene.id, isDirty: true },
         });
+        const hasStaleKnowledgeEvidence = await this.hasStaleKnowledgeEvidence(
+          tx,
+          scene.id,
+        );
 
         if (
           pendingEvent &&
@@ -303,7 +307,7 @@ export class PrismaSceneRepository implements SceneRepository {
           return { status: 'ALREADY_QUEUED', pendingChunks };
         }
 
-        if (pendingChunks === 0) {
+        if (pendingChunks === 0 && !hasStaleKnowledgeEvidence) {
           return { status: 'NO_CHANGES', pendingChunks: 0 };
         }
 
@@ -957,6 +961,80 @@ export class PrismaSceneRepository implements SceneRepository {
         where: { id: { in: staleChunkIds } },
       });
     }
+  }
+
+  private async hasStaleKnowledgeEvidence(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+  ): Promise<boolean> {
+    const [chunks, entityProposals, relationshipProposals] = await Promise.all([
+      tx.chunk.findMany({
+        where: { sceneId },
+        select: { id: true, contentHash: true },
+      }),
+      tx.entityProposal.findMany({
+        where: {
+          sceneId,
+          status: ProposalStatus.PENDING,
+        },
+        select: {
+          sourceChunkId: true,
+          sourceChunkHash: true,
+          proposedData: true,
+        },
+      }),
+      tx.relationshipProposal.findMany({
+        where: {
+          sceneId,
+          status: ProposalStatus.PENDING,
+        },
+        select: { sourceChunkId: true, sourceChunkHash: true },
+      }),
+    ]);
+    const chunksById = new Map(
+      chunks.map((chunk) => [chunk.id, chunk.contentHash] as const),
+    );
+    const hasStaleEvidence = (
+      sourceChunkId: string | null,
+      sourceChunkHash: string | null,
+    ): boolean => {
+      if (sourceChunkId !== null) {
+        const currentHash = chunksById.get(sourceChunkId);
+        return (
+          currentHash === undefined ||
+          (sourceChunkHash !== null && currentHash !== sourceChunkHash)
+        );
+      }
+      return (
+        sourceChunkHash !== null &&
+        ![...chunksById.values()].includes(sourceChunkHash)
+      );
+    };
+    const entityEvidenceIsStale = entityProposals.some((proposal) => {
+      const data =
+        proposal.proposedData !== null &&
+        typeof proposal.proposedData === 'object' &&
+        !Array.isArray(proposal.proposedData)
+          ? (proposal.proposedData as Record<string, unknown>)
+          : {};
+      const sourceChunkId =
+        proposal.sourceChunkId ??
+        (typeof data['sourceChunkId'] === 'string'
+          ? data['sourceChunkId']
+          : null);
+      const sourceChunkHash =
+        proposal.sourceChunkHash ??
+        (typeof data['sourceChunkHash'] === 'string'
+          ? data['sourceChunkHash']
+          : null);
+      return hasStaleEvidence(sourceChunkId, sourceChunkHash);
+    });
+    return (
+      entityEvidenceIsStale ||
+      relationshipProposals.some((proposal) =>
+        hasStaleEvidence(proposal.sourceChunkId, proposal.sourceChunkHash),
+      )
+    );
   }
 
   private async getProjectIdForScene(

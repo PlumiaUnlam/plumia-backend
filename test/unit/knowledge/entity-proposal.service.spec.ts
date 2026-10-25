@@ -13,11 +13,15 @@ interface MockTx {
   entityProposal: {
     findFirst: jest.Mock;
     update: jest.Mock;
+    updateMany: jest.Mock;
   };
   entity: {
     findFirst: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
+  };
+  relationshipProposal: {
+    updateMany: jest.Mock;
   };
 }
 
@@ -369,11 +373,22 @@ describe('EntityProposalService', () => {
   });
 
   it('rejects a pending proposal', async () => {
-    prisma.entityProposal.updateMany.mockResolvedValue({ count: 1 });
+    const tx = {
+      entityProposal: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      relationshipProposal: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    prisma.$transaction.mockImplementation(
+      async (callback: (transaction: typeof tx) => Promise<number>) =>
+        callback(tx),
+    );
 
     await service.rejectProposal('user-1', 'proposal-3');
 
-    expect(prisma.entityProposal.updateMany).toHaveBeenCalledWith({
+    expect(tx.entityProposal.updateMany).toHaveBeenCalledWith({
       where: {
         id: 'proposal-3',
         status: ProposalStatus.PENDING,
@@ -387,6 +402,19 @@ describe('EntityProposalService', () => {
         reviewedById: 'user-1',
         reviewedAt: expect.any(Date) as unknown,
         resolutionReason: 'rejected_by_author',
+      },
+    });
+    expect(tx.relationshipProposal.updateMany).toHaveBeenCalledWith({
+      where: {
+        status: ProposalStatus.PENDING,
+        OR: [
+          { sourceEntityProposalId: 'proposal-3' },
+          { targetEntityProposalId: 'proposal-3' },
+        ],
+      },
+      data: {
+        status: ProposalStatus.OBSOLETE,
+        resolutionReason: 'entity_proposal_rejected',
       },
     });
   });
@@ -415,6 +443,7 @@ function createTx(input: {
           : null,
       ),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     entity: {
       findFirst: jest.fn().mockResolvedValue(input.entity),
@@ -424,6 +453,9 @@ function createTx(input: {
         .mockResolvedValue(
           input.updatedEntity ?? input.entity ?? input.createdEntity ?? null,
         ),
+    },
+    relationshipProposal: {
+      updateMany: jest.fn(),
     },
   };
 }

@@ -36,6 +36,7 @@ export class EntityRecognitionSettingsController {
       req.user.id,
       projectId,
       dto.importantEntityNames,
+      dto.ignoredEntityNames,
     );
   }
 }
