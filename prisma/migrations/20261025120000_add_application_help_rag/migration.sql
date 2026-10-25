@@ -17,18 +17,33 @@ CREATE TABLE "application_help_chunk" (
     "embedding" vector(1536),
     "embedding_content_hash" VARCHAR(64),
     "embedding_profile" VARCHAR(180),
-    "search_vector" TSVECTOR GENERATED ALWAYS AS (
-        setweight(to_tsvector('spanish', coalesce("title", '')), 'A') ||
-        setweight(to_tsvector('spanish', coalesce("breadcrumb", '')), 'A') ||
-        setweight(to_tsvector('spanish', coalesce(array_to_string("questions", ' '), '')), 'A') ||
-        setweight(to_tsvector('spanish', coalesce(array_to_string("keywords", ' '), '')), 'A') ||
-        setweight(to_tsvector('spanish', coalesce("content", '')), 'B')
-    ) STORED,
+    "search_vector" TSVECTOR NOT NULL,
     "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "application_help_chunk_pkey" PRIMARY KEY ("id")
 );
+
+CREATE FUNCTION update_application_help_search_vector()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW."search_vector" :=
+        setweight(to_tsvector('spanish', coalesce(NEW."title", '')), 'A') ||
+        setweight(to_tsvector('spanish', coalesce(NEW."breadcrumb", '')), 'A') ||
+        setweight(to_tsvector('spanish', coalesce(array_to_string(NEW."questions", ' '), '')), 'A') ||
+        setweight(to_tsvector('spanish', coalesce(array_to_string(NEW."keywords", ' '), '')), 'A') ||
+        setweight(to_tsvector('spanish', coalesce(NEW."content", '')), 'B');
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "application_help_chunk_search_vector_trigger"
+    BEFORE INSERT OR UPDATE OF "title", "breadcrumb", "questions", "keywords", "content"
+    ON "application_help_chunk"
+    FOR EACH ROW
+    EXECUTE FUNCTION update_application_help_search_vector();
 
 CREATE INDEX "idx_application_help_search"
     ON "application_help_chunk" USING GIN ("search_vector");
