@@ -7,7 +7,12 @@ import type {
   RenderedExport,
 } from '../export.types';
 import { buildExportToc, exportAnchor } from '../export-toc';
-import { sceneDividerSvg, type SceneDividerVariant } from '../scene-divider';
+import {
+  normalizeSceneDividerColor,
+  SCENE_DIVIDER_COLOR,
+  sceneDividerSvg,
+  type SceneDividerVariant,
+} from '../scene-divider';
 import { blocksToHtml, noteInlinesToHtml } from '../tiptap-export';
 
 const EPUB_MIME_TYPE = 'application/epub+zip';
@@ -21,10 +26,54 @@ const NOTES_FILENAME = 'notes.xhtml';
 const COVER_IMAGE_FILENAME = 'cover-image.xhtml';
 
 const CSS = `body { font-family: serif; }
-h1, h2, h3 { text-align: center; }
+h1, h2, h3 { text-align: center; clear: both; }
+h4, h5, h6 { clear: both; }
 img { max-width: 100%; }
-p.image, p.scene-divider { text-align: center; }
-p.scene-divider img { width: 50%; }
+p.image { text-align: center; margin: 1.5rem auto; }
+p.image img { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; }
+p.image--break { clear: both; }
+p.image--float-left, p.image--float-right {
+  max-width: 45%;
+  max-width: min(45%, 320px);
+  margin-top: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+p.image--float-left { float: left; clear: left; margin-left: 0; margin-right: 1rem; }
+p.image--float-right { float: right; clear: right; margin-left: 1rem; margin-right: 0; }
+p.scene-divider {
+  clear: both;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: min(100%, 30rem);
+  min-height: 3.25rem;
+  margin: 1.5rem auto;
+}
+.scene-divider__line {
+  display: block;
+  flex: 1 1 0%;
+  width: 100%;
+  min-width: 2.75rem;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.48;
+}
+.scene-divider__artwork {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 8rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+}
+.scene-divider__artwork img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+hr { clear: both; }
 section.cover { margin: 0; padding: 0; text-align: center; }
 img.cover { display: block; max-width: 100%; max-height: 100vh; margin: 0 auto; }
 p.author { text-align: center; font-style: italic; }
@@ -77,7 +126,7 @@ function escapeXml(value: string): string {
 function collectAssets(
   blocks: ExportBlock[],
   images: ExportImage[],
-  dividers: Set<SceneDividerVariant>,
+  dividers: Map<string, { variant: SceneDividerVariant; color: string }>,
 ): void {
   for (const block of blocks) {
     if (block.kind === 'image') {
@@ -85,13 +134,21 @@ function collectAssets(
         images.push(block.image);
       }
     } else if (block.kind === 'sceneDivider') {
-      dividers.add(block.variant);
+      const color = normalizeSceneDividerColor(block.color);
+      dividers.set(dividerAssetKey(block.variant, color), {
+        variant: block.variant,
+        color,
+      });
     } else if (block.kind === 'bulletList' || block.kind === 'orderedList') {
       for (const item of block.items) {
         collectAssets(item, images, dividers);
       }
     }
   }
+}
+
+function dividerAssetKey(variant: SceneDividerVariant, color: string): string {
+  return `${variant}:${normalizeSceneDividerColor(color)}`;
 }
 
 function xhtmlPage(title: string, body: string): string {
@@ -184,7 +241,10 @@ export class EpubExportRenderer {
     ];
 
     const images: ExportImage[] = [];
-    const dividers = new Set<SceneDividerVariant>();
+    const dividers = new Map<
+      string,
+      { variant: SceneDividerVariant; color: string }
+    >();
     for (const chapter of document.chapters) {
       for (const scene of chapter.scenes) {
         collectAssets(scene.content, images, dividers);
@@ -203,13 +263,20 @@ export class EpubExportRenderer {
       });
     });
 
-    const dividerHrefs = new Map<SceneDividerVariant, string>();
-    for (const variant of dividers) {
-      const href = `images/divider-${variant}.svg`;
-      dividerHrefs.set(variant, href);
-      zip.file(`${OEBPS}/${href}`, sceneDividerSvg(variant));
+    const dividerHrefs = new Map<string, string>();
+    for (const [key, divider] of dividers) {
+      const colorSuffix =
+        divider.color === SCENE_DIVIDER_COLOR
+          ? ''
+          : `-${divider.color.slice(1)}`;
+      const href = `images/divider-${divider.variant}${colorSuffix}.svg`;
+      dividerHrefs.set(key, href);
+      zip.file(
+        `${OEBPS}/${href}`,
+        sceneDividerSvg(divider.variant, divider.color),
+      );
       manifest.push({
-        id: `divider-${variant}`,
+        id: `divider-${divider.variant}-${divider.color.slice(1)}`,
         href,
         mediaType: 'image/svg+xml',
       });
@@ -313,7 +380,8 @@ export class EpubExportRenderer {
         parts.push(
           blocksToHtml(scene.content, {
             imageSrc: (image) => imageHrefs.get(image) ?? '',
-            sceneDividerSrc: (variant) => dividerHrefs.get(variant) ?? '',
+            sceneDividerSrc: (variant, color) =>
+              dividerHrefs.get(dividerAssetKey(variant, color)) ?? '',
             noteRef: (note) => {
               const html = noteInlinesToHtml(note.inlines);
               if (note.noteKind === 'endnote') {

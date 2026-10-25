@@ -56,6 +56,55 @@ const source = {
   ],
 };
 
+const imageLayoutSource = {
+  id: 'book-id',
+  title: 'La obra',
+  chapters: [
+    {
+      id: 'chapter-id',
+      title: 'Capítulo I',
+      scenes: [
+        {
+          id: 'scene-id',
+          title: 'La llegada',
+          content: {
+            type: 'doc',
+            content: [
+              {
+                type: 'image',
+                attrs: {
+                  storageKey: 'scenes/scene-id/left.webp',
+                  alt: 'Imagen izquierda',
+                  width: 240,
+                  textFlow: 'text-right',
+                },
+              },
+              {
+                type: 'image',
+                attrs: {
+                  storageKey: 'scenes/scene-id/right.png',
+                  alt: 'Imagen derecha',
+                  width: '180',
+                  textFlow: 'text-left',
+                },
+              },
+              {
+                type: 'image',
+                attrs: {
+                  storageKey: 'scenes/scene-id/full.png',
+                  alt: 'Imagen de renglón completo',
+                  width: 320,
+                  textFlow: 'break',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+};
+
 const multiSceneSource = {
   id: 'book-id',
   title: 'La obra',
@@ -215,6 +264,93 @@ describe('export rendering', () => {
     const scene =
       await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
     expect(scene).toContain('<img src="images/image-0.png" alt="Estación" />');
+  });
+
+  it('preserves image width and text flow from the editor in EPUB XHTML', async () => {
+    const document = await prepareExportDocument(imageLayoutSource, pngImage);
+    const blocks = document.chapters[0]?.scenes[0]?.content ?? [];
+
+    expect(blocks).toEqual([
+      expect.objectContaining({
+        kind: 'image',
+        alt: 'Imagen izquierda',
+        width: 240,
+        textFlow: 'text-right',
+      }),
+      expect.objectContaining({
+        kind: 'image',
+        alt: 'Imagen derecha',
+        width: 180,
+        textFlow: 'text-left',
+      }),
+      expect.objectContaining({
+        kind: 'image',
+        alt: 'Imagen de renglón completo',
+        width: 320,
+        textFlow: 'break',
+      }),
+    ]);
+
+    const epub = await new EpubExportRenderer().render(document);
+    const zip = await JSZip.loadAsync(epub.buffer);
+    const scene =
+      await zip.files['OEBPS/book-0-chapter-0-scene-0.xhtml']!.async('string');
+    const css = await zip.files['OEBPS/style.css']!.async('string');
+
+    expect(scene).toContain(
+      'class="image image--float-left" style="width:240px"><img src="images/image-0.png" width="240" alt="Imagen izquierda" style="width:240px"',
+    );
+    expect(scene).toContain(
+      'class="image image--float-right" style="width:180px"',
+    );
+    expect(scene).toContain('class="image image--break"><img');
+    expect(scene).toContain(
+      'width="320" alt="Imagen de renglón completo" style="width:320px"',
+    );
+    expect(css).toContain('p.image--float-left { float: left; clear: left;');
+    expect(css).toContain('p.image--float-right { float: right; clear: right;');
+    expect(css).toContain('p.image--break { clear: both; }');
+    expect(css).toContain('h1, h2, h3 { text-align: center; clear: both; }');
+    expect(css).toContain('hr { clear: both; }');
+  });
+
+  it('keeps explicit editor line breaks inside their paragraph in EPUB', async () => {
+    const lineBreakSource = {
+      ...source,
+      chapters: [
+        {
+          ...source.chapters[0]!,
+          scenes: [
+            {
+              ...source.chapters[0]!.scenes[0]!,
+              content: {
+                type: 'doc',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [
+                      { type: 'text', text: 'Primera línea.' },
+                      { type: 'hardBreak' },
+                      { type: 'text', text: 'Segunda línea.' },
+                    ],
+                  },
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'Nuevo párrafo.' }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const document = await prepareExportDocument(lineBreakSource, pngImage);
+    const blocks = document.chapters[0]?.scenes[0]?.content ?? [];
+
+    expect(blocksToHtml(blocks)).toBe(
+      '<p>Primera línea.<br />Segunda línea.</p>\n<p>Nuevo párrafo.</p>',
+    );
   });
 
   it('includes a linked hierarchical index', async () => {

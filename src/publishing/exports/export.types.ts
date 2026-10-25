@@ -24,6 +24,8 @@ export interface ExportImage {
   extension: string;
 }
 
+export type ImageTextFlow = 'break' | 'text-right' | 'text-left';
+
 export type ExportInline =
   | {
       kind: 'text';
@@ -64,9 +66,19 @@ export type ExportBlock =
   | (ExportTextBlock & { kind: 'codeBlock' })
   | (ExportListBlock & { kind: 'bulletList' })
   | (ExportListBlock & { kind: 'orderedList' })
-  | { kind: 'sceneDivider'; variant: SceneDividerVariant }
+  | {
+      kind: 'sceneDivider';
+      variant: SceneDividerVariant;
+      color: string;
+    }
   | { kind: 'horizontalRule' }
-  | { kind: 'image'; image: ExportImage; alt: string };
+  | {
+      kind: 'image';
+      image: ExportImage;
+      alt: string;
+      width: number | null;
+      textFlow: ImageTextFlow;
+    };
 
 export interface ExportScene {
   id: string;

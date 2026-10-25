@@ -14,6 +14,12 @@ export const DEFAULT_SCENE_DIVIDER_VARIANT: SceneDividerVariant = 'flourish';
 
 export const SCENE_DIVIDER_COLOR = '#5b3d6f';
 
+export function normalizeSceneDividerColor(value: unknown): string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toLowerCase()
+    : SCENE_DIVIDER_COLOR;
+}
+
 export function isSceneDividerVariant(
   value: unknown,
 ): value is SceneDividerVariant {
@@ -92,6 +98,13 @@ const DIVIDER_SVGS: Record<SceneDividerVariant, string> = {
   ${SVG_SUFFIX}`,
 };
 
-export function sceneDividerSvg(variant: SceneDividerVariant): string {
-  return DIVIDER_SVGS[normalizeSceneDividerVariant(variant)];
+export function sceneDividerSvg(
+  variant: SceneDividerVariant,
+  color: unknown = SCENE_DIVIDER_COLOR,
+): string {
+  const normalizedColor = normalizeSceneDividerColor(color);
+  const svg = DIVIDER_SVGS[normalizeSceneDividerVariant(variant)];
+  return normalizedColor === SCENE_DIVIDER_COLOR
+    ? svg
+    : svg.replaceAll(SCENE_DIVIDER_COLOR, normalizedColor);
 }

@@ -12,6 +12,7 @@ import {
   type ExportJobRecord,
   type SupportedExportFormat,
 } from './export.types';
+import { prepareEpubImage } from './export-image';
 import { DEFAULT_EXPORT_AUTHOR, prepareExportDocument } from './tiptap-export';
 import { EpubExportRenderer } from './renderers/epub-export.renderer';
 import { ExportJobResponseDto } from './dto/export-job-response.dto';
@@ -22,28 +23,6 @@ const MIME_TYPES: Record<SupportedExportFormat, string> = {
 
 function isSupportedFormat(format: string): format is SupportedExportFormat {
   return (EXPORT_FORMATS as readonly string[]).includes(format);
-}
-
-function imageDetails(storageKey: string): {
-  extension: string;
-  mimeType: string;
-} {
-  const extension = storageKey.split('.').pop()?.toLowerCase() ?? 'jpg';
-  if (extension === 'png') {
-    return { extension: 'png', mimeType: 'image/png' };
-  }
-  if (extension === 'gif') {
-    return { extension: 'gif', mimeType: 'image/gif' };
-  }
-  if (extension === 'bmp') {
-    return { extension: 'bmp', mimeType: 'image/bmp' };
-  }
-  if (extension === 'webp' || extension === 'avif') {
-    throw new Error(
-      'Las exportaciones actualmente requieren imágenes JPG o PNG',
-    );
-  }
-  return { extension: 'jpg', mimeType: 'image/jpeg' };
 }
 
 function fileSlug(value: string): string {
@@ -214,10 +193,7 @@ export class ExportService {
       }
 
       await this.updateProgress(exportJobId, 20);
-      const imageCache = new Map<
-        string,
-        Promise<ReturnType<typeof imageDetails> & { buffer: Buffer }>
-      >();
+      const imageCache = new Map<string, Promise<ExportImage>>();
       const document = await prepareExportDocument(
         source,
         async (storageKey, sceneId) => {
@@ -316,13 +292,11 @@ export class ExportService {
     }
   }
 
-  private async loadExportImage(
-    storageKey: string,
-  ): Promise<ReturnType<typeof imageDetails> & { buffer: Buffer }> {
-    return {
-      ...imageDetails(storageKey),
-      buffer: await this.storage.getBuffer(storageKey),
-    };
+  private async loadExportImage(storageKey: string): Promise<ExportImage> {
+    return prepareEpubImage(
+      storageKey,
+      await this.storage.getBuffer(storageKey),
+    );
   }
 
   private toRecord(job: {
