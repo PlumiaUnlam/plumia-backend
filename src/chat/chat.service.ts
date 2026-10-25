@@ -179,6 +179,7 @@ const FIRST_MENTION_GENERIC_TERMS = new Set([
   'escena',
   'mencion',
   'menciona',
+  'mencione',
   'mencionada',
   'mencionado',
   'primer',
@@ -1398,8 +1399,8 @@ function buildDeterministicEvidenceAnswer(
       (source) => source.kind === 'manuscript' && source.textQuote,
     );
     if (firstMention) {
-      const focusTerm = firstMentionTerms(extractSearchTerms(question)).find((term) =>
-        includesTerm(firstMention.textQuote ?? '', term),
+      const focusTerm = firstMentionTerms(extractSearchTerms(question)).find(
+        (term) => includesTerm(firstMention.textQuote ?? '', term),
       );
       const displayQuote = quoteAround(firstMention.textQuote ?? '', focusTerm);
       return {
@@ -1528,6 +1529,7 @@ function isFirstMentionIntent(question: string): boolean {
       'aparece',
       'aparecio',
       'menciona',
+      'mencione',
       'mencion',
       'mencionada',
       'mencionado',

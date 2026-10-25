@@ -54,7 +54,7 @@ export class ChatConflictService {
         sourceConflict: { path: ['entityId'], equals: entityId },
       })),
     ];
-    const alerts = await this.prisma.auditAlert.findMany({
+    const alertsQuery = {
       where: {
         projectId,
         status: AuditStatus.ACTIVE,
@@ -70,12 +70,26 @@ export class ChatConflictService {
         sourceChunkHash: true,
         sourceConflict: true,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: MAX_CANDIDATE_ALERTS,
-    });
+    } as const;
+    const alerts = await this.prisma.auditAlert.findMany(alertsQuery);
     throwIfAborted(signal);
     if (alerts.length === 0) {
       return [];
+    }
+    let pageLength = alerts.length;
+    let lastAlertId = alerts.at(-1)?.id;
+    while (pageLength === MAX_CANDIDATE_ALERTS && lastAlertId) {
+      const nextPage = await this.prisma.auditAlert.findMany({
+        ...alertsQuery,
+        cursor: { id: lastAlertId },
+        skip: 1,
+      });
+      throwIfAborted(signal);
+      alerts.push(...nextPage);
+      pageLength = nextPage.length;
+      lastAlertId = nextPage.at(-1)?.id;
     }
 
     const linkedChunkIds = [
