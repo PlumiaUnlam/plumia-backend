@@ -1,4 +1,8 @@
-export type ChatSourceKind = 'manuscript' | 'wiki' | 'timeline';
+export type ChatSourceKind =
+  | 'manuscript'
+  | 'wiki'
+  | 'timeline'
+  | 'application_help';
 
 export interface ChatSource {
   id: string;

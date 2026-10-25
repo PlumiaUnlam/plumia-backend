@@ -2,10 +2,15 @@
 
 import type { PrismaService } from '../../../src/prisma/prisma.service';
 import type { ChatEmbeddingIndexService } from '../../../src/chat/chat-embedding-index.service';
+import type { ApplicationHelpIndexService } from '../../../src/chat/application-help-index.service';
 import { ChatService } from '../../../src/chat/chat.service';
-import type { ChatGenerationProvider } from '../../../src/chat/ports/chat-generation-provider.port';
+import type {
+  ChatGenerationProvider,
+  ChatGenerationResult,
+} from '../../../src/chat/ports/chat-generation-provider.port';
 import type { EmbeddingProvider } from '../../../src/chat/ports/embedding-provider.port';
 import type { VectorStore } from '../../../src/chat/ports/vector-store.port';
+import type { ChatSource } from '../../../src/chat/domain/chat.types';
 
 describe('ChatService', () => {
   const now = new Date('2026-08-21T08:00:00.000Z');
@@ -23,6 +28,9 @@ describe('ChatService', () => {
   let embeddingProvider: Pick<EmbeddingProvider, 'model'>;
   let vectorStore: jest.Mocked<VectorStore>;
   let embeddingIndex: jest.Mocked<Pick<ChatEmbeddingIndexService, 'search'>>;
+  let applicationHelpIndex: jest.Mocked<
+    Pick<ApplicationHelpIndexService, 'search'>
+  >;
   let service: ChatService;
   let tx: ReturnType<typeof createTransactionClient>;
   let prismaMock: ReturnType<typeof createPrismaClient>;
@@ -39,12 +47,14 @@ describe('ChatService', () => {
       search: jest.fn(),
     };
     embeddingIndex = { search: jest.fn().mockResolvedValue([]) };
+    applicationHelpIndex = { search: jest.fn().mockResolvedValue([]) };
     service = new ChatService(
       prisma,
       generator,
       vectorStore,
       embeddingProvider,
       embeddingIndex as unknown as ChatEmbeddingIndexService,
+      applicationHelpIndex as unknown as ApplicationHelpIndexService,
     );
 
     prismaMock.chatThread.findFirst.mockResolvedValue(thread);
@@ -328,13 +338,27 @@ describe('ChatService', () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
-  it('answers application navigation questions without invoking retrieval or the model', async () => {
+  it('answers application navigation questions from grounded help documents', async () => {
+    const source = applicationHelpSource(
+      'help.timeline',
+      'La Línea Temporal está en Worldbuilding, en la pestaña Línea Temporal.',
+      '/projects/project-1/worldbuilding?tab=timeline',
+    );
+    applicationHelpIndex.search.mockResolvedValue([source]);
+    generator.generate.mockResolvedValue(
+      applicationHelpAnswer(
+        source,
+        'La Línea Temporal está en Worldbuilding, en la pestaña Línea Temporal.',
+        'La Línea Temporal está en Worldbuilding',
+      ),
+    );
+
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Dónde puedo ver la línea de tiempo?',
     });
 
     expect(result.assistantMessage.content).toContain('Worldbuilding');
-    expect(result.assistantMessage.sources).toEqual([]);
+    expect(result.assistantMessage.sources[0]?.kind).toBe('application_help');
     expect(result.assistantMessage.actions).toEqual([
       expect.objectContaining({
         kind: 'navigation',
@@ -342,7 +366,12 @@ describe('ChatService', () => {
       }),
     ]);
     expect(embeddingIndex.search).not.toHaveBeenCalled();
-    expect(generator.generate).not.toHaveBeenCalled();
+    expect(applicationHelpIndex.search).toHaveBeenCalledWith(
+      '¿Dónde puedo ver la línea de tiempo?',
+      thread.projectId,
+      undefined,
+    );
+    expect(generator.generate).toHaveBeenCalledTimes(1);
   });
 
   it('does not replace a custom conversation title when the first message is sent', async () => {
@@ -362,6 +391,19 @@ describe('ChatService', () => {
   });
 
   it('routes a short application follow-up using recent chat context', async () => {
+    const source = applicationHelpSource(
+      'help.timeline',
+      'La Línea Temporal está en Worldbuilding.',
+      '/projects/project-1/worldbuilding?tab=timeline',
+    );
+    applicationHelpIndex.search.mockResolvedValue([source]);
+    generator.generate.mockResolvedValue(
+      applicationHelpAnswer(
+        source,
+        'La Línea Temporal está en Worldbuilding.',
+        'La Línea Temporal está en Worldbuilding',
+      ),
+    );
     prismaMock.chatMessage.findMany.mockResolvedValue([
       message(
         'user-previous',
@@ -375,15 +417,29 @@ describe('ChatService', () => {
       content: '¿Y la línea de tiempo?',
     });
 
-    expect(result.assistantMessage.sources).toEqual([]);
+    expect(result.assistantMessage.sources[0]?.kind).toBe('application_help');
     expect(result.assistantMessage.actions[0]?.route).toBe(
       '/projects/project-1/worldbuilding?tab=timeline',
     );
     expect(embeddingIndex.search).not.toHaveBeenCalled();
-    expect(generator.generate).not.toHaveBeenCalled();
+    expect(generator.generate).toHaveBeenCalledTimes(1);
   });
 
-  it('answers known application help without treating it as work evidence', async () => {
+  it('answers application help using the same grounded chat generator', async () => {
+    const source = applicationHelpSource(
+      'help.editor-modes',
+      'Los modos de escritura son Creación, Revisión y Zen.',
+      '/projects/project-1/editor',
+    );
+    applicationHelpIndex.search.mockResolvedValue([source]);
+    generator.generate.mockResolvedValue(
+      applicationHelpAnswer(
+        source,
+        'Los modos disponibles son Creación, Revisión y Zen.',
+        'Los modos de escritura son Creación, Revisión y Zen',
+      ),
+    );
+
     const result = await service.sendMessage('user-1', thread.id, {
       content: '¿Me explicás cómo funcionan los modos de escritura?',
     });
@@ -391,7 +447,7 @@ describe('ChatService', () => {
     expect(result.assistantMessage.content).toContain('Creación');
     expect(result.assistantMessage.content).toContain('Revisión');
     expect(result.assistantMessage.content).toContain('Zen');
-    expect(result.assistantMessage.sources).toEqual([]);
+    expect(result.assistantMessage.sources[0]?.kind).toBe('application_help');
     expect(result.assistantMessage.actions).toEqual([
       expect.objectContaining({
         kind: 'navigation',
@@ -399,13 +455,12 @@ describe('ChatService', () => {
       }),
     ]);
     expect(embeddingIndex.search).not.toHaveBeenCalled();
-    expect(generator.generate).not.toHaveBeenCalled();
+    expect(generator.generate).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     ['Hola, ¿cómo andás?', '¡Hola!'],
     ['Muchas gracias', '¡De nada!'],
-    ['¿Qué podés hacer?', 'asistente de consulta de PlumIA'],
     ['Hasta luego', '¡Hasta luego!'],
   ])('answers harmless social message locally: %s', async (content, answer) => {
     const result = await service.sendMessage('user-1', thread.id, { content });
@@ -1107,6 +1162,34 @@ function manuscriptChunk(
         },
       },
     },
+  };
+}
+
+function applicationHelpSource(
+  id: string,
+  excerpt: string,
+  route: string,
+): ChatSource {
+  return {
+    id: `application_help:${id}`,
+    kind: 'application_help',
+    label: 'PlumIA › Ayuda de uso',
+    excerpt,
+    route,
+  };
+}
+
+function applicationHelpAnswer(
+  source: ChatSource,
+  text: string,
+  quote: string,
+): ChatGenerationResult {
+  return {
+    answer: text,
+    sourceIds: [source.id],
+    claims: [{ text, evidence: [{ sourceId: source.id, quote }] }],
+    inputTokens: 20,
+    outputTokens: 8,
   };
 }
 

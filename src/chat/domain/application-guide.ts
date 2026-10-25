@@ -78,6 +78,7 @@ const APPLICATION_HELP_TERMS = [
   'para que sirve',
   'que puedo hacer',
   'que se puede hacer',
+  'que es plumia',
 ] as const;
 const APPLICATION_HOW_TO_TERMS = [
   'como usa',
@@ -87,6 +88,20 @@ const APPLICATION_HOW_TO_TERMS = [
   'como funcionan',
   'como se usa',
   'como se usar',
+  'como creo',
+  'como crear',
+  'como agrego',
+  'como agregar',
+  'como comparto',
+  'como compartir',
+  'como exporto',
+  'como exportar',
+  'como cambio',
+  'como cambiar',
+  'como edito',
+  'como editar',
+  'como elimino',
+  'como eliminar',
 ] as const;
 const APPLICATION_UI_TERMS = [
   'aplicacion',
@@ -115,8 +130,40 @@ const APPLICATION_UI_TERMS = [
   'interfaz',
   'modo de escritura',
   'modos de escritura',
+  'entidad',
+  'entidades',
+  'personaje',
+  'personajes',
+  'lugar',
+  'lugares',
+  'objeto',
+  'objetos',
+  'relacion',
+  'relaciones',
+  'vinculo',
+  'vinculos',
+  'proyecto',
+  'proyectos',
+  'libro',
+  'libros',
+  'capitulo',
+  'capitulos',
+  'escena',
+  'escenas',
+  'compartir',
+  'exportar',
 ] as const;
 const FOLLOW_UP_INTENT = /^(?:[¿?¡!.,\s]*(?:y|tambien|ademas)\b)/i;
+const GENERAL_APPLICATION_QUESTIONS = new Set([
+  'quien sos',
+  'que sos',
+  'que puedo hacer',
+  'que se puede hacer',
+  'que podes hacer',
+  'que puedes hacer',
+  'como podes ayudarme',
+  'como puedes ayudarme',
+]);
 
 const GUIDES: ApplicationGuide[] = [
   {
@@ -302,6 +349,33 @@ export function getApplicationGuidance(
   };
 }
 
+export function isApplicationHelpIntent(
+  question: string,
+  context: { history?: readonly ApplicationHistoryEntry[] } = {},
+): boolean {
+  const normalizedQuestion = normalizeQuestion(question);
+  const questionKey = normalizedQuestion
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (GENERAL_APPLICATION_QUESTIONS.has(questionKey)) {
+    return true;
+  }
+  if (isApplicationHelp(normalizedQuestion)) {
+    return true;
+  }
+  const guide = findBestGuide(normalizedQuestion);
+  const lastUserQuestion = [...(context.history ?? [])]
+    .reverse()
+    .find((entry) => entry.role === 'user');
+  return Boolean(
+    FOLLOW_UP_INTENT.test(normalizedQuestion) &&
+    guide &&
+    lastUserQuestion &&
+    isApplicationQuestion(lastUserQuestion.content),
+  );
+}
+
 function findBestGuide(question: string): ApplicationGuide | null {
   let bestGuide: ApplicationGuide | null = null;
   let bestScore = 0;
@@ -323,17 +397,15 @@ function findBestGuide(question: string): ApplicationGuide | null {
 
 function isApplicationQuestion(question: string): boolean {
   const normalizedQuestion = normalizeQuestion(question);
-  return (
-    isNavigationIntent(normalizedQuestion) ||
-    isApplicationHelp(normalizedQuestion)
-  );
+  return isApplicationHelp(normalizedQuestion);
 }
 
 function isApplicationHelp(question: string): boolean {
   return (
     hasAnyTerm(question, APPLICATION_UI_TERMS) &&
     (hasAnyTerm(question, APPLICATION_HELP_TERMS) ||
-      hasAnyTerm(question, APPLICATION_HOW_TO_TERMS))
+      hasAnyTerm(question, APPLICATION_HOW_TO_TERMS) ||
+      isNavigationIntent(question))
   );
 }
 

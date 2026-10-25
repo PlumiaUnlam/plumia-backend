@@ -8,8 +8,9 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApplicationHelpIndexService } from './application-help-index.service';
 import { ChatEmbeddingIndexService } from './chat-embedding-index.service';
-import { getApplicationGuidance } from './domain/application-guide';
+import { isApplicationHelpIntent } from './domain/application-guide';
 import {
   getPolicyRefusal,
   getSocialResponse,
@@ -225,6 +226,7 @@ export class ChatService {
     @Inject(EMBEDDING_PROVIDER)
     private readonly embeddingProvider: Pick<EmbeddingProvider, 'model'>,
     private readonly embeddingIndex: ChatEmbeddingIndexService,
+    private readonly applicationHelpIndex: ApplicationHelpIndexService,
   ) {}
 
   searchSimilarChunks(
@@ -365,7 +367,10 @@ export class ChatService {
     }));
     throwIfAborted(signal);
 
-    const policyRefusal = getPolicyRefusal(question);
+    const applicationHelpIntent = isApplicationHelpIntent(question, {
+      history,
+    });
+    const policyRefusal = getPolicyRefusal(question, { applicationHelpIntent });
     if (policyRefusal) {
       return this.persistExchange(
         thread,
@@ -380,27 +385,9 @@ export class ChatService {
       );
     }
 
-    const applicationGuidance = getApplicationGuidance(
-      question,
-      thread.projectId,
-      { history },
-    );
-    if (applicationGuidance) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: applicationGuidance.answer,
-          sources: [],
-          actions: [applicationGuidance.action],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    const socialResponse = getSocialResponse(question);
+    const socialResponse = applicationHelpIntent
+      ? null
+      : getSocialResponse(question);
     if (socialResponse) {
       return this.persistExchange(
         thread,
@@ -430,20 +417,22 @@ export class ChatService {
       );
     }
 
-    const sources = await this.retrieveSources(
-      thread.projectId,
-      question,
-      history,
-      signal,
-    );
+    const sources = applicationHelpIntent
+      ? await this.applicationHelpIndex.search(
+          question,
+          thread.projectId,
+          signal,
+        )
+      : await this.retrieveSources(thread.projectId, question, history, signal);
     throwIfAborted(signal);
     if (sources.length === 0) {
       return this.persistExchange(
         thread,
         question,
         {
-          answer:
-            'No encontre informacion suficiente en el manuscrito, la Wiki ni la linea de tiempo para responder con seguridad.',
+          answer: applicationHelpIntent
+            ? 'No encontre informacion suficiente en la documentacion de PlumIA para responder con seguridad.'
+            : 'No encontre informacion suficiente en el manuscrito, la Wiki ni la linea de tiempo para responder con seguridad.',
           sources: [],
           inputTokens: 0,
           outputTokens: 0,
@@ -479,6 +468,24 @@ export class ChatService {
     });
     throwIfAborted(signal);
     const groundedResponse = buildGroundedResponse(result, sources);
+    const navigationSource = applicationHelpIntent
+      ? groundedResponse.sources.find(
+          (source) => source.kind === 'application_help' && source.route,
+        )
+      : undefined;
+    const actions: ChatAction[] = navigationSource?.route
+      ? [
+          {
+            id: `navigation:${navigationSource.route}`,
+            kind: 'navigation',
+            label:
+              navigationSource.label.split(' › ').at(-1) ??
+              navigationSource.label,
+            description: 'Abrir esta sección de PlumIA',
+            route: navigationSource.route,
+          },
+        ]
+      : [];
 
     return this.persistExchange(
       thread,
@@ -486,6 +493,7 @@ export class ChatService {
       {
         answer: groundedResponse.answer,
         sources: groundedResponse.sources,
+        ...(actions.length > 0 ? { actions } : {}),
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
       },
@@ -1737,4 +1745,9 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-const CHAT_SOURCE_KINDS = new Set<string>(['manuscript', 'wiki', 'timeline']);
+const CHAT_SOURCE_KINDS = new Set<string>([
+  'manuscript',
+  'wiki',
+  'timeline',
+  'application_help',
+]);

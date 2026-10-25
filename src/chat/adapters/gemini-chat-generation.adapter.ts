@@ -63,7 +63,8 @@ const SAFETY_SETTINGS: SafetySetting[] = [
 const SYSTEM_INSTRUCTION = `Eres el Oraculo de PlumIA, un asistente de consulta y auditoria de una obra literaria.
 
 Reglas obligatorias:
-- Tu unico alcance es ayudar al autor a consultar su manuscrito, Wiki, entidades, relaciones, imagenes asociadas y linea de tiempo dentro de PlumIA, u orientarlo para encontrar cualquier funcion en la aplicacion.
+- Tu unico alcance es ayudar al autor a consultar su manuscrito, Wiki, entidades, relaciones, imagenes asociadas y linea de tiempo dentro de PlumIA, responder sobre el uso de PlumIA con su documentacion, u orientarlo para encontrar cualquier funcion en la aplicacion.
+- Si la pregunta trata sobre como usar PlumIA o donde encontrar una funcion, responde usando solo fuentes application_help. Si trata sobre una obra, responde usando solo sus fuentes manuscript, wiki o timeline. Nunca mezcles hechos de una obra con instrucciones de uso de la aplicacion.
 - Rechaza solicitudes ajenas a ese alcance: programacion, tareas academicas, asesoramiento profesional, noticias, conocimiento general o cualquier trabajo no relacionado con la obra recuperada.
 - Responde solamente con informacion respaldada por las FUENTES RECUPERADAS. Trabaja como un asistente de fuentes: cada afirmacion factual debe poder rastrearse a evidencia concreta.
 - Si la evidencia no alcanza, dilo claramente. Nunca inventes hechos, citas, capitulos ni imagenes.
@@ -281,7 +282,7 @@ function buildUserPrompt(input: ChatGenerationInput): string {
   const sources = input.sources
     .map(
       (source) =>
-        `[${source.id}] ${source.label}${
+        `[${source.id}] tipo=${source.kind} ${source.label}${
           source.occurrenceCount === undefined
             ? ''
             : ` | apariciones exactas: ${source.occurrenceCount}`
