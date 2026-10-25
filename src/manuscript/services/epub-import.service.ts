@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { StorageService } from '../../storage/storage.service';
 import { ChapterService } from './chapter.service';
@@ -11,23 +16,44 @@ import {
 import type { CreateProjectDto } from '../dto/projects/create-project.dto';
 import type { ProjectRecord } from '../ports/project-repository.port';
 import {
+  EpubImportError,
   imageIdFromNode,
   parseEpubArchive,
+  type EpubImportChapter,
   type EpubImportImage,
+  type ParsedEpub,
 } from '../domain/epub-import.parser';
 
-type ImportSummary = {
+interface ImportSummary {
   project: ProjectRecord;
   importedChapters: number;
   importedImages: number;
   skippedImages: number;
   importedWords: number;
-};
+}
 
-type ImageImportStats = {
+interface ImageImportStats {
   imported: number;
   skipped: number;
-};
+}
+
+interface ImportedCounts extends ImageImportStats {
+  importedWords: number;
+}
+
+function mapSequentially<T, R>(
+  values: readonly T[],
+  map: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let sequence = Promise.resolve();
+  values.forEach((value, index) => {
+    sequence = sequence.then(async () => {
+      results.push(await map(value, index));
+    });
+  });
+  return sequence.then(() => results);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -60,23 +86,21 @@ async function attachImages(
   uploadedKeys: string[],
 ): Promise<{ value: unknown; stats: ImageImportStats }> {
   if (Array.isArray(value)) {
-    const result: unknown[] = [];
-    const stats = { imported: 0, skipped: 0 };
-    for (const item of value) {
-      const transformed = await attachImages(
-        item,
-        sceneId,
-        images,
-        storage,
-        uploadedKeys,
-      );
-      if (transformed.value !== null) {
-        result.push(transformed.value);
-      }
-      stats.imported += transformed.stats.imported;
-      stats.skipped += transformed.stats.skipped;
-    }
-    return { value: result, stats };
+    const transformedItems = await mapSequentially(value, (item) =>
+      attachImages(item, sceneId, images, storage, uploadedKeys),
+    );
+    return {
+      value: transformedItems.flatMap((transformed) =>
+        transformed.value === null ? [] : [transformed.value],
+      ),
+      stats: transformedItems.reduce(
+        (stats, transformed) => ({
+          imported: stats.imported + transformed.stats.imported,
+          skipped: stats.skipped + transformed.stats.skipped,
+        }),
+        { imported: 0, skipped: 0 },
+      ),
+    };
   }
   if (!isRecord(value)) {
     return { value, stats: { imported: 0, skipped: 0 } };
@@ -135,67 +159,126 @@ export class EpubImportService {
     private readonly sceneRepository: SceneRepository,
   ) {}
 
+  private async importScene(
+    userId: string,
+    chapterId: string,
+    sceneInput: EpubImportChapter['scenes'][number],
+    sceneIndex: number,
+    epub: ParsedEpub,
+    uploadedKeys: string[],
+  ): Promise<ImportedCounts> {
+    const sceneId = randomUUID();
+    const transformed = await attachImages(
+      sceneInput.content,
+      sceneId,
+      epub.images,
+      this.storageService,
+      uploadedKeys,
+    );
+    const content = transformed.value as Record<string, unknown>;
+    const wordCount = countWords(content);
+    const scene = await this.sceneRepository.createForUser(userId, {
+      id: sceneId,
+      chapterId,
+      title: sceneInput.title.slice(0, 200),
+      sortKey: String(sceneIndex + 1).padStart(3, '0'),
+      order: sceneIndex + 1,
+      content,
+      wordCount,
+    });
+    if (!scene) {
+      throw new NotFoundException('No se pudo crear una escena del EPUB.');
+    }
+    return {
+      imported: transformed.stats.imported,
+      skipped: transformed.stats.skipped,
+      importedWords: wordCount,
+    };
+  }
+
+  private async importChapter(
+    userId: string,
+    bookId: string,
+    chapterInput: EpubImportChapter,
+    chapterIndex: number,
+    epub: ParsedEpub,
+    uploadedKeys: string[],
+  ): Promise<ImportedCounts> {
+    const chapter = await this.chapterService.create(userId, bookId, {
+      title: chapterInput.title.slice(0, 200),
+      sortKey: String(chapterIndex + 1).padStart(3, '0'),
+    });
+    const scenes = await mapSequentially(
+      chapterInput.scenes,
+      (sceneInput, sceneIndex) =>
+        this.importScene(
+          userId,
+          chapter.id,
+          sceneInput,
+          sceneIndex,
+          epub,
+          uploadedKeys,
+        ),
+    );
+    return scenes.reduce(
+      (counts, scene) => ({
+        imported: counts.imported + scene.imported,
+        skipped: counts.skipped + scene.skipped,
+        importedWords: counts.importedWords + scene.importedWords,
+      }),
+      { imported: 0, skipped: 0, importedWords: 0 },
+    );
+  }
+
   async importEpub(
     userId: string,
     projectInput: CreateProjectDto,
     epubBuffer: Buffer,
   ): Promise<ImportSummary> {
-    const epub = await parseEpubArchive(epubBuffer);
+    let epub: ParsedEpub;
+    try {
+      epub = await parseEpubArchive(epubBuffer);
+    } catch (error) {
+      if (error instanceof EpubImportError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
     const project = await this.projectService.create(userId, projectInput);
     const uploadedKeys: string[] = [];
-    let importedImages = 0;
-    let skippedImages = epub.skippedImages;
-    let importedWords = 0;
-
     try {
       const book = await this.bookService.create(userId, project.id, {
         title: epub.title.slice(0, 200),
         sortKey: '001',
       });
 
-      for (const [index, chapterInput] of epub.chapters.entries()) {
-        const chapter = await this.chapterService.create(userId, book.id, {
-          title: chapterInput.title.slice(0, 200),
-          sortKey: String(index + 1).padStart(3, '0'),
-        });
-        for (const [sceneIndex, sceneInput] of chapterInput.scenes.entries()) {
-          const sceneId = randomUUID();
-          const transformed = await attachImages(
-            sceneInput.content,
-            sceneId,
-            epub.images,
-            this.storageService,
+      const chapterCounts = await mapSequentially(
+        epub.chapters,
+        (chapterInput, chapterIndex) =>
+          this.importChapter(
+            userId,
+            book.id,
+            chapterInput,
+            chapterIndex,
+            epub,
             uploadedKeys,
-          );
-          const content = transformed.value as Record<string, unknown>;
-          const wordCount = countWords(content);
-          const scene = await this.sceneRepository.createForUser(userId, {
-            id: sceneId,
-            chapterId: chapter.id,
-            title: sceneInput.title.slice(0, 200),
-            sortKey: String(sceneIndex + 1).padStart(3, '0'),
-            order: sceneIndex + 1,
-            content,
-            wordCount,
-          });
-          if (!scene) {
-            throw new NotFoundException(
-              'No se pudo crear una escena del EPUB.',
-            );
-          }
-
-          importedImages += transformed.stats.imported;
-          skippedImages += transformed.stats.skipped;
-          importedWords += wordCount;
-        }
-      }
+          ),
+      );
+      const importedCounts = chapterCounts.reduce(
+        (counts, chapter) => ({
+          imported: counts.imported + chapter.imported,
+          skipped: counts.skipped + chapter.skipped,
+          importedWords: counts.importedWords + chapter.importedWords,
+        }),
+        { imported: 0, skipped: epub.skippedImages, importedWords: 0 },
+      );
 
       return {
         project,
         importedChapters: epub.chapters.length,
-        importedImages,
-        skippedImages,
-        importedWords,
+        importedImages: importedCounts.imported,
+        skippedImages: importedCounts.skipped,
+        importedWords: importedCounts.importedWords,
       };
     } catch (error) {
       await Promise.allSettled(

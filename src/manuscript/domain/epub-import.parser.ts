@@ -1,8 +1,21 @@
-import { BadRequestException } from '@nestjs/common';
 import JSZip from 'jszip';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
 type JSZipObject = JSZip.JSZipObject;
+
+export class EpubImportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EpubImportError';
+  }
+}
+
+class ArchiveEntryTooLargeError extends Error {}
+class EpubArchiveLimitError extends EpubImportError {}
+
+interface DecompressionBudget {
+  decompressedBytes: number;
+}
 
 const MAX_ARCHIVE_ENTRIES = 5_000;
 const MAX_UNCOMPRESSED_ARCHIVE_SIZE = 250 * 1024 * 1024;
@@ -32,21 +45,25 @@ const XML_PARSER = new XMLParser({
   htmlEntities: true,
 });
 
-type XmlText = { kind: 'text'; value: string };
-type XmlElement = {
+interface XmlText {
+  kind: 'text';
+  value: string;
+}
+
+interface XmlElement {
   kind: 'element';
   name: string;
   attributes: Record<string, string>;
   children: XmlNode[];
-};
+}
 type XmlNode = XmlText | XmlElement;
 
-export type EpubImportImage = {
+export interface EpubImportImage {
   id: string;
   buffer: Buffer;
   contentType: string;
   extension: string;
-};
+}
 
 export interface EpubImportScene {
   title: string;
@@ -58,18 +75,18 @@ export interface EpubImportChapter {
   scenes: EpubImportScene[];
 }
 
-export type ParsedEpub = {
+export interface ParsedEpub {
   title: string;
   chapters: EpubImportChapter[];
   images: Map<string, EpubImportImage>;
   skippedImages: number;
-};
+}
 
-type ImageCatalog = {
+interface ImageCatalog {
   bySource: Map<string, string | null>;
   images: Map<string, EpubImportImage>;
   skippedSources: Set<string>;
-};
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -77,69 +94,65 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function parseOrderedNodes(value: unknown): XmlNode[] {
-  if (!Array.isArray(value)) {
+function parseOrderedRecord(value: unknown): XmlNode[] {
+  const record = asRecord(value);
+  if (!record) {
     return [];
   }
+  if ('#text' in record) {
+    const text = record['#text'];
+    return typeof text === 'string' && text
+      ? [{ kind: 'text', value: text }]
+      : [];
+  }
 
-  const result: XmlNode[] = [];
-  for (const item of value) {
-    const record = asRecord(item);
-    if (!record) {
-      continue;
+  const rawAttributes = asRecord(record[':@']) ?? {};
+  const attributes = Object.fromEntries(
+    Object.entries(rawAttributes)
+      .filter(
+        ([key, attributeValue]) =>
+          key.startsWith('@_') && typeof attributeValue === 'string',
+      )
+      .map(([key, attributeValue]) => [
+        key.slice(2).toLowerCase(),
+        attributeValue as string,
+      ]),
+  );
+  return Object.entries(record).flatMap(([name, children]) => {
+    if (
+      name === ':@' ||
+      name.startsWith('#') ||
+      name.startsWith('?') ||
+      name.startsWith('!')
+    ) {
+      return [];
     }
-
-    if ('#text' in record) {
-      const text = record['#text'];
-      if (typeof text === 'string' && text) {
-        result.push({ kind: 'text', value: text });
-      }
-      continue;
-    }
-
-    const rawAttributes = asRecord(record[':@']) ?? {};
-    const attributes: Record<string, string> = {};
-    for (const [key, attributeValue] of Object.entries(rawAttributes)) {
-      if (key.startsWith('@_') && typeof attributeValue === 'string') {
-        attributes[key.slice(2).toLowerCase()] = attributeValue;
-      }
-    }
-
-    for (const [name, children] of Object.entries(record)) {
-      if (
-        name === ':@' ||
-        name.startsWith('#') ||
-        name.startsWith('?') ||
-        name.startsWith('!')
-      ) {
-        continue;
-      }
-
-      result.push({
-        kind: 'element',
+    return [
+      {
+        kind: 'element' as const,
         name: name.toLowerCase(),
         attributes,
         children: parseOrderedNodes(children),
-      });
-    }
-  }
+      },
+    ];
+  });
+}
 
-  return result;
+function parseOrderedNodes(value: unknown): XmlNode[] {
+  return Array.isArray(value) ? value.flatMap(parseOrderedRecord) : [];
 }
 
 function parseXml(xml: string): XmlElement {
   const validation = XMLValidator.validate(xml);
   if (validation !== true) {
-    throw new BadRequestException(
-      'El EPUB contiene un documento XML inválido.',
-    );
+    throw new EpubImportError('El EPUB contiene un documento XML inválido.');
   }
 
   const root = parseOrderedNodes(XML_PARSER.parse(xml)).find(
     (node): node is XmlElement => node.kind === 'element',
   );
   if (!root) {
-    throw new BadRequestException('El EPUB no contiene documentos válidos.');
+    throw new EpubImportError('El EPUB no contiene documentos válidos.');
   }
   return root;
 }
@@ -177,39 +190,109 @@ function archivePath(baseFile: string, reference: string): string {
       `https://epub.invalid/${baseFile}`,
     );
   } catch {
-    throw new BadRequestException(
-      'El EPUB contiene una ruta de archivo inválida.',
-    );
+    throw new EpubImportError('El EPUB contiene una ruta de archivo inválida.');
   }
 
   if (url.origin !== 'https://epub.invalid') {
-    throw new BadRequestException(
-      'El EPUB contiene una ruta externa inválida.',
-    );
+    throw new EpubImportError('El EPUB contiene una ruta externa inválida.');
   }
 
   try {
     return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
   } catch {
-    throw new BadRequestException(
-      'El EPUB contiene una ruta de archivo inválida.',
-    );
+    throw new EpubImportError('El EPUB contiene una ruta de archivo inválida.');
   }
 }
 
-function zipUncompressedSize(file: JSZipObject): number {
-  const internal = file as JSZipObject & {
-    _data?: { uncompressedSize?: number };
+interface JSZipNodeStream extends NodeJS.ReadableStream {
+  destroy(error?: Error): this;
+  _helper?: {
+    pause(): unknown;
+    _worker?: { error(error: Error): unknown };
   };
-  return internal._data?.uncompressedSize ?? 0;
 }
 
-async function readArchiveText(zip: JSZip, path: string): Promise<string> {
-  const file = zip.file(path);
-  if (!file || file.dir || zipUncompressedSize(file) > MAX_XML_ENTRY_SIZE) {
-    throw new BadRequestException('El EPUB está incompleto o dañado.');
+function abortArchiveStream(stream: JSZipNodeStream): void {
+  // JSZip's Node adapter exposes no public cancellation method for its worker.
+  const worker = stream._helper?._worker;
+  if (worker) {
+    worker.error(new Error('EPUB entry exceeded its limit.'));
+  } else {
+    stream._helper?.pause();
   }
-  return file.async('string');
+  stream.destroy();
+}
+
+function readArchiveBytes(
+  file: JSZipObject,
+  maxEntryBytes: number,
+  budget: DecompressionBudget,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const stream = file.nodeStream('nodebuffer') as JSZipNodeStream;
+    const chunks: Buffer[] = [];
+    let entryBytes = 0;
+    let settled = false;
+
+    const fail = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+      abortArchiveStream(stream);
+    };
+
+    stream.on('data', (chunk: Buffer) => {
+      if (settled) {
+        return;
+      }
+      entryBytes += chunk.length;
+      budget.decompressedBytes += chunk.length;
+      if (budget.decompressedBytes > MAX_UNCOMPRESSED_ARCHIVE_SIZE) {
+        fail(
+          new EpubArchiveLimitError(
+            'El EPUB excede el tamaño descomprimido permitido.',
+          ),
+        );
+        return;
+      }
+      if (entryBytes > maxEntryBytes) {
+        fail(new ArchiveEntryTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on('error', () => {
+      fail(new EpubImportError('El EPUB está incompleto o dañado.'));
+    });
+    stream.on('end', () => {
+      if (!settled) {
+        settled = true;
+        resolve(Buffer.concat(chunks, entryBytes));
+      }
+    });
+  });
+}
+
+async function readArchiveText(
+  zip: JSZip,
+  path: string,
+  budget: DecompressionBudget,
+  maxEntryBytes = MAX_XML_ENTRY_SIZE,
+): Promise<string> {
+  const file = zip.file(path);
+  if (!file || file.dir) {
+    throw new EpubImportError('El EPUB está incompleto o dañado.');
+  }
+  try {
+    return (await readArchiveBytes(file, maxEntryBytes, budget)).toString();
+  } catch (error) {
+    if (error instanceof ArchiveEntryTooLargeError) {
+      throw new EpubImportError('El EPUB está incompleto o dañado.');
+    }
+    throw error;
+  }
 }
 
 function normalizeWhitespace(value: string): string {
@@ -221,7 +304,7 @@ function trimInlineEdges(nodes: Record<string, unknown>[]): void {
     (node) => node['type'] === 'text' && typeof node['text'] === 'string',
   );
   const first = textNodes[0];
-  const last = textNodes[textNodes.length - 1];
+  const last = textNodes.at(-1);
   if (first && typeof first['text'] === 'string') {
     first['text'] = first['text'].trimStart();
   }
@@ -310,7 +393,7 @@ function numberWidth(value: string | undefined): number | null {
   if (!value) {
     return null;
   }
-  const match = value.trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/i);
+  const match = /^(\d+(?:\.\d+)?)(?:px)?$/i.exec(value.trim());
   if (!match?.[1]) {
     return null;
   }
@@ -326,7 +409,7 @@ function imageLayout(
   const parentClass = attribute(parent, 'class') ?? '';
   const width =
     numberWidth(attribute(image, 'width')) ??
-    numberWidth(style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i)?.[1]);
+    numberWidth(/(?:^|;)\s*width\s*:\s*([^;]+)/i.exec(style)?.[1]);
   if (parentClass.split(/\s+/u).includes('image--float-left')) {
     return { width, textFlow: 'text-right' };
   }
@@ -339,11 +422,12 @@ function imageLayout(
 function dividerNode(element: XmlElement): Record<string, unknown> {
   const image = elements(element, 'img')[0];
   const source = image ? (attribute(image, 'src') ?? '') : '';
-  const match = source.match(
-    /divider-(flourish|diamonds|stars|waves|dots|asterisks|moon)(?:-[0-9a-f]{6})?\.svg(?:[?#]|$)/i,
-  );
+  const match =
+    /divider-(flourish|diamonds|stars|waves|dots|asterisks|moon)(?:-[0-9a-f]{6})?\.svg(?:[?#]|$)/i.exec(
+      source,
+    );
   const style = attribute(element, 'style') ?? '';
-  const color = style.match(/(?:^|;)\s*color\s*:\s*(#[0-9a-f]{6})/i)?.[1];
+  const color = /(?:^|;)\s*color\s*:\s*(#[0-9a-f]{6})/i.exec(style)?.[1];
   return {
     type: 'sceneDivider',
     attrs: {
@@ -447,6 +531,103 @@ function paragraph(
   return paragraphContent(element.children, element, documentPath, catalog);
 }
 
+const IGNORED_BLOCK_TAGS = new Set(['script', 'style', 'head', 'title']);
+const BLOCK_TAGS = new Set([
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'blockquote',
+  'ul',
+  'ol',
+  'hr',
+  'pre',
+  'div',
+  'section',
+  'article',
+  'main',
+  'figure',
+  'img',
+]);
+
+function listBlock(
+  element: XmlElement,
+  documentPath: string,
+  catalog: ImageCatalog,
+): Record<string, unknown>[] {
+  const listItems = element.children
+    .filter(
+      (item): item is XmlElement =>
+        item.kind === 'element' && item.name === 'li',
+    )
+    .map((item) => {
+      const content = parseBlocks(item, documentPath, catalog);
+      return {
+        type: 'listItem',
+        content: content.length ? content : [{ type: 'paragraph' }],
+      };
+    });
+  if (!listItems.length) {
+    return [];
+  }
+  return [
+    {
+      type: element.name === 'ul' ? 'bulletList' : 'orderedList',
+      ...(element.name === 'ol' && attribute(element, 'start')
+        ? { attrs: { start: Number(attribute(element, 'start')) || 1 } }
+        : {}),
+      content: listItems,
+    },
+  ];
+}
+
+function blockContent(
+  child: XmlElement,
+  parent: XmlElement,
+  documentPath: string,
+  catalog: ImageCatalog,
+): Record<string, unknown>[] {
+  if (child.name === 'p') {
+    return paragraph(child, documentPath, catalog);
+  }
+  if (/^h[1-6]$/u.test(child.name)) {
+    const content = inlineNodes(child.children);
+    trimInlineEdges(content);
+    return content.length
+      ? [
+          {
+            type: 'heading',
+            attrs: { level: Number(child.name.slice(1)) },
+            content,
+          },
+        ]
+      : [];
+  }
+  if (child.name === 'hr') {
+    return [{ type: 'horizontalRule' }];
+  }
+  if (child.name === 'img') {
+    return makeImageNode(child, parent, documentPath, catalog);
+  }
+  if (child.name === 'ul' || child.name === 'ol') {
+    return listBlock(child, documentPath, catalog);
+  }
+  if (child.name === 'blockquote') {
+    const content = parseBlocks(child, documentPath, catalog);
+    return content.length ? [{ type: 'blockquote', content }] : [];
+  }
+  if (child.name === 'pre') {
+    const text = textContent(child);
+    return text
+      ? [{ type: 'codeBlock', content: [{ type: 'text', text }] }]
+      : [];
+  }
+  return parseBlocks(child, documentPath, catalog);
+}
+
 function parseBlocks(
   element: XmlElement,
   documentPath: string,
@@ -468,38 +649,10 @@ function parseBlocks(
       inline.push(child);
       continue;
     }
-
-    const tag = child.name;
-    if (
-      tag === 'script' ||
-      tag === 'style' ||
-      tag === 'head' ||
-      tag === 'title'
-    ) {
+    if (IGNORED_BLOCK_TAGS.has(child.name)) {
       continue;
     }
-    const isBlock = [
-      'p',
-      'h1',
-      'h2',
-      'h3',
-      'h4',
-      'h5',
-      'h6',
-      'blockquote',
-      'ul',
-      'ol',
-      'hr',
-      'pre',
-      'div',
-      'section',
-      'article',
-      'main',
-      'figure',
-      'img',
-    ].includes(tag);
-
-    if (!isBlock) {
+    if (!BLOCK_TAGS.has(child.name)) {
       if (elements(child, 'img').length > 0) {
         flushInline();
         result.push(
@@ -512,60 +665,7 @@ function parseBlocks(
     }
 
     flushInline();
-    if (tag === 'p') {
-      result.push(...paragraph(child, documentPath, catalog));
-    } else if (/^h[1-6]$/u.test(tag)) {
-      const content = inlineNodes(child.children);
-      trimInlineEdges(content);
-      if (content.length) {
-        result.push({
-          type: 'heading',
-          attrs: { level: Number(tag.slice(1)) },
-          content,
-        });
-      }
-    } else if (tag === 'hr') {
-      result.push({ type: 'horizontalRule' });
-    } else if (tag === 'img') {
-      result.push(...makeImageNode(child, element, documentPath, catalog));
-    } else if (tag === 'ul' || tag === 'ol') {
-      const listItems = child.children
-        .filter(
-          (item): item is XmlElement =>
-            item.kind === 'element' && item.name === 'li',
-        )
-        .map((item) => {
-          const content = parseBlocks(item, documentPath, catalog);
-          return {
-            type: 'listItem',
-            content: content.length ? content : [{ type: 'paragraph' }],
-          };
-        });
-      if (listItems.length) {
-        result.push({
-          type: tag === 'ul' ? 'bulletList' : 'orderedList',
-          ...(tag === 'ol' && attribute(child, 'start')
-            ? { attrs: { start: Number(attribute(child, 'start')) || 1 } }
-            : {}),
-          content: listItems,
-        });
-      }
-    } else if (tag === 'blockquote') {
-      const content = parseBlocks(child, documentPath, catalog);
-      if (content.length) {
-        result.push({ type: 'blockquote', content });
-      }
-    } else if (tag === 'pre') {
-      const text = textContent(child);
-      if (text) {
-        result.push({
-          type: 'codeBlock',
-          content: [{ type: 'text', text }],
-        });
-      }
-    } else {
-      result.push(...parseBlocks(child, documentPath, catalog));
-    }
+    result.push(...blockContent(child, element, documentPath, catalog));
   }
 
   flushInline();
@@ -586,69 +686,137 @@ function imageTypeFromSource(
   source: string,
 ): { contentType: string; extension: string } | null {
   const withoutQuery = source.split(/[?#]/, 1)[0] ?? source;
-  const extension = withoutQuery.match(/\.[^./]+$/u)?.[0]?.toLowerCase();
+  const extension = /\.[^./]+$/u.exec(withoutQuery)?.[0]?.toLowerCase();
   return extension ? (IMAGE_TYPES[extension] ?? null) : null;
 }
 
-function dataImage(source: string): {
-  buffer: Buffer;
-  contentType: string;
-} | null {
-  const match = source.match(
-    /^data:(image\/(?:jpeg|png|webp|avif));([^,]*),(.*)$/is,
+function dataImage(source: string): Buffer | null {
+  const match = /^data:(image\/(?:jpeg|png|webp|avif));([^,]*),(.*)$/is.exec(
+    source,
   );
-  if (!match?.[1] || match[2] === undefined || match[3] === undefined) {
+  if (!match?.[2] || match[3] === undefined) {
+    return null;
+  }
+  const isBase64 = match[2].toLowerCase().includes('base64');
+  if (
+    (isBase64 && match[3].length > Math.ceil((MAX_IMAGE_SIZE * 4) / 3) + 4) ||
+    (!isBase64 && match[3].length > MAX_IMAGE_SIZE * 3)
+  ) {
     return null;
   }
   try {
-    const buffer = match[2].toLowerCase().includes('base64')
+    return isBase64
       ? Buffer.from(match[3], 'base64')
       : Buffer.from(decodeURIComponent(match[3]));
-    return { buffer, contentType: match[1].toLowerCase() };
   } catch {
     return null;
   }
+}
+
+function hasAvifBrand(buffer: Buffer): boolean {
+  const brandsEnd = Math.min(buffer.length, 64);
+  const majorBrand = buffer.toString('ascii', 8, 12);
+  if (majorBrand === 'avif' || majorBrand === 'avis') {
+    return true;
+  }
+  for (let offset = 16; offset + 4 <= brandsEnd; offset += 4) {
+    const brand = buffer.toString('ascii', offset, offset + 4);
+    if (brand === 'avif' || brand === 'avis') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function imageTypeFromBytes(
+  buffer: Buffer,
+): { contentType: string; extension: string } | null {
+  const isPng =
+    buffer.length >= 8 &&
+    buffer
+      .subarray(0, 8)
+      .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (isPng) {
+    return IMAGE_TYPES['.png']!;
+  }
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return IMAGE_TYPES['.jpg']!;
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return IMAGE_TYPES['.webp']!;
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 4, 8) === 'ftyp' &&
+    hasAvifBrand(buffer)
+  ) {
+    return IMAGE_TYPES['.avif']!;
+  }
+  return null;
 }
 
 async function loadImageAsset(
   zip: JSZip,
   source: string,
   key: string,
+  budget: DecompressionBudget,
 ): Promise<EpubImportImage | null> {
   let buffer: Buffer;
-  let contentType: string;
   if (source.startsWith('data:')) {
     const image = dataImage(source);
     if (!image) {
       return null;
     }
-    ({ buffer, contentType } = image);
+    buffer = image;
   } else {
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source)) {
       return null;
     }
-    const type = imageTypeFromSource(key);
-    const file = zip.file(key);
-    if (
-      !type ||
-      !file ||
-      file.dir ||
-      zipUncompressedSize(file) > MAX_IMAGE_SIZE
-    ) {
+    if (!imageTypeFromSource(key)) {
       return null;
     }
-    buffer = await file.async('nodebuffer');
-    contentType = type.contentType;
+    const file = zip.file(key);
+    if (!file || file.dir) {
+      return null;
+    }
+    try {
+      buffer = await readArchiveBytes(file, MAX_IMAGE_SIZE, budget);
+    } catch (error) {
+      if (error instanceof ArchiveEntryTooLargeError) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   if (!buffer.length || buffer.length > MAX_IMAGE_SIZE) {
     return null;
   }
-  const extension =
-    Object.entries(IMAGE_TYPES).find(
-      ([, type]) => type.contentType === contentType,
-    )?.[1].extension ?? 'jpg';
-  return { id: '', buffer, contentType, extension };
+  const imageType = imageTypeFromBytes(buffer);
+  return imageType ? { id: '', buffer, ...imageType } : null;
+}
+
+function mapSequentially<T, R>(
+  values: readonly T[],
+  map: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let sequence = Promise.resolve();
+  values.forEach((value, index) => {
+    sequence = sequence.then(async () => {
+      results.push(await map(value, index));
+    });
+  });
+  return sequence.then(() => results);
 }
 
 async function catalogImages(
@@ -656,33 +824,35 @@ async function catalogImages(
   documentRoot: XmlElement,
   documentPath: string,
   catalog: ImageCatalog,
+  budget: DecompressionBudget,
 ): Promise<void> {
-  const imageElements = imagesOutsideDividers(documentRoot);
-  for (const image of imageElements) {
+  const sources = imagesOutsideDividers(documentRoot).flatMap((image) => {
     const source = attribute(image, 'src');
     if (!source) {
-      continue;
+      return [];
     }
     const key = imageSourceKey(documentPath, source);
     if (catalog.bySource.has(key)) {
-      continue;
+      return [];
     }
-    if (catalog.images.size >= MAX_IMAGES) {
-      catalog.bySource.set(key, null);
-      catalog.skippedSources.add(key);
-      continue;
-    }
+    catalog.bySource.set(key, null);
+    return [{ source, key }];
+  });
 
-    const asset = await loadImageAsset(zip, source, key);
-    if (!asset) {
-      catalog.bySource.set(key, null);
+  await mapSequentially(sources, async ({ source, key }) => {
+    if (catalog.images.size >= MAX_IMAGES) {
       catalog.skippedSources.add(key);
-      continue;
+      return;
+    }
+    const asset = await loadImageAsset(zip, source, key, budget);
+    if (!asset) {
+      catalog.skippedSources.add(key);
+      return;
     }
     const id = `epub-image-${catalog.images.size + 1}`;
     catalog.images.set(id, { ...asset, id });
     catalog.bySource.set(key, id);
-  }
+  });
 }
 
 function imagesOutsideDividers(
@@ -702,10 +872,40 @@ function imagesOutsideDividers(
   );
 }
 
-function tocTitles(
+function navigationTitles(
+  root: XmlElement,
+  navPath: string,
+): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const link of elements(root, 'a')) {
+    const href = attribute(link, 'href');
+    const label = textContent(link).trim();
+    if (href && label) {
+      titles.set(archivePath(navPath, href), label);
+    }
+  }
+  return titles;
+}
+
+function ncxTitles(root: XmlElement, navPath: string): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const point of elements(root, 'navpoint')) {
+    const content = elements(point, 'content')[0];
+    const navLabel = elements(point, 'text')[0];
+    const contentSrc = content ? attribute(content, 'src') : undefined;
+    const label = navLabel ? textContent(navLabel).trim() : '';
+    if (contentSrc && label) {
+      titles.set(archivePath(navPath, contentSrc), label);
+    }
+  }
+  return titles;
+}
+
+async function tocTitles(
   zip: JSZip,
   opfPath: string,
   manifest: XmlElement[],
+  budget: DecompressionBudget,
 ): Promise<Map<string, string>> {
   const navItem = manifest.find((item) =>
     (attribute(item, 'properties') ?? '').split(/\s+/u).includes('nav'),
@@ -715,37 +915,22 @@ function tocTitles(
   );
   const item = navItem ?? ncxItem;
   const href = item ? attribute(item, 'href') : undefined;
-  if (!href) {
-    return Promise.resolve(new Map());
+  if (!item || !href) {
+    return new Map<string, string>();
   }
 
   const navPath = archivePath(opfPath, href);
-  return readArchiveText(zip, navPath)
-    .then((source) => {
-      const root = parseXml(source);
-      const titles = new Map<string, string>();
-      if (item === navItem) {
-        for (const link of elements(root, 'a')) {
-          const linkHref = attribute(link, 'href');
-          const label = textContent(link).trim();
-          if (linkHref && label) {
-            titles.set(archivePath(navPath, linkHref), label);
-          }
-        }
-      } else {
-        for (const point of elements(root, 'navpoint')) {
-          const content = elements(point, 'content')[0];
-          const navLabel = elements(point, 'text')[0];
-          const contentSrc = content ? attribute(content, 'src') : undefined;
-          const label = navLabel ? textContent(navLabel).trim() : '';
-          if (contentSrc && label) {
-            titles.set(archivePath(navPath, contentSrc), label);
-          }
-        }
-      }
-      return titles;
-    })
-    .catch(() => new Map());
+  try {
+    const root = parseXml(await readArchiveText(zip, navPath, budget));
+    return item === navItem
+      ? navigationTitles(root, navPath)
+      : ncxTitles(root, navPath);
+  } catch (error) {
+    if (error instanceof EpubArchiveLimitError) {
+      throw error;
+    }
+    return new Map<string, string>();
+  }
 }
 
 function fallbackTitle(path: string): string {
@@ -965,6 +1150,125 @@ interface ContentBoundary {
   consumeNext?: boolean;
 }
 
+const CHAPTER_PREFIXES = new Set([
+  'acto',
+  'act',
+  'capitulo',
+  'chapter',
+  'parte',
+  'part',
+]);
+const SCENE_PREFIXES = new Set(['escena', 'scene']);
+const CHAPTER_ORDINALS = new Set([
+  'primero',
+  'primera',
+  'segundo',
+  'segunda',
+  'tercero',
+  'tercera',
+  'cuarto',
+  'cuarta',
+  'quinto',
+  'quinta',
+  'sexto',
+  'sexta',
+  'septimo',
+  'septima',
+  'octavo',
+  'octava',
+  'noveno',
+  'novena',
+  'decimo',
+  'decima',
+]);
+const SCENE_ORDINALS = new Set([
+  'primera',
+  'primero',
+  'segunda',
+  'segundo',
+  'tercera',
+  'tercero',
+  'cuarta',
+  'cuarto',
+  'quinta',
+  'quinto',
+  'sexta',
+  'sexto',
+  'septima',
+  'septimo',
+  'octava',
+  'octavo',
+]);
+const NAMED_CHAPTERS = new Set(['personajes', 'dedicatoria', 'prologo']);
+
+function startsWithBoundaryNumber(
+  label: string,
+  prefixes: Set<string>,
+  ordinals: Set<string>,
+): boolean {
+  const match = /^(\S+)\s+([a-z0-9]+)\b/u.exec(label);
+  if (!match || !prefixes.has(match[1]!)) {
+    return false;
+  }
+  const number = match[2]!;
+  return (
+    /^\d+$/u.test(number) || isRomanNumeral(number) || ordinals.has(number)
+  );
+}
+
+function romanChapterBoundary(
+  block: XmlElement,
+  index: number,
+  blocks: XmlElement[],
+  romanChapterCount: number,
+): ContentBoundary | null {
+  if (
+    romanChapterCount <= 1 ||
+    !isRomanNumeral(normalizeWhitespace(textContent(block)).trim()) ||
+    block.name !== 'p'
+  ) {
+    return null;
+  }
+  const next = blocks[index + 1];
+  const nextText = next ? normalizeWhitespace(textContent(next)).trim() : '';
+  const currentClass = attribute(block, 'class');
+  const nextClass = next ? attribute(next, 'class') : undefined;
+  if (
+    next?.name !== 'p' ||
+    !nextText ||
+    nextText.length > 260 ||
+    (currentClass && currentClass !== nextClass)
+  ) {
+    return null;
+  }
+  const numeral = normalizeWhitespace(textContent(block))
+    .trim()
+    .replace(/[.]$/u, '');
+  return {
+    kind: 'chapter',
+    title: `${numeral}. ${nextText}`,
+    consumeNext: true,
+  };
+}
+
+function semanticChapterBoundary(
+  block: XmlElement,
+  label: string,
+  bookTitle: string,
+  text: string,
+): ContentBoundary | null {
+  const isSemanticHeading = block.name === 'h1' || block.name === 'h2';
+  if (
+    isSemanticHeading &&
+    normalizedLabel(bookTitle) !== label &&
+    !isGenericNavigationTitle(text) &&
+    text.length <= 180
+  ) {
+    return { kind: 'chapter', title: text };
+  }
+  return null;
+}
+
 function structuralBoundary(
   block: XmlElement,
   index: number,
@@ -978,55 +1282,30 @@ function structuralBoundary(
     return null;
   }
 
-  const actOrChapter =
-    /^(?:acto|act|cap[ií]tulo|chapter|parte|part)\s+(?:[ivxlcdm]+|\d+|primero|primera|segundo|segunda|tercero|tercera|cuarto|cuarta|quinto|quinta|sexto|sexta|septimo|septima|octavo|octava|noveno|novena|decimo|decima)\b/iu;
-  if (actOrChapter.test(label)) {
+  if (startsWithBoundaryNumber(label, CHAPTER_PREFIXES, CHAPTER_ORDINALS)) {
     return { kind: 'chapter', title: text };
   }
-  if (
-    /^(?:escena|scene)\s+(?:[ivxlcdm]+|\d+|primera|primero|segunda|segundo|tercera|tercero|cuarta|cuarto|quinta|quinto|sexta|sexto|septima|septimo|octava|octavo)\b/iu.test(
-      text,
-    )
-  ) {
+  if (startsWithBoundaryNumber(label, SCENE_PREFIXES, SCENE_ORDINALS)) {
     return { kind: 'scene', title: text };
   }
-  if (['personajes', 'dedicatoria', 'prologo'].includes(label)) {
+  if (NAMED_CHAPTERS.has(label)) {
     return { kind: 'chapter', title: text };
   }
   if (label === 'introduccion') {
     return null;
   }
 
-  if (romanChapterCount > 1 && isRomanNumeral(text) && block.name === 'p') {
-    const next = blocks[index + 1];
-    const nextText = next ? normalizeWhitespace(textContent(next)).trim() : '';
-    const currentClass = attribute(block, 'class');
-    const nextClass = next ? attribute(next, 'class') : undefined;
-    if (
-      next?.name === 'p' &&
-      nextText.length > 0 &&
-      nextText.length <= 260 &&
-      (!currentClass || currentClass === nextClass)
-    ) {
-      return {
-        kind: 'chapter',
-        title: `${text.replace(/[.]$/u, '')}. ${nextText}`,
-        consumeNext: true,
-      };
-    }
+  const romanBoundary = romanChapterBoundary(
+    block,
+    index,
+    blocks,
+    romanChapterCount,
+  );
+  if (romanBoundary) {
+    return romanBoundary;
   }
 
-  const normalizedBookTitle = normalizedLabel(bookTitle);
-  const isSemanticHeading = ['h1', 'h2'].includes(block.name);
-  if (
-    isSemanticHeading &&
-    normalizedBookTitle !== label &&
-    !isGenericNavigationTitle(text) &&
-    text.length <= 180
-  ) {
-    return { kind: 'chapter', title: text };
-  }
-  return null;
+  return semanticChapterBoundary(block, label, bookTitle, text);
 }
 
 function meaningfulNavigationTitle(value: string | undefined): string | null {
@@ -1084,13 +1363,18 @@ function parseContentGroup(
   };
 }
 
-function logicalChapters(
+interface LogicalChapterState {
+  chapters: EpubImportChapter[];
+  currentChapter: EpubImportChapter | null;
+  currentSceneTitle: string;
+  currentSceneBlocks: XmlElement[];
+  preludeBlocks: XmlElement[];
+}
+
+function contentBlocksWithoutPreamble(
   sourceBlocks: XmlElement[],
-  documentPath: string,
-  catalog: ImageCatalog,
   bookTitle: string,
-  defaultTitle: string,
-): EpubImportChapter[] {
+): XmlElement[] {
   const blocks = sourceBlocks.filter((block) => {
     const text = normalizeWhitespace(textContent(block)).trim();
     return text && !isBoilerplateText(text);
@@ -1098,14 +1382,13 @@ function logicalChapters(
   if (!blocks.length) {
     return [];
   }
-
   const firstContentIndex = blocks.findIndex((block) => {
     const text = normalizeWhitespace(textContent(block)).trim();
     return (
       !isYear(text) && normalizedLabel(text) !== normalizedLabel(bookTitle)
     );
   });
-  const contentBlocksWithoutPreamble = blocks.filter((block, index) => {
+  return blocks.filter((block, index) => {
     if (index > 2) {
       return true;
     }
@@ -1116,18 +1399,101 @@ function logicalChapters(
       normalizedLabel(text) !== normalizedLabel(bookTitle)
     );
   });
-  const romanChapterCount = contentBlocksWithoutPreamble.filter((block) =>
+}
+
+function flushLogicalScene(
+  state: LogicalChapterState,
+  documentPath: string,
+  catalog: ImageCatalog,
+): void {
+  if (!state.currentChapter || !state.currentSceneBlocks.length) {
+    state.currentSceneBlocks = [];
+    return;
+  }
+  state.currentChapter.scenes.push({
+    title: state.currentSceneTitle,
+    content: parseContentGroup(state.currentSceneBlocks, documentPath, catalog),
+  });
+  state.currentSceneBlocks = [];
+}
+
+function flushLogicalChapter(
+  state: LogicalChapterState,
+  documentPath: string,
+  catalog: ImageCatalog,
+): void {
+  flushLogicalScene(state, documentPath, catalog);
+  if (state.currentChapter?.scenes.length) {
+    state.chapters.push(state.currentChapter);
+  }
+  state.currentChapter = null;
+  state.currentSceneTitle = 'Texto';
+}
+
+function processChapterBoundary(
+  state: LogicalChapterState,
+  boundary: ContentBoundary,
+  defaultTitle: string,
+  documentPath: string,
+  catalog: ImageCatalog,
+): void {
+  if (boundary.kind === 'chapter') {
+    if (!state.currentChapter && state.preludeBlocks.length) {
+      state.currentChapter = { title: 'Introducción', scenes: [] };
+      state.currentSceneTitle = 'Texto';
+      state.currentSceneBlocks = state.preludeBlocks;
+      state.preludeBlocks = [];
+    }
+    flushLogicalChapter(state, documentPath, catalog);
+    state.currentChapter = { title: boundary.title.slice(0, 200), scenes: [] };
+    return;
+  }
+
+  if (!state.currentChapter) {
+    state.currentChapter = { title: defaultTitle, scenes: [] };
+    state.currentSceneTitle = 'Texto';
+    state.currentSceneBlocks = state.preludeBlocks;
+    state.preludeBlocks = [];
+  }
+  flushLogicalScene(state, documentPath, catalog);
+  state.currentSceneTitle = boundary.title.slice(0, 200);
+}
+
+function finishLogicalChapters(
+  state: LogicalChapterState,
+  defaultTitle: string,
+  documentPath: string,
+  catalog: ImageCatalog,
+): void {
+  if (!state.currentChapter && state.preludeBlocks.length) {
+    state.currentChapter = { title: defaultTitle, scenes: [] };
+    state.currentSceneBlocks = state.preludeBlocks;
+  } else if (state.preludeBlocks.length) {
+    flushLogicalChapter(state, documentPath, catalog);
+    state.currentChapter = { title: 'Introducción', scenes: [] };
+    state.currentSceneBlocks = state.preludeBlocks;
+  }
+  flushLogicalChapter(state, documentPath, catalog);
+}
+
+function logicalChapters(
+  sourceBlocks: XmlElement[],
+  documentPath: string,
+  catalog: ImageCatalog,
+  bookTitle: string,
+  defaultTitle: string,
+): EpubImportChapter[] {
+  const blocks = contentBlocksWithoutPreamble(sourceBlocks, bookTitle);
+  if (!blocks.length) {
+    return [];
+  }
+
+  const romanChapterCount = blocks.filter((block) =>
     isRomanNumeral(normalizeWhitespace(textContent(block)).trim()),
   ).length;
 
-  const boundaries = contentBlocksWithoutPreamble.map((block, index) =>
-    structuralBoundary(
-      block,
-      index,
-      contentBlocksWithoutPreamble,
-      bookTitle,
-      romanChapterCount,
-    ),
+  const boundaries = blocks.map((block, index) =>
+    structuralBoundary(block, index, blocks, bookTitle, romanChapterCount),
   );
   if (!boundaries.some(Boolean)) {
     return [
@@ -1136,101 +1502,67 @@ function logicalChapters(
         scenes: [
           {
             title: 'Texto',
-            content: parseContentGroup(
-              contentBlocksWithoutPreamble,
-              documentPath,
-              catalog,
-            ),
+            content: parseContentGroup(blocks, documentPath, catalog),
           },
         ],
       },
     ];
   }
 
-  const chapters: EpubImportChapter[] = [];
-  let currentChapter: EpubImportChapter | null = null;
-  let currentSceneTitle = 'Texto';
-  let currentSceneBlocks: XmlElement[] = [];
-  let preludeBlocks: XmlElement[] = [];
-
-  const flushScene = (): void => {
-    if (!currentChapter || !currentSceneBlocks.length) {
-      currentSceneBlocks = [];
-      return;
-    }
-    currentChapter.scenes.push({
-      title: currentSceneTitle,
-      content: parseContentGroup(currentSceneBlocks, documentPath, catalog),
-    });
-    currentSceneBlocks = [];
+  const state: LogicalChapterState = {
+    chapters: [],
+    currentChapter: null,
+    currentSceneTitle: 'Texto',
+    currentSceneBlocks: [],
+    preludeBlocks: [],
   };
-
-  const flushChapter = (): void => {
-    flushScene();
-    if (currentChapter?.scenes.length) {
-      chapters.push(currentChapter);
-    }
-    currentChapter = null;
-    currentSceneTitle = 'Texto';
-  };
-
-  const startChapter = (title: string): void => {
-    flushChapter();
-    currentChapter = { title: title.slice(0, 200), scenes: [] };
-  };
-
-  for (const [index, block] of contentBlocksWithoutPreamble.entries()) {
+  for (const [index, block] of blocks.entries()) {
     const boundary = boundaries[index];
     if (index > 0 && boundaries[index - 1]?.consumeNext) {
       continue;
     }
-    if (boundary?.kind === 'chapter') {
-      if (!currentChapter && preludeBlocks.length) {
-        currentChapter = { title: 'Introducción', scenes: [] };
-        currentSceneTitle = 'Texto';
-        currentSceneBlocks = preludeBlocks;
-        preludeBlocks = [];
-      }
-      startChapter(boundary.title);
+    if (boundary) {
+      processChapterBoundary(
+        state,
+        boundary,
+        defaultTitle,
+        documentPath,
+        catalog,
+      );
       continue;
     }
-
-    if (boundary?.kind === 'scene') {
-      currentChapter ??= { title: defaultTitle, scenes: [] };
-      flushScene();
-      currentSceneTitle = boundary.title.slice(0, 200);
-      continue;
-    }
-
-    if (currentChapter) {
-      currentSceneBlocks.push(block);
+    if (state.currentChapter) {
+      state.currentSceneBlocks.push(block);
     } else {
-      preludeBlocks.push(block);
+      state.preludeBlocks.push(block);
     }
   }
 
-  if (!currentChapter && preludeBlocks.length) {
-    currentChapter = { title: defaultTitle, scenes: [] };
-    currentSceneBlocks = preludeBlocks;
-  } else if (preludeBlocks.length) {
-    flushChapter();
-    currentChapter = { title: 'Introducción', scenes: [] };
-    currentSceneBlocks = preludeBlocks;
-  }
-  flushChapter();
+  finishLogicalChapters(state, defaultTitle, documentPath, catalog);
 
-  if (chapters.length === 1 && defaultTitle) {
-    chapters[0]!.title = defaultTitle.slice(0, 200);
+  if (state.chapters.length === 1 && defaultTitle) {
+    state.chapters[0]!.title = defaultTitle.slice(0, 200);
   }
-  return chapters;
+  return state.chapters;
 }
 
-export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
+interface EpubPackage {
+  opfPath: string;
+  title: string;
+  manifestById: Map<string, XmlElement>;
+  spineItems: XmlElement[];
+  navigationTitles: Map<string, string>;
+}
+
+async function loadEpubArchive(
+  buffer: Buffer,
+  budget: DecompressionBudget,
+): Promise<JSZip> {
   if (buffer.length > MAX_EPUB_FILE_SIZE) {
-    throw new BadRequestException('El EPUB no puede superar los 50 MB.');
+    throw new EpubImportError('El EPUB no puede superar los 50 MB.');
   }
   if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
-    throw new BadRequestException(
+    throw new EpubImportError(
       'El archivo seleccionado no parece ser un EPUB válido.',
     );
   }
@@ -1239,56 +1571,49 @@ export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
   try {
     zip = await JSZip.loadAsync(buffer);
   } catch {
-    throw new BadRequestException('No se pudo abrir el archivo EPUB.');
+    throw new EpubImportError('No se pudo abrir el archivo EPUB.');
   }
 
   const entries = Object.values(zip.files).filter((file) => !file.dir);
   if (entries.length > MAX_ARCHIVE_ENTRIES) {
-    throw new BadRequestException(
-      'El EPUB contiene demasiados archivos internos.',
-    );
+    throw new EpubImportError('El EPUB contiene demasiados archivos internos.');
   }
-  const uncompressedSize = entries.reduce(
-    (total, file) => total + zipUncompressedSize(file),
-    0,
-  );
-  if (uncompressedSize > MAX_UNCOMPRESSED_ARCHIVE_SIZE) {
-    throw new BadRequestException(
-      'El EPUB excede el tamaño descomprimido permitido.',
-    );
-  }
-
   const mimetype = zip.file('mimetype');
   if (
     !mimetype ||
-    (await mimetype.async('string')).trim() !== 'application/epub+zip'
+    mimetype.dir ||
+    (await readArchiveText(zip, 'mimetype', budget, 128)).trim() !==
+      'application/epub+zip'
   ) {
-    throw new BadRequestException(
+    throw new EpubImportError(
       'El archivo no declara el formato EPUB requerido.',
     );
   }
+  return zip;
+}
 
+async function readEpubPackage(
+  zip: JSZip,
+  budget: DecompressionBudget,
+): Promise<EpubPackage> {
   const container = parseXml(
-    await readArchiveText(zip, 'META-INF/container.xml'),
+    await readArchiveText(zip, 'META-INF/container.xml', budget),
   );
   const rootfile = elements(container, 'rootfile')[0];
   const opfHref = rootfile ? attribute(rootfile, 'full-path') : undefined;
   if (!opfHref) {
-    throw new BadRequestException('El EPUB no indica dónde está su catálogo.');
+    throw new EpubImportError('El EPUB no indica dónde está su catálogo.');
   }
 
   const opfPath = archivePath('META-INF/container.xml', `../${opfHref}`);
-  const packageRoot = parseXml(await readArchiveText(zip, opfPath));
+  const packageRoot = parseXml(await readArchiveText(zip, opfPath, budget));
   const metadata = elements(packageRoot, 'metadata')[0] ?? packageRoot;
-  const title = elements(metadata, 'title')[0]
-    ? textContent(elements(metadata, 'title')[0]!).trim()
-    : '';
+  const titleNode = elements(metadata, 'title')[0];
+  const title = titleNode ? textContent(titleNode).trim() : '';
   const manifest = elements(packageRoot, 'item');
   const spine = elements(packageRoot, 'spine')[0];
   if (!spine || !manifest.length) {
-    throw new BadRequestException(
-      'El EPUB no contiene capítulos para importar.',
-    );
+    throw new EpubImportError('El EPUB no contiene capítulos para importar.');
   }
 
   const manifestById = new Map(
@@ -1296,102 +1621,157 @@ export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
       .map((item) => [attribute(item, 'id') ?? '', item] as const)
       .filter(([id]) => id),
   );
-  const nav = await tocTitles(zip, opfPath, manifest);
+  const navigationTitles = await tocTitles(zip, opfPath, manifest, budget);
+  return {
+    opfPath,
+    title,
+    manifestById,
+    spineItems: elements(spine, 'itemref'),
+    navigationTitles,
+  };
+}
+
+function spineItemPath(
+  itemref: XmlElement,
+  packageData: EpubPackage,
+  opfPath: string,
+): string | null {
+  if (attribute(itemref, 'linear') === 'no') {
+    return null;
+  }
+  const item = packageData.manifestById.get(attribute(itemref, 'idref') ?? '');
+  const href = item ? attribute(item, 'href') : undefined;
+  const mediaType = item ? attribute(item, 'media-type') : undefined;
+  if (
+    !item ||
+    !href ||
+    !mediaType ||
+    !XHTML_MEDIA_TYPES.has(mediaType.toLowerCase()) ||
+    (attribute(item, 'properties') ?? '').split(/\s+/u).includes('nav')
+  ) {
+    return null;
+  }
+  return archivePath(opfPath, href);
+}
+
+async function parseSpineDocument(
+  zip: JSZip,
+  itemref: XmlElement,
+  packageData: EpubPackage,
+  opfPath: string,
+  catalog: ImageCatalog,
+  budget: DecompressionBudget,
+): Promise<EpubImportChapter[]> {
+  const path = spineItemPath(itemref, packageData, opfPath);
+  if (!path) {
+    return [];
+  }
+  const source = await readArchiveText(zip, path, budget);
+  const root = parseXml(source);
+  const navigationTitle = packageData.navigationTitles.get(path);
+  if (isFrontMatterDocument(path, navigationTitle, root)) {
+    return [];
+  }
+
+  await catalogImages(zip, root, path, catalog, budget);
+  const body = elements(root, 'body')[0] ?? root;
+  const documentTitle = chapterTitleFromDocument(root, packageData.title);
+  const chapterTitle = preferredChapterTitle(
+    navigationTitle,
+    documentTitle,
+    packageData.title,
+    path,
+  );
+  return logicalChapters(
+    contentBlocks(body),
+    path,
+    catalog,
+    packageData.title,
+    chapterTitle,
+  );
+}
+
+function mergeLeadingIntroduction(
+  chapters: EpubImportChapter[],
+  documentChapters: EpubImportChapter[],
+): void {
+  const leadingFragment = documentChapters[0];
+  const nextChapter = documentChapters[1];
+  const previousChapter = chapters.at(-1);
+  const previousNumber = previousChapter
+    ? leadingRomanChapterNumber(previousChapter.title)
+    : null;
+  const nextNumber = nextChapter
+    ? leadingRomanChapterNumber(nextChapter.title)
+    : null;
+  if (
+    !leadingFragment ||
+    normalizedLabel(leadingFragment.title) !== 'introduccion' ||
+    leadingFragment.scenes.length !== 1 ||
+    !previousChapter?.scenes.length ||
+    previousNumber === null ||
+    nextNumber !== previousNumber + 1
+  ) {
+    return;
+  }
+  const previousScene = previousChapter.scenes.at(-1);
+  const fragmentScene = leadingFragment.scenes[0];
+  if (previousScene && fragmentScene) {
+    if (appendContent(previousScene.content, fragmentScene.content)) {
+      documentChapters.shift();
+    }
+  }
+}
+
+async function parseSpine(
+  zip: JSZip,
+  opfPath: string,
+  packageData: EpubPackage,
+  catalog: ImageCatalog,
+  budget: DecompressionBudget,
+): Promise<EpubImportChapter[]> {
+  const chapters: EpubImportChapter[] = [];
+  await mapSequentially(packageData.spineItems, async (itemref) => {
+    const documentChapters = await parseSpineDocument(
+      zip,
+      itemref,
+      packageData,
+      opfPath,
+      catalog,
+      budget,
+    );
+    mergeLeadingIntroduction(chapters, documentChapters);
+    chapters.push(...documentChapters);
+    if (chapters.length > 500) {
+      throw new EpubImportError('El EPUB supera el máximo de 500 capítulos.');
+    }
+  });
+  if (!chapters.length) {
+    throw new EpubImportError('No se encontró texto importable en el EPUB.');
+  }
+  return chapters;
+}
+
+export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
+  const budget: DecompressionBudget = { decompressedBytes: 0 };
+  const zip = await loadEpubArchive(buffer, budget);
+  const packageData = await readEpubPackage(zip, budget);
   const catalog: ImageCatalog = {
     bySource: new Map(),
     images: new Map(),
     skippedSources: new Set(),
   };
-  const chapters: EpubImportChapter[] = [];
-
-  for (const itemref of elements(spine, 'itemref')) {
-    if (attribute(itemref, 'linear') === 'no') {
-      continue;
-    }
-    const item = manifestById.get(attribute(itemref, 'idref') ?? '');
-    const href = item ? attribute(item, 'href') : undefined;
-    const mediaType = item ? attribute(item, 'media-type') : undefined;
-    if (
-      !item ||
-      !href ||
-      !mediaType ||
-      !XHTML_MEDIA_TYPES.has(mediaType.toLowerCase()) ||
-      (attribute(item, 'properties') ?? '').split(/\s+/u).includes('nav')
-    ) {
-      continue;
-    }
-
-    const path = archivePath(opfPath, href);
-    const source = await readArchiveText(zip, path);
-    const root = parseXml(source);
-    const body = elements(root, 'body')[0] ?? root;
-    const navigationTitle = nav.get(path);
-    if (isFrontMatterDocument(path, navigationTitle, root)) {
-      continue;
-    }
-
-    await catalogImages(zip, root, path, catalog);
-    const blocks = contentBlocks(body);
-    const documentTitle = chapterTitleFromDocument(root, title);
-    const chapterTitle = preferredChapterTitle(
-      navigationTitle,
-      documentTitle,
-      title,
-      path,
-    );
-    const documentChapters = logicalChapters(
-      blocks,
-      path,
-      catalog,
-      title,
-      chapterTitle,
-    );
-    const leadingFragment = documentChapters[0];
-    const nextChapter = documentChapters[1];
-    const previousChapter = chapters.at(-1);
-    const previousNumber = previousChapter
-      ? leadingRomanChapterNumber(previousChapter.title)
-      : null;
-    const nextNumber = nextChapter
-      ? leadingRomanChapterNumber(nextChapter.title)
-      : null;
-
-    if (
-      leadingFragment &&
-      normalizedLabel(leadingFragment.title) === 'introduccion' &&
-      leadingFragment.scenes.length === 1 &&
-      previousChapter?.scenes.length &&
-      previousNumber !== null &&
-      nextNumber === previousNumber + 1
-    ) {
-      const previousScene = previousChapter.scenes.at(-1);
-      const fragmentScene = leadingFragment.scenes[0];
-      if (
-        previousScene &&
-        fragmentScene &&
-        appendContent(previousScene.content, fragmentScene.content)
-      ) {
-        documentChapters.shift();
-      }
-    }
-
-    chapters.push(...documentChapters);
-    if (chapters.length > 500) {
-      throw new BadRequestException(
-        'El EPUB supera el máximo de 500 capítulos.',
-      );
-    }
-  }
-
-  if (!chapters.length) {
-    throw new BadRequestException(
-      'No se encontró texto importable en el EPUB.',
-    );
-  }
+  const chapters = await parseSpine(
+    zip,
+    packageData.opfPath,
+    packageData,
+    catalog,
+    budget,
+  );
 
   return {
-    title: (title.trim()
-      ? title
+    title: (packageData.title.trim()
+      ? packageData.title
       : (chapters[0]?.title ?? 'Obra importada')
     ).slice(0, 200),
     chapters,

@@ -16,13 +16,21 @@ const importDiagnosticCodes = new Set([
 
 describe('source imports', () => {
   it('resolves every backend import and imported symbol', () => {
-    const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists, 'tsconfig.json');
+    const configPath = ts.findConfigFile(
+      process.cwd(),
+      ts.sys.fileExists,
+      'tsconfig.json',
+    );
     expect(configPath).toBeDefined();
-    if (!configPath) return;
+    if (!configPath) {
+      return;
+    }
 
     const config = ts.readConfigFile(configPath, ts.sys.readFile);
     expect(config.error).toBeUndefined();
-    if (config.error) return;
+    if (config.error) {
+      return;
+    }
 
     const parsed = ts.parseJsonConfigFileContent(
       config.config,
@@ -37,7 +45,9 @@ describe('source imports', () => {
     });
     const diagnostics = [...parsed.errors, ...ts.getPreEmitDiagnostics(program)]
       .filter(({ code }) => importDiagnosticCodes.has(code))
-      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+      .map((diagnostic) =>
+        ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
+      );
 
     expect(diagnostics).toEqual([]);
   });

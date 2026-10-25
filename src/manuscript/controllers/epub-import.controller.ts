@@ -92,7 +92,10 @@ export class EpubImportController {
       throw new BadRequestException('Seleccioná un archivo EPUB válido.');
     }
 
-    const project = parseProjectInput(req.body?.project);
+    const body: unknown = req.body;
+    const project = parseProjectInput(
+      isRecord(body) ? body['project'] : undefined,
+    );
     const result = await this.epubImportService.importEpub(
       req.user.id,
       project,
