@@ -1,4 +1,8 @@
 import type { ChatIntent } from '../ports/chat-intent-provider.port';
+import {
+  WORK_QUESTION_TYPES,
+  type WorkQuestionType,
+} from '../domain/work-question-type';
 
 const VALID_INTENTS = new Set<ChatIntent>([
   'work',
@@ -9,18 +13,30 @@ const VALID_INTENTS = new Set<ChatIntent>([
   'creative',
 ]);
 
-export function parseIntentResponse(value: string): ChatIntent {
+export function parseIntentResponse(value: string): {
+  intent: ChatIntent;
+  workQuestionType?: WorkQuestionType;
+} {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
     throw new SyntaxError('Gemini API returned invalid routing JSON');
   }
-  const intent = toRecord(parsed)?.['intent'];
+  const record = toRecord(parsed);
+  const intent = record?.['intent'];
   if (typeof intent !== 'string' || !VALID_INTENTS.has(intent as ChatIntent)) {
     throw new TypeError('Gemini API returned an invalid chat intent');
   }
-  return intent as ChatIntent;
+  const workQuestionType = record?.['workQuestionType'];
+  return {
+    intent: intent as ChatIntent,
+    ...(intent === 'work' &&
+    typeof workQuestionType === 'string' &&
+    WORK_QUESTION_TYPES.some((type) => type === workQuestionType)
+      ? { workQuestionType: workQuestionType as WorkQuestionType }
+      : {}),
+  };
 }
 
 export function parseVerificationResponse(value: string): boolean {

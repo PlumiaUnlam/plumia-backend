@@ -33,14 +33,14 @@ export class PgApplicationHelpStore implements ApplicationHelpStore {
           "words", "sources", "updated", "content_hash", "created_at", "updated_at"
         )
         SELECT
-          item."id", item."doc_id", item."title", item."breadcrumb", item."area", item."route",
-          item."related", item."questions", item."keywords", item."content", item."embed_text",
-          item."words", item."sources", item."updated", item."content_hash", now(), now()
+          item."id", item."docId", item."title", item."breadcrumb", item."area", item."route",
+          item."related", item."questions", item."keywords", item."content", item."embedText",
+          item."words", item."sources", item."updated", item."contentHash", now(), now()
         FROM jsonb_to_recordset(${snapshot}::jsonb) AS item(
-          "id" text, "doc_id" text, "title" text, "breadcrumb" text, "area" text,
+          "id" text, "docId" text, "title" text, "breadcrumb" text, "area" text,
           "route" text, "related" text[], "questions" text[], "keywords" text[],
-          "content" text, "embed_text" text, "words" integer, "sources" text[],
-          "updated" text, "content_hash" text
+          "content" text, "embedText" text, "words" integer, "sources" text[],
+          "updated" text, "contentHash" text
         )
         ON CONFLICT ("id") DO UPDATE SET
           "doc_id" = EXCLUDED."doc_id",

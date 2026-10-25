@@ -1,4 +1,5 @@
 import type { ChatOpenConflict, ChatSource } from '../domain/chat.types';
+import type { WorkQuestionType } from '../domain/work-question-type';
 
 export const CHAT_GENERATION_PROVIDER = Symbol('CHAT_GENERATION_PROVIDER');
 
@@ -13,6 +14,7 @@ export interface ChatGenerationInput {
   sources: ChatSource[];
   openConflicts?: ChatOpenConflict[];
   expectedDomain?: 'work' | 'application_help';
+  workQuestionType?: WorkQuestionType;
   signal?: AbortSignal;
 }
 

@@ -15,6 +15,7 @@ import {
   type ChatIntentProvider,
 } from './ports/chat-intent-provider.port';
 import type { ChatHistoryEntry } from './ports/chat-generation-provider.port';
+import type { WorkQuestionType } from './domain/work-question-type';
 
 export type ChatRoute =
   | {
@@ -24,7 +25,13 @@ export type ChatRoute =
       outputTokens: number;
     }
   | {
-      kind: 'work' | 'application_help';
+      kind: 'work';
+      workQuestionType?: WorkQuestionType;
+      inputTokens: number;
+      outputTokens: number;
+    }
+  | {
+      kind: 'application_help';
       inputTokens: number;
       outputTokens: number;
     };
@@ -70,8 +77,15 @@ export class ChatRoutingService {
     };
     switch (decision.intent) {
       case 'work':
+        return {
+          kind: 'work',
+          ...(decision.workQuestionType
+            ? { workQuestionType: decision.workQuestionType }
+            : {}),
+          ...usage,
+        };
       case 'application_help':
-        return { kind: decision.intent, ...usage };
+        return { kind: 'application_help', ...usage };
       case 'out_of_scope':
         return {
           kind: 'immediate',

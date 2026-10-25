@@ -26,6 +26,11 @@ import {
   presentReviewedSources,
   withConflictNotice,
 } from './domain/chat-source-presentation';
+import { prioritizeWorkSources } from './domain/work-source-priority';
+import {
+  CHAT_INTERACTION_COUNT_RESPONSE,
+  type WorkQuestionType,
+} from './domain/work-question-type';
 import type {
   ChatExchange,
   ChatAction,
@@ -177,11 +182,18 @@ const FIRST_MENTION_GENERIC_TERMS = new Set([
   'aparecio',
   'capitulo',
   'escena',
+  'historia',
+  'libro',
+  'lugar',
   'mencion',
   'menciona',
   'mencione',
   'mencionada',
   'mencionado',
+  'novela',
+  'objeto',
+  'personaje',
+  'personajes',
   'primer',
   'referencia',
   'vez',
@@ -417,6 +429,22 @@ export class ChatService {
       );
     }
 
+    const workQuestionType =
+      route.kind === 'work' ? (route.workQuestionType ?? 'general') : 'general';
+    if (route.kind === 'work' && workQuestionType === 'interaction_count') {
+      return this.persistExchange(
+        thread,
+        question,
+        {
+          answer: CHAT_INTERACTION_COUNT_RESPONSE,
+          sources: [],
+          inputTokens: route.inputTokens,
+          outputTokens: route.outputTokens,
+        },
+        signal,
+      );
+    }
+
     let domain: 'work' | 'application_help' = route.kind;
     let inputTokens = route.inputTokens;
     let outputTokens = route.outputTokens;
@@ -432,6 +460,7 @@ export class ChatService {
               thread.projectId,
               question,
               history,
+              workQuestionType,
               signal,
             );
       throwIfAborted(signal);
@@ -462,7 +491,11 @@ export class ChatService {
 
       const deterministicAnswer =
         domain === 'work'
-          ? buildDeterministicEvidenceAnswer(question, sources)
+          ? buildDeterministicEvidenceAnswer(
+              question,
+              sources,
+              workQuestionType,
+            )
           : null;
       if (deterministicAnswer) {
         const notice = withConflictNotice(
@@ -493,6 +526,7 @@ export class ChatService {
         sources,
         openConflicts,
         expectedDomain: domain,
+        workQuestionType: domain === 'work' ? workQuestionType : 'general',
         ...(signal ? { signal } : {}),
       });
       throwIfAborted(signal);
@@ -556,6 +590,7 @@ export class ChatService {
           claims: result.claims,
           sources,
           openConflicts,
+          workQuestionType: domain === 'work' ? workQuestionType : 'general',
           ...(signal ? { signal } : {}),
         });
         throwIfAborted(signal);
@@ -689,6 +724,7 @@ export class ChatService {
     projectId: string,
     question: string,
     history: ChatHistoryEntry[],
+    workQuestionType: WorkQuestionType,
     signal?: AbortSignal,
   ): Promise<ChatSource[]> {
     const historyQuery = history
@@ -703,7 +739,12 @@ export class ChatService {
       signal,
     );
     throwIfAborted(signal);
-    const plan = buildRetrievalPlan(question, terms, semanticMatches);
+    const plan = buildRetrievalPlan(
+      question,
+      terms,
+      semanticMatches,
+      workQuestionType,
+    );
     const [chunks, entities, relationships, timelineEvents] =
       await this.fetchRetrievalCandidates(projectId, plan, signal);
     throwIfAborted(signal);
@@ -714,6 +755,7 @@ export class ChatService {
       plan.countTerm,
       question,
       plan.semanticRanks,
+      plan.firstMentionIntent,
     );
     const wikiSources = buildWikiSources(
       entities,
@@ -735,19 +777,15 @@ export class ChatService {
       return aggregateCountSources(manuscriptSources);
     }
 
-    if (plan.broadTimelineIntent) {
-      return fitContext([
-        ...timelineSources.slice(0, 12),
-        ...manuscriptSources.slice(0, 6),
-        ...wikiSources.slice(0, 2),
-        ...timelineSources.slice(12),
-      ]);
-    }
-    return fitContext([
-      ...manuscriptSources,
-      ...wikiSources,
-      ...timelineSources,
-    ]);
+    return fitContext(
+      prioritizeWorkSources(
+        workQuestionType,
+        manuscriptSources,
+        wikiSources,
+        timelineSources,
+        plan.broadTimelineIntent,
+      ),
+    );
   }
 
   private async fetchRetrievalCandidates(
@@ -954,10 +992,12 @@ function buildRetrievalPlan(
   question: string,
   terms: string[],
   semanticMatches: VectorSearchResult[],
+  workQuestionType: WorkQuestionType,
 ): RetrievalPlan {
   const normalizedQuestion = normalize(question);
   const countTerm = extractCountTerm(question);
-  const firstMentionIntent = isFirstMentionIntent(question);
+  const firstMentionIntent =
+    workQuestionType === 'first_appearance' || isFirstMentionIntent(question);
   const timelineIntent =
     normalizedQuestion.includes('linea de tiempo') ||
     normalizedQuestion.includes('cronolog') ||
@@ -1351,6 +1391,7 @@ function buildTimelineSource(
 function buildDeterministicEvidenceAnswer(
   question: string,
   sources: ChatSource[],
+  workQuestionType: WorkQuestionType,
 ): { answer: string; sources: ChatSource[] } | null {
   const countTerm = extractCountTerm(question);
   if (countTerm) {
@@ -1394,7 +1435,10 @@ function buildDeterministicEvidenceAnswer(
     }
   }
 
-  if (isFirstMentionIntent(question)) {
+  if (
+    workQuestionType === 'first_appearance' ||
+    isFirstMentionIntent(question)
+  ) {
     const firstMention = sources.find(
       (source) => source.kind === 'manuscript' && source.textQuote,
     );
@@ -1437,8 +1481,9 @@ function rankManuscriptSources<
   countTerm: string | null,
   question: string,
   semanticRanks: ReadonlyMap<string, number>,
+  firstMentionIntent: boolean,
 ): ChatSource[] {
-  const wantsFirst = isFirstMentionIntent(question);
+  const wantsFirst = firstMentionIntent;
   const matchTerms = wantsFirst ? firstMentionTerms(terms) : terms;
   const candidates = chunks
     .map((chunk) => {

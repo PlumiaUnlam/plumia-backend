@@ -1,4 +1,5 @@
 import type { ChatHistoryEntry } from './chat-generation-provider.port';
+import type { WorkQuestionType } from '../domain/work-question-type';
 
 export const CHAT_INTENT_PROVIDER = Symbol('CHAT_INTENT_PROVIDER');
 
@@ -19,6 +20,7 @@ export interface ChatIntentInput {
 
 export interface ChatIntentResult {
   intent: ChatIntent;
+  workQuestionType?: WorkQuestionType;
   inputTokens: number;
   outputTokens: number;
 }

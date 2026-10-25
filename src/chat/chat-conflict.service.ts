@@ -72,7 +72,7 @@ export class ChatConflictService {
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: MAX_CANDIDATE_ALERTS,
-    } as const;
+    } satisfies Prisma.AuditAlertFindManyArgs;
     const alerts = await this.prisma.auditAlert.findMany(alertsQuery);
     throwIfAborted(signal);
     if (alerts.length === 0) {
