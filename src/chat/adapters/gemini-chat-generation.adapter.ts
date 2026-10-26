@@ -236,7 +236,7 @@ export class GeminiChatGenerationAdapter
         responseJsonSchema: INTENT_SCHEMA,
         temperature: 0,
         maxOutputTokens: 1_024,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         ...(input.signal ? { abortSignal: input.signal } : {}),
       },
     });
@@ -336,7 +336,7 @@ export class GeminiChatGenerationAdapter
         responseJsonSchema: VERIFICATION_SCHEMA,
         temperature: 0,
         maxOutputTokens: 1_024,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         ...(input.signal ? { abortSignal: input.signal } : {}),
       },
     });

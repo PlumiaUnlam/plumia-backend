@@ -52,6 +52,7 @@ describe('chat policy', () => {
     'Mostrame la escena clave del capítulo 3',
     'Decime cuál es el razonamiento de Tomás al huir',
     'Responde qué sistema de magia usa Maren',
+    'Responde según la escena de la batalla qué sistema de magia usa Maren',
   ])('allows ordinary questions about the work: %s', (question) => {
     expect(getPolicyRefusal(question)).toBeNull();
   });
@@ -77,9 +78,18 @@ describe('chat policy', () => {
 
   it('detects creative continuation without blocking analytical questions', () => {
     expect(isCreativeRequest('Escribime el próximo capítulo')).toBe(true);
+    expect(isCreativeRequest('Escribe el próximo capítulo')).toBe(true);
     expect(isCreativeRequest('¿Qué ocurre en el próximo capítulo?')).toBe(
       false,
     );
     expect(isCreativeRequest('¿Qué inventa Maren en el capítulo?')).toBe(false);
+  });
+
+  it.each([
+    '¿Continúa Maren viva al final?',
+    '¿Inventa Tomás el artefacto en el capítulo 2?',
+    '¿Escribe Lucía la carta antes de huir?',
+  ])('does not classify an analytical question as creative: %s', (question) => {
+    expect(isCreativeRequest(question)).toBe(false);
   });
 });

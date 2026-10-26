@@ -1,16 +1,20 @@
 const CREATIVE_REQUEST_WORDS = [
   'escribeme',
   'escribime',
+  'redactame',
+  'continuame',
+  'inventame',
+] as const;
+const CREATIVE_GENERATION_WORDS = [
+  'genera',
+  'generame',
+  'completa',
   'escribe',
   'redacta',
-  'redactame',
   'continua',
-  'continuame',
   'autocompleta',
-  'inventame',
   'inventa',
 ] as const;
-const CREATIVE_GENERATION_WORDS = ['genera', 'generame', 'completa'] as const;
 const CREATIVE_TARGET_WORDS = [
   'parrafo',
   'escena',
@@ -42,7 +46,7 @@ const PROMPT_INJECTION_PHRASES = [
   'chain of thought',
 ] as const;
 const ROLE_SPOOFING_PATTERN =
-  /\b(?:actua|comportate|finge|simula|responde)\b.{0,40}\b(?:como|en modo|ser|de)\b.{0,40}\b(?:sistema|system|desarrollador|developer|sin filtros|sin restricciones)\b/;
+  /\b(?:actua|comportate|finge|simula|responde)\b.{0,40}\b(?:como|en modo|ser)\b.{0,40}\b(?:sistema|system|desarrollador|developer|sin filtros|sin restricciones)\b/;
 const INTERNAL_DATA_EXTRACTION_PATTERNS = [
   /\b(?:revela|revelame|mostra|mostrame|muestra|muestrame|imprime)\b.{0,80}\b(?:tu prompt|tus instrucciones|prompt del sistema|prompt interno|instrucciones internas|instrucciones ocultas|razonamiento interno|cadena de pensamiento)\b/,
   /\b(?:dame|decime|dime|filtra|extrae|lista|pasame)\b.{0,80}\b(?:tu prompt|tus instrucciones|prompt del sistema|prompt interno|instrucciones internas|instrucciones ocultas|razonamiento interno|cadena de pensamiento)\b/,
