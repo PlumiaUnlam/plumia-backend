@@ -8,14 +8,29 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApplicationHelpIndexService } from './application-help-index.service';
 import { ChatEmbeddingIndexService } from './chat-embedding-index.service';
-import { getApplicationGuidance } from './domain/application-guide';
+import { ChatRoutingService, type ChatRoute } from './chat-routing.service';
+import { ChatConflictService } from './chat-conflict.service';
 import {
-  getPolicyRefusal,
-  getSocialResponse,
-  isCreativeRequest,
+  CHAT_CLARIFICATION_RESPONSE,
+  CHAT_OUT_OF_SCOPE_RESPONSE,
 } from './domain/chat-policy';
 import { buildGroundedResponse } from './domain/grounded-response';
+import {
+  buildNavigationAction,
+  isSafeChatRoute,
+} from './domain/chat-navigation';
+import {
+  PRIMARY_CHAT_SOURCE_LIMIT,
+  presentReviewedSources,
+  withConflictNotice,
+} from './domain/chat-source-presentation';
+import { prioritizeWorkSources } from './domain/work-source-priority';
+import {
+  CHAT_INTERACTION_COUNT_RESPONSE,
+  type WorkQuestionType,
+} from './domain/work-question-type';
 import type {
   ChatExchange,
   ChatAction,
@@ -27,8 +42,13 @@ import type {
 import {
   CHAT_GENERATION_PROVIDER,
   type ChatGenerationProvider,
+  type ChatGenerationResult,
   type ChatHistoryEntry,
 } from './ports/chat-generation-provider.port';
+import {
+  CHAT_EVIDENCE_VERIFIER,
+  type ChatEvidenceVerifier,
+} from './ports/chat-evidence-verifier.port';
 import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
@@ -53,6 +73,21 @@ interface RetrievalPlan {
   timelineCandidateFilters: Prisma.TimelineEventWhereInput[];
 }
 
+interface ChatTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+interface RoutedChatContext {
+  thread: ChatThreadRecord;
+  question: string;
+  history: ChatHistoryEntry[];
+  signal: AbortSignal | undefined;
+  domain: 'work' | 'application_help';
+  workQuestionType: WorkQuestionType;
+  usage: ChatTokenUsage;
+}
+
 interface RetrievedEntity {
   id: string;
   canonicalName: string;
@@ -72,6 +107,8 @@ interface RetrievedEntity {
 interface RetrievedChunk {
   id: string;
   content: string;
+  chunkIndex: number;
+  contentHash: string | null;
   scene: {
     id: string;
     title: string | null;
@@ -123,6 +160,7 @@ const MAX_ENTITY_CANDIDATES = 40;
 const MAX_RELATIONSHIP_CANDIDATES = 80;
 const MAX_TIMELINE_CANDIDATES = 80;
 const MAX_CONTEXT_CHARS = 48_000;
+const MAX_CONTEXT_SOURCES = 20;
 
 const TIMELINE_GENERIC_TERMS = new Set([
   'cronologia',
@@ -154,6 +192,27 @@ const ENTITY_GENERIC_TERMS = new Set([
   'vinculo',
   'vinculos',
   'wiki',
+]);
+const FIRST_MENTION_GENERIC_TERMS = new Set([
+  'aparece',
+  'aparecio',
+  'capitulo',
+  'escena',
+  'historia',
+  'libro',
+  'lugar',
+  'mencion',
+  'menciona',
+  'mencione',
+  'mencionada',
+  'mencionado',
+  'novela',
+  'objeto',
+  'personaje',
+  'personajes',
+  'primer',
+  'referencia',
+  'vez',
 ]);
 const STOP_WORDS = new Set([
   'a',
@@ -221,10 +280,15 @@ export class ChatService {
     private readonly prisma: PrismaService,
     @Inject(CHAT_GENERATION_PROVIDER)
     private readonly generator: ChatGenerationProvider,
+    @Inject(CHAT_EVIDENCE_VERIFIER)
+    private readonly evidenceVerifier: ChatEvidenceVerifier,
     @Inject(VECTOR_STORE) private readonly vectorStore: VectorStore,
     @Inject(EMBEDDING_PROVIDER)
     private readonly embeddingProvider: Pick<EmbeddingProvider, 'model'>,
     private readonly embeddingIndex: ChatEmbeddingIndexService,
+    private readonly applicationHelpIndex: ApplicationHelpIndexService,
+    private readonly routing: ChatRoutingService,
+    private readonly conflicts: ChatConflictService,
   ) {}
 
   searchSimilarChunks(
@@ -365,131 +429,319 @@ export class ChatService {
     }));
     throwIfAborted(signal);
 
-    const policyRefusal = getPolicyRefusal(question);
-    if (policyRefusal) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: policyRefusal,
-          sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    const applicationGuidance = getApplicationGuidance(
-      question,
-      thread.projectId,
-      { history },
-    );
-    if (applicationGuidance) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: applicationGuidance.answer,
-          sources: [],
-          actions: [applicationGuidance.action],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    const socialResponse = getSocialResponse(question);
-    if (socialResponse) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: socialResponse,
-          sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    if (isCreativeRequest(question)) {
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer:
-            'Puedo ayudarte a consultar y auditar tu obra, pero no escribir, continuar ni autocompletar el manuscrito. Tu voz y tus decisiones creativas siguen siendo exclusivamente tuyas.',
-          sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        signal,
-      );
-    }
-
-    const sources = await this.retrieveSources(
-      thread.projectId,
-      question,
-      history,
-      signal,
-    );
+    const route = await this.routing.route(question, history, signal);
     throwIfAborted(signal);
-    if (sources.length === 0) {
+    return this.handleRoutedMessage(thread, question, history, route, signal);
+  }
+
+  private async handleRoutedMessage(
+    thread: ChatThreadRecord,
+    question: string,
+    history: ChatHistoryEntry[],
+    route: ChatRoute,
+    signal: AbortSignal | undefined,
+  ): Promise<ChatExchange> {
+    if (route.kind === 'immediate') {
       return this.persistExchange(
         thread,
         question,
         {
-          answer:
-            'No encontre informacion suficiente en el manuscrito, la Wiki ni la linea de tiempo para responder con seguridad.',
+          answer: route.answer,
           sources: [],
-          inputTokens: 0,
-          outputTokens: 0,
+          inputTokens: route.inputTokens,
+          outputTokens: route.outputTokens,
         },
         signal,
       );
     }
 
-    const deterministicAnswer = buildDeterministicEvidenceAnswer(
-      question,
-      sources,
-    );
-    if (deterministicAnswer) {
+    const workQuestionType =
+      route.kind === 'work' ? (route.workQuestionType ?? 'general') : 'general';
+    if (route.kind === 'work' && workQuestionType === 'interaction_count') {
       return this.persistExchange(
         thread,
         question,
         {
-          answer: deterministicAnswer.answer,
-          sources: deterministicAnswer.sources,
-          inputTokens: 0,
-          outputTokens: 0,
+          answer: CHAT_INTERACTION_COUNT_RESPONSE,
+          sources: [],
+          inputTokens: route.inputTokens,
+          outputTokens: route.outputTokens,
         },
         signal,
       );
     }
 
-    throwIfAborted(signal);
-    const result = await this.generator.generate({
-      question,
-      history,
-      sources,
-      ...(signal ? { signal } : {}),
-    });
-    throwIfAborted(signal);
-    const groundedResponse = buildGroundedResponse(result, sources);
-
-    return this.persistExchange(
+    return this.processRoutedMessage({
       thread,
       question,
-      {
-        answer: groundedResponse.answer,
-        sources: groundedResponse.sources,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-      },
+      history,
       signal,
+      domain: route.kind,
+      workQuestionType,
+      usage: {
+        inputTokens: route.inputTokens,
+        outputTokens: route.outputTokens,
+      },
+    });
+  }
+
+  private async processRoutedMessage(
+    context: RoutedChatContext,
+  ): Promise<ChatExchange> {
+    let domain = context.domain;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const exchange = await this.processRoutedAttempt(
+        context,
+        domain,
+        attempt === 0,
+      );
+      if (exchange) {
+        return exchange;
+      }
+      domain = domain === 'work' ? 'application_help' : 'work';
+    }
+    return this.persistClarification(context);
+  }
+
+  private async processRoutedAttempt(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    canRetryOnSourceMismatch: boolean,
+  ): Promise<ChatExchange | null> {
+    const sources = await this.retrieveDomainSources(context, domain);
+    throwIfAborted(context.signal);
+    if (sources.length === 0) {
+      return this.persistNoEvidence(context, domain);
+    }
+
+    const openConflicts =
+      domain === 'work'
+        ? await this.conflicts.findRelevant(
+            context.thread.projectId,
+            context.question,
+            sources,
+            context.signal,
+          )
+        : [];
+    throwIfAborted(context.signal);
+
+    const deterministicAnswer =
+      domain === 'work'
+        ? buildDeterministicEvidenceAnswer(
+            context.question,
+            sources,
+            context.workQuestionType,
+          )
+        : null;
+    if (deterministicAnswer) {
+      return this.persistDeterministicAnswer(
+        context,
+        deterministicAnswer,
+        sources,
+        openConflicts,
+      );
+    }
+
+    return this.generateRoutedResponse(
+      context,
+      domain,
+      sources,
+      openConflicts,
+      canRetryOnSourceMismatch,
+    );
+  }
+
+  private async generateRoutedResponse(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    sources: ChatSource[],
+    openConflicts: Parameters<typeof withConflictNotice>[1],
+    canRetryOnSourceMismatch: boolean,
+  ): Promise<ChatExchange | null> {
+    const result = await this.generator.generate({
+      question: context.question,
+      history: context.history,
+      sources,
+      openConflicts: [...openConflicts],
+      expectedDomain: domain,
+      workQuestionType:
+        domain === 'work' ? context.workQuestionType : 'general',
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    throwIfAborted(context.signal);
+    context.usage.inputTokens += result.inputTokens;
+    context.usage.outputTokens += result.outputTokens;
+
+    if (result.sourceMismatch && !result.outOfScope) {
+      return canRetryOnSourceMismatch
+        ? null
+        : this.persistClarification(context);
+    }
+    return this.persistGeneratedResponse(
+      context,
+      domain,
+      result,
+      sources,
+      openConflicts,
+    );
+  }
+
+  private persistClarification(
+    context: RoutedChatContext,
+  ): Promise<ChatExchange> {
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: CHAT_CLARIFICATION_RESPONSE,
+        sources: [],
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
+    );
+  }
+
+  private retrieveDomainSources(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+  ): Promise<ChatSource[]> {
+    return domain === 'application_help'
+      ? this.applicationHelpIndex.search(
+          context.question,
+          context.thread.projectId,
+          context.signal,
+        )
+      : this.retrieveSources(
+          context.thread.projectId,
+          context.question,
+          context.history,
+          context.workQuestionType,
+          context.signal,
+        );
+  }
+
+  private persistNoEvidence(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    conflicts: Parameters<typeof withConflictNotice>[1] = [],
+  ): Promise<ChatExchange> {
+    const notice = withConflictNotice(
+      noEvidenceAnswer(domain === 'application_help'),
+      conflicts,
+      context.thread.projectId,
+    );
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: notice.answer,
+        sources: [],
+        actions: notice.actions,
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
+    );
+  }
+
+  private persistDeterministicAnswer(
+    context: RoutedChatContext,
+    deterministicAnswer: { answer: string; sources: ChatSource[] },
+    reviewedSources: ChatSource[],
+    conflicts: Parameters<typeof withConflictNotice>[1],
+  ): Promise<ChatExchange> {
+    const notice = withConflictNotice(
+      deterministicAnswer.answer,
+      conflicts,
+      context.thread.projectId,
+    );
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: notice.answer,
+        sources: presentReviewedSources(
+          deterministicAnswer.sources,
+          reviewedSources,
+        ),
+        actions: notice.actions,
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
+    );
+  }
+
+  private async persistGeneratedResponse(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    result: ChatGenerationResult,
+    sources: ChatSource[],
+    conflicts: Parameters<typeof withConflictNotice>[1],
+  ): Promise<ChatExchange> {
+    if (result.outOfScope) {
+      return this.persistExchange(
+        context.thread,
+        context.question,
+        {
+          answer: CHAT_OUT_OF_SCOPE_RESPONSE,
+          sources: [],
+          inputTokens: context.usage.inputTokens,
+          outputTokens: context.usage.outputTokens,
+        },
+        context.signal,
+      );
+    }
+    if (result.claims.length === 0) {
+      return this.persistNoEvidence(context, domain, conflicts);
+    }
+
+    const groundedResponse = buildGroundedResponse(result, sources);
+    if (groundedResponse.sources.length > 0) {
+      const verification = await this.evidenceVerifier.verify({
+        question: context.question,
+        claims: result.claims,
+        sources,
+        openConflicts: [...conflicts],
+        workQuestionType:
+          domain === 'work' ? context.workQuestionType : 'general',
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      throwIfAborted(context.signal);
+      context.usage.inputTokens += verification.inputTokens;
+      context.usage.outputTokens += verification.outputTokens;
+      if (!verification.supported) {
+        return this.persistNoEvidence(context, domain, conflicts);
+      }
+    }
+
+    const navigationAction =
+      domain === 'application_help'
+        ? buildNavigationAction(groundedResponse.sources)
+        : null;
+    const notice = withConflictNotice(
+      groundedResponse.answer,
+      conflicts,
+      context.thread.projectId,
+    );
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: notice.answer,
+        sources:
+          groundedResponse.sources.length > 0
+            ? presentReviewedSources(groundedResponse.sources, sources)
+            : [],
+        actions: [
+          ...(navigationAction ? [navigationAction] : []),
+          ...notice.actions,
+        ],
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
     );
   }
 
@@ -560,6 +812,7 @@ export class ChatService {
     projectId: string,
     question: string,
     history: ChatHistoryEntry[],
+    workQuestionType: WorkQuestionType,
     signal?: AbortSignal,
   ): Promise<ChatSource[]> {
     const historyQuery = history
@@ -574,7 +827,12 @@ export class ChatService {
       signal,
     );
     throwIfAborted(signal);
-    const plan = buildRetrievalPlan(question, terms, semanticMatches);
+    const plan = buildRetrievalPlan(
+      question,
+      terms,
+      semanticMatches,
+      workQuestionType,
+    );
     const [chunks, entities, relationships, timelineEvents] =
       await this.fetchRetrievalCandidates(projectId, plan, signal);
     throwIfAborted(signal);
@@ -585,6 +843,7 @@ export class ChatService {
       plan.countTerm,
       question,
       plan.semanticRanks,
+      plan.firstMentionIntent,
     );
     const wikiSources = buildWikiSources(
       entities,
@@ -606,11 +865,15 @@ export class ChatService {
       return aggregateCountSources(manuscriptSources);
     }
 
-    return fitContext([
-      ...manuscriptSources,
-      ...timelineSources,
-      ...wikiSources,
-    ]);
+    return fitContext(
+      prioritizeWorkSources(
+        workQuestionType,
+        manuscriptSources,
+        wikiSources,
+        timelineSources,
+        plan.broadTimelineIntent,
+      ),
+    );
   }
 
   private async fetchRetrievalCandidates(
@@ -618,11 +881,23 @@ export class ChatService {
     plan: RetrievalPlan,
     signal?: AbortSignal,
   ): Promise<RetrievalCandidates> {
+    let chunksOrderBy: Prisma.ChunkOrderByWithRelationInput[] | null = null;
+    if (plan.countTerm) {
+      chunksOrderBy = [{ id: 'asc' as const }];
+    } else if (plan.firstMentionIntent) {
+      chunksOrderBy = [
+        { scene: { chapter: { book: { sortKey: 'asc' as const } } } },
+        { scene: { chapter: { sortKey: 'asc' as const } } },
+        { scene: { sortKey: 'asc' as const } },
+        { chunkIndex: 'asc' as const },
+      ];
+    }
     const chunksQuery = {
       where: buildChunkWhere(projectId, plan),
       include: {
         scene: { include: { chapter: { include: { book: true } } } },
       },
+      ...(chunksOrderBy ? { orderBy: chunksOrderBy } : {}),
       take:
         plan.countTerm || plan.firstMentionIntent
           ? MAX_ORDERED_CHUNK_CANDIDATES
@@ -680,6 +955,27 @@ export class ChatService {
       ],
     );
     throwIfAborted(signal);
+    const lastChunkId = chunks.at(-1)?.id;
+    const appendRemainingChunks = async (cursorId: string): Promise<void> => {
+      const nextPage = await this.prisma.chunk.findMany({
+        ...chunksQuery,
+        cursor: { id: cursorId },
+        skip: 1,
+      });
+      throwIfAborted(signal);
+      chunks.push(...nextPage);
+      const nextCursorId = nextPage.at(-1)?.id;
+      if (nextPage.length === MAX_ORDERED_CHUNK_CANDIDATES && nextCursorId) {
+        await appendRemainingChunks(nextCursorId);
+      }
+    };
+    if (
+      plan.countTerm &&
+      chunks.length === MAX_ORDERED_CHUNK_CANDIDATES &&
+      lastChunkId
+    ) {
+      await appendRemainingChunks(lastChunkId);
+    }
     return [
       chunks,
       entities,
@@ -703,7 +999,11 @@ export class ChatService {
         score: scoreText(buildTimelineSearchText(event), terms, question),
       }))
       .filter((entry) => entry.score > 0 || broadTimelineIntent)
-      .sort((left, right) => left.index - right.index)
+      .sort((left, right) =>
+        broadTimelineIntent
+          ? left.index - right.index
+          : right.score - left.score || left.index - right.index,
+      )
       .slice(0, MAX_TIMELINE_SOURCES);
     const sceneIds = [
       ...new Set(
@@ -777,17 +1077,22 @@ export class ChatService {
   }
 }
 
+function noEvidenceAnswer(applicationHelpIntent: boolean): string {
+  return applicationHelpIntent
+    ? 'No puedo responder eso con seguridad: no encontre informacion suficiente en la documentacion de PlumIA.'
+    : 'No puedo responder eso con seguridad: no encontre informacion suficiente sobre esta obra en el manuscrito, la Wiki ni la linea de tiempo.';
+}
+
 function buildRetrievalPlan(
   question: string,
   terms: string[],
   semanticMatches: VectorSearchResult[],
+  workQuestionType: WorkQuestionType,
 ): RetrievalPlan {
   const normalizedQuestion = normalize(question);
   const countTerm = extractCountTerm(question);
-  const firstMentionIntent = hasAnyWord(normalizedQuestion, [
-    'primera',
-    'primer',
-  ]);
+  const firstMentionIntent =
+    workQuestionType === 'first_appearance' || isFirstMentionIntent(question);
   const timelineIntent =
     normalizedQuestion.includes('linea de tiempo') ||
     normalizedQuestion.includes('cronolog') ||
@@ -814,11 +1119,21 @@ function buildRetrievalPlan(
     'imagenes',
     'protagonista',
   ]);
-  const semanticChunkIds = semanticMatches.map((match) => match.chunkId);
+  const semanticChunkIds = firstMentionIntent
+    ? []
+    : semanticMatches.map((match) => match.chunkId);
   const semanticRanks = new Map(
     semanticMatches.map((match, index) => [match.chunkId, index]),
   );
-  const chunkTextTerms = (countTerm ? [countTerm] : terms).slice(0, 10);
+  let chunkTerms: string[];
+  if (countTerm) {
+    chunkTerms = [countTerm];
+  } else if (firstMentionIntent) {
+    chunkTerms = firstMentionTerms(terms);
+  } else {
+    chunkTerms = terms;
+  }
+  const chunkTextTerms = chunkTerms.slice(0, 10);
   const chunkCandidateFilters: Prisma.ChunkWhereInput[] = [
     ...(semanticChunkIds.length > 0 ? [{ id: { in: semanticChunkIds } }] : []),
     ...chunkTextTerms.map((term) => ({
@@ -1173,6 +1488,17 @@ function buildTimelineSource(
 function buildDeterministicEvidenceAnswer(
   question: string,
   sources: ChatSource[],
+  workQuestionType: WorkQuestionType,
+): { answer: string; sources: ChatSource[] } | null {
+  return (
+    buildCountEvidenceAnswer(question, sources) ??
+    buildFirstMentionEvidenceAnswer(question, sources, workQuestionType)
+  );
+}
+
+function buildCountEvidenceAnswer(
+  question: string,
+  sources: ChatSource[],
 ): { answer: string; sources: ChatSource[] } | null {
   const countTerm = extractCountTerm(question);
   if (countTerm) {
@@ -1198,23 +1524,45 @@ function buildDeterministicEvidenceAnswer(
         .join(', ');
       const occurrenceWord = total === 1 ? 'vez' : 'veces';
       const breakdownText = breakdown ? `: ${breakdown}` : '';
-      const citation = manuscriptSources
-        .map((_, index) => index + 1)
-        .join(', ');
+      const principalSources = manuscriptSources.slice(
+        0,
+        PRIMARY_CHAT_SOURCE_LIMIT,
+      );
+      const citation = principalSources.map((_, index) => index + 1).join(', ');
+      const additionalCount =
+        manuscriptSources.length - principalSources.length;
+      const reviewedText =
+        additionalCount > 0
+          ? ` Hay ${additionalCount} fuentes adicionales revisadas.`
+          : '';
       return {
-        answer: `“${countTerm}” aparece ${total} ${occurrenceWord} en el manuscrito consultado${breakdownText}. [${citation}]`,
-        sources: manuscriptSources,
+        answer: `“${countTerm}” aparece ${total} ${occurrenceWord} en el manuscrito consultado${breakdownText}. [${citation}]${reviewedText}`,
+        sources: principalSources,
       };
     }
   }
+  return null;
+}
 
-  if (/\b(primera|primer)\b/i.test(question)) {
+function buildFirstMentionEvidenceAnswer(
+  question: string,
+  sources: ChatSource[],
+  workQuestionType: WorkQuestionType,
+): { answer: string; sources: ChatSource[] } | null {
+  if (
+    workQuestionType === 'first_appearance' ||
+    isFirstMentionIntent(question)
+  ) {
     const firstMention = sources.find(
       (source) => source.kind === 'manuscript' && source.textQuote,
     );
     if (firstMention) {
+      const focusTerm = firstMentionTerms(extractSearchTerms(question)).find(
+        (term) => includesTerm(firstMention.textQuote ?? '', term),
+      );
+      const displayQuote = quoteAround(firstMention.textQuote ?? '', focusTerm);
       return {
-        answer: `La primera referencia encontrada está en ${firstMention.label}: “${firstMention.textQuote}” [1]`,
+        answer: `La primera referencia encontrada está en ${firstMention.label}: “${displayQuote}” [1]`,
         sources: [firstMention],
       };
     }
@@ -1226,6 +1574,8 @@ function rankManuscriptSources<
   T extends {
     id: string;
     content: string;
+    chunkIndex: number;
+    contentHash: string | null;
     scene: {
       id: string;
       title: string | null;
@@ -1245,8 +1595,10 @@ function rankManuscriptSources<
   countTerm: string | null,
   question: string,
   semanticRanks: ReadonlyMap<string, number>,
+  firstMentionIntent: boolean,
 ): ChatSource[] {
-  const wantsFirst = /\b(primera|primer)\b/i.test(question);
+  const wantsFirst = firstMentionIntent;
+  const matchTerms = wantsFirst ? firstMentionTerms(terms) : terms;
   const candidates = chunks
     .map((chunk) => {
       const occurrenceCount = countTerm
@@ -1256,15 +1608,21 @@ function rankManuscriptSources<
         chunk,
         occurrenceCount,
         lexicalScore:
-          scoreText(chunk.content, terms, question) +
+          scoreText(chunk.content, matchTerms, question) +
           (occurrenceCount ? occurrenceCount * 2 : 0),
       };
     })
-    .filter((entry) =>
-      countTerm
-        ? (entry.occurrenceCount ?? 0) > 0
-        : entry.lexicalScore > 0 || semanticRanks.has(entry.chunk.id),
-    );
+    .filter((entry) => {
+      if (countTerm) {
+        return (entry.occurrenceCount ?? 0) > 0;
+      }
+      if (wantsFirst) {
+        return matchTerms.some((term) =>
+          includesTerm(entry.chunk.content, term),
+        );
+      }
+      return entry.lexicalScore > 0 || semanticRanks.has(entry.chunk.id);
+    });
 
   const lexicalRanks = new Map(
     [...candidates]
@@ -1292,7 +1650,7 @@ function rankManuscriptSources<
   return ranked.slice(0, limit).map(({ chunk, occurrenceCount }) => {
     const chapter = chunk.scene.chapter;
     const focusTerm =
-      countTerm ?? terms.find((term) => includesTerm(chunk.content, term));
+      countTerm ?? matchTerms.find((term) => includesTerm(chunk.content, term));
     return {
       id: `manuscript:${chunk.id}`,
       kind: 'manuscript',
@@ -1306,7 +1664,9 @@ function rankManuscriptSources<
       chapterTitle: chapter.title,
       sceneId: chunk.scene.id,
       sceneTitle: chunk.scene.title,
-      textQuote: quoteAround(chunk.content, focusTerm),
+      chunkIndex: chunk.chunkIndex,
+      contentHash: chunk.contentHash,
+      textQuote: compactText(chunk.content, Number.MAX_SAFE_INTEGER),
       ...(occurrenceCount === undefined ? {} : { occurrenceCount }),
     };
   });
@@ -1321,6 +1681,27 @@ function extractSearchTerms(value: string): string[] {
   return [...new Set(extractWordTokens(normalized))]
     .filter((term) => !STOP_WORDS.has(term))
     .slice(0, 20);
+}
+
+function isFirstMentionIntent(question: string): boolean {
+  const normalized = normalize(question);
+  return (
+    hasAnyWord(normalized, ['primera', 'primer']) &&
+    hasAnyWord(normalized, [
+      'aparece',
+      'aparecio',
+      'menciona',
+      'mencione',
+      'mencion',
+      'mencionada',
+      'mencionado',
+      'referencia',
+    ])
+  );
+}
+
+function firstMentionTerms(terms: readonly string[]): string[] {
+  return terms.filter((term) => !FIRST_MENTION_GENERIC_TERMS.has(term));
 }
 
 function extractCountTerm(question: string): string | null {
@@ -1620,9 +2001,12 @@ function fitContext(sources: ChatSource[]): ChatSource[] {
   let length = 0;
   const result: ChatSource[] = [];
   for (const source of sources) {
+    if (result.length >= MAX_CONTEXT_SOURCES) {
+      break;
+    }
     const sourceLength = source.label.length + source.excerpt.length;
     if (length + sourceLength > MAX_CONTEXT_CHARS) {
-      break;
+      continue;
     }
     result.push(source);
     length += sourceLength;
@@ -1655,6 +2039,9 @@ function parseSource(value: Prisma.JsonValue): ChatSource | null {
   const sceneTitle = readNullableString(value, 'sceneTitle');
   const imageUrl = readNullableString(value, 'imageUrl');
   const occurrenceCount = readFiniteNumber(value, 'occurrenceCount');
+  const chunkIndex = readFiniteNumber(value, 'chunkIndex');
+  const contentHash = readNullableString(value, 'contentHash');
+  const route = readString(value, 'route');
   return {
     id,
     kind: kind as ChatSource['kind'],
@@ -1669,8 +2056,14 @@ function parseSource(value: Prisma.JsonValue): ChatSource | null {
     ...optionalProperty(readString(value, 'entityId'), 'entityId'),
     ...(imageUrl !== undefined ? { imageUrl } : {}),
     ...(occurrenceCount === undefined ? {} : { occurrenceCount }),
+    ...(typeof value['cited'] === 'boolean' ? { cited: value['cited'] } : {}),
+    ...(typeof value['primary'] === 'boolean'
+      ? { primary: value['primary'] }
+      : {}),
+    ...(chunkIndex === undefined ? {} : { chunkIndex }),
+    ...(contentHash === undefined ? {} : { contentHash }),
     ...optionalProperty(readString(value, 'textQuote'), 'textQuote'),
-    ...optionalProperty(readString(value, 'route'), 'route'),
+    ...(route && isSafeChatRoute(route) ? { route } : {}),
   };
 }
 
@@ -1725,7 +2118,8 @@ function isChatAction(value: unknown): value is ChatAction {
     typeof candidate['id'] === 'string' &&
     typeof candidate['label'] === 'string' &&
     typeof candidate['description'] === 'string' &&
-    typeof candidate['route'] === 'string'
+    typeof candidate['route'] === 'string' &&
+    isSafeChatRoute(candidate['route'])
   );
 }
 
@@ -1737,4 +2131,9 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-const CHAT_SOURCE_KINDS = new Set<string>(['manuscript', 'wiki', 'timeline']);
+const CHAT_SOURCE_KINDS = new Set<string>([
+  'manuscript',
+  'wiki',
+  'timeline',
+  'application_help',
+]);

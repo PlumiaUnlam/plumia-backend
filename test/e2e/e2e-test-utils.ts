@@ -8,6 +8,10 @@ import { AuthService } from '../../src/auth/auth.service';
 import { FirebaseAdminService } from '../../src/auth/firebase-admin.service';
 import { CHAT_GENERATION_PROVIDER } from '../../src/chat/ports/chat-generation-provider.port';
 import type { ChatGenerationInput } from '../../src/chat/ports/chat-generation-provider.port';
+import { getPolicyRefusal } from '../../src/chat/domain/chat-policy';
+import { CHAT_INTENT_PROVIDER } from '../../src/chat/ports/chat-intent-provider.port';
+import type { ChatIntentInput } from '../../src/chat/ports/chat-intent-provider.port';
+import { CHAT_EVIDENCE_VERIFIER } from '../../src/chat/ports/chat-evidence-verifier.port';
 import { EMBEDDING_PROVIDER } from '../../src/chat/ports/embedding-provider.port';
 import { IMAGE_GENERATION } from '../../src/publishing/ports/image-generation.port';
 import { IMAGE_GENERATION_QUEUE } from '../../src/publishing/ports/image-generation-queue.port';
@@ -43,6 +47,28 @@ export const e2eChatGenerationMock = {
       inputTokens: 25,
       outputTokens: 10,
     }),
+  ),
+};
+
+export const e2eChatIntentMock = {
+  classify: jest.fn((input: ChatIntentInput) =>
+    Promise.resolve({
+      intent: getPolicyRefusal(input.question, {
+        applicationHelpIntent: input.helpHint,
+      })
+        ? ('out_of_scope' as const)
+        : input.helpHint
+          ? ('application_help' as const)
+          : ('work' as const),
+      inputTokens: 10,
+      outputTokens: 2,
+    }),
+  ),
+};
+
+export const e2eChatEvidenceVerifierMock = {
+  verify: jest.fn(() =>
+    Promise.resolve({ supported: true, inputTokens: 8, outputTokens: 2 }),
   ),
 };
 
@@ -149,6 +175,10 @@ export async function createE2eApp(): Promise<INestApplication> {
     })
     .overrideProvider(CHAT_GENERATION_PROVIDER)
     .useValue(e2eChatGenerationMock)
+    .overrideProvider(CHAT_INTENT_PROVIDER)
+    .useValue(e2eChatIntentMock)
+    .overrideProvider(CHAT_EVIDENCE_VERIFIER)
+    .useValue(e2eChatEvidenceVerifierMock)
     .overrideProvider(EMBEDDING_PROVIDER)
     .useValue({
       model: 'test-embedding',

@@ -1,4 +1,8 @@
-export type ChatSourceKind = 'manuscript' | 'wiki' | 'timeline';
+export type ChatSourceKind =
+  | 'manuscript'
+  | 'wiki'
+  | 'timeline'
+  | 'application_help';
 
 export interface ChatSource {
   id: string;
@@ -14,8 +18,24 @@ export interface ChatSource {
   entityId?: string;
   imageUrl?: string | null;
   occurrenceCount?: number;
+  cited?: boolean;
+  primary?: boolean;
+  chunkIndex?: number;
+  contentHash?: string | null;
   textQuote?: string;
   route?: string;
+}
+
+export interface ChatOpenConflict {
+  id: string;
+  title: string;
+  description: string | null;
+  explanation: string | null;
+  sceneId: string;
+  entityName?: string;
+  field?: string;
+  currentValue?: string;
+  observedValue?: string;
 }
 
 export interface ChatAction {

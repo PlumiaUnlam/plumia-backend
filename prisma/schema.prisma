@@ -814,6 +814,33 @@ model Chunk {
   @@map("chunk")
 }
 
+model ApplicationHelpChunk {
+  id                   String                    @id @db.VarChar(120)
+  docId                String                    @map("doc_id") @db.VarChar(100)
+  title                String                    @db.VarChar(300)
+  breadcrumb           String                    @db.VarChar(600)
+  area                 String                    @db.VarChar(100)
+  route                String                    @db.VarChar(500)
+  related              String[]                  @default([])
+  questions            String[]                  @default([])
+  keywords             String[]                  @default([])
+  content              String
+  embedText            String                    @map("embed_text")
+  words                Int
+  sources              String[]                  @default([])
+  updated              String                    @db.VarChar(10)
+  contentHash          String                    @map("content_hash") @db.VarChar(64)
+  embedding            Unsupported("vector(1536)")?
+  embeddingContentHash String?                   @map("embedding_content_hash") @db.VarChar(64)
+  embeddingProfile     String?                   @map("embedding_profile") @db.VarChar(180)
+  searchVector         Unsupported("tsvector")   @map("search_vector")
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([searchVector], map: "idx_application_help_search", type: Gin)
+  @@map("application_help_chunk")
+}
+
 model Summary {
   id                String   @id @default(uuid()) @db.Uuid
   projectId         String   @map("project_id") @db.Uuid

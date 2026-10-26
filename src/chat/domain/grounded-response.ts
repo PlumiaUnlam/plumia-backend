@@ -2,7 +2,9 @@ import type { ChatGenerationResult } from '../ports/chat-generation-provider.por
 import type { ChatSource } from './chat.types';
 
 const SAFE_UNGROUNDED_ANSWER =
-  'No pude respaldar una respuesta con referencias de tu manuscrito, Wiki o linea de tiempo. Prefiero no afirmar algo que la obra no demuestra.';
+  'No puedo responder eso con seguridad: no pude respaldarlo con referencias de tu manuscrito, Wiki o linea de tiempo. Prefiero no afirmar algo que la obra no demuestra.';
+const SAFE_UNGROUNDED_HELP_ANSWER =
+  'No puedo responder eso con seguridad: no pude respaldarlo con referencias de la documentación de PlumIA. Prefiero no afirmar algo que la guía no confirma.';
 
 export function buildGroundedResponse(
   result: ChatGenerationResult,
@@ -15,19 +17,24 @@ export function buildGroundedResponse(
   const usedSources: ChatSource[] = [];
   const citationBySourceId = new Map<string, number>();
   const renderedClaims: string[] = [];
+  const fallbackAnswer =
+    availableSources.length > 0 &&
+    availableSources.every((source) => source.kind === 'application_help')
+      ? SAFE_UNGROUNDED_HELP_ANSWER
+      : SAFE_UNGROUNDED_ANSWER;
   if (result.claims.length === 0) {
-    return ungroundedResponse();
+    return ungroundedResponse(fallbackAnswer);
   }
 
   for (const claim of result.claims) {
     if (!claim.text.trim() || claim.evidence.length === 0) {
-      return ungroundedResponse();
+      return ungroundedResponse(fallbackAnswer);
     }
     const claimSources: ChatSource[] = [];
     for (const evidence of claim.evidence) {
       const source = sourceById.get(evidence.sourceId);
       if (!source || !sourceContainsQuote(source, evidence.quote)) {
-        return ungroundedResponse();
+        return ungroundedResponse(fallbackAnswer);
       }
       if (!claimSources.some((candidate) => candidate.id === source.id)) {
         claimSources.push(source);
@@ -60,8 +67,11 @@ function sourceContainsQuote(source: ChatSource, quote: string): boolean {
     .includes(normalizedQuote);
 }
 
-function ungroundedResponse(): { answer: string; sources: ChatSource[] } {
-  return { answer: SAFE_UNGROUNDED_ANSWER, sources: [] };
+function ungroundedResponse(answer: string): {
+  answer: string;
+  sources: ChatSource[];
+} {
+  return { answer, sources: [] };
 }
 
 function normalizeGroundingText(value: string): string {

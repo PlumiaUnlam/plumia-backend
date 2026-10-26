@@ -5,6 +5,8 @@ import type { App } from 'supertest/types';
 import {
   createE2eApp,
   e2eChatGenerationMock,
+  e2eChatEvidenceVerifierMock,
+  e2eChatIntentMock,
   E2E_TOKEN,
   resetDatabase,
   seedE2eUser,
@@ -152,6 +154,8 @@ export function createEndpointTestContext(): EndpointTestContext {
 
   beforeEach(async () => {
     e2eChatGenerationMock.generate.mockClear();
+    e2eChatEvidenceVerifierMock.verify.mockClear();
+    e2eChatIntentMock.classify.mockClear();
     e2eChatGenerationMock.generate.mockImplementation((input) =>
       Promise.resolve({
         answer: `Respuesta respaldada: ${input.question}`,

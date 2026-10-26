@@ -1,16 +1,20 @@
 const CREATIVE_REQUEST_WORDS = [
   'escribeme',
   'escribime',
+  'redactame',
+  'continuame',
+  'inventame',
+] as const;
+const CREATIVE_GENERATION_WORDS = [
+  'genera',
+  'generame',
+  'completa',
   'escribe',
   'redacta',
-  'redactame',
   'continua',
-  'continuame',
   'autocompleta',
-  'inventame',
   'inventa',
 ] as const;
-const CREATIVE_GENERATION_WORDS = ['genera', 'generame', 'completa'] as const;
 const CREATIVE_TARGET_WORDS = [
   'parrafo',
   'escena',
@@ -27,18 +31,30 @@ const PROMPT_INJECTION_TARGETS = ['instrucciones', 'reglas'] as const;
 const PROMPT_INJECTION_PHRASES = [
   'system prompt',
   'prompt del sistema',
+  'prompt interno',
+  'instrucciones del sistema',
+  'instrucciones ocultas',
+  'mensaje de desarrollador',
+  'mensaje del sistema',
   'modo desarrollador',
   'developer mode',
   'jailbreak',
-  'api key',
-  'clave de api',
-  'variables de entorno',
-  'variable de entorno',
-  'credencial',
-  'credenciales',
+  'haz caso omiso',
   'datos internos de la aplicacion',
   'razonamiento interno',
+  'cadena de pensamiento',
+  'chain of thought',
 ] as const;
+const ROLE_SPOOFING_PATTERN =
+  /\b(?:actua|comportate|finge|simula|responde)\b.{0,40}\b(?:como|en modo|ser)\b.{0,40}\b(?:sistema|system|desarrollador|developer|sin filtros|sin restricciones)\b/;
+const INTERNAL_DATA_EXTRACTION_PATTERNS = [
+  /\b(?:revela|revelame|mostra|mostrame|muestra|muestrame|imprime)\b.{0,80}\b(?:tu prompt|tus instrucciones|prompt del sistema|prompt interno|instrucciones internas|instrucciones ocultas|razonamiento interno|cadena de pensamiento)\b/,
+  /\b(?:dame|decime|dime|filtra|extrae|lista|pasame)\b.{0,80}\b(?:tu prompt|tus instrucciones|prompt del sistema|prompt interno|instrucciones internas|instrucciones ocultas|razonamiento interno|cadena de pensamiento)\b/,
+  /\b(?:revela|revelame|mostra|mostrame|muestra|muestrame|imprime)\b.{0,80}\b(?:api key|clave(?: de)? api|credenciales|token de acceso|variables? de entorno|codigo privado)\b/,
+  /\b(?:dame|decime|dime|filtra|extrae|lista|pasame)\b.{0,80}\b(?:api key|clave(?: de)? api|credenciales|token de acceso|variables? de entorno|codigo privado)\b/,
+];
+const INTERNAL_DATA_OWNERSHIP_PATTERN =
+  /\b(?:cual es|cuales son|donde esta|donde estan)\b.{0,80}\b(?:tu|tus|del sistema|de plumia|interno|internos)\b.{0,80}\b(?:api key|clave|token de acceso|credenciales|variables? de entorno|prompt)\b/;
 const OUT_OF_SCOPE_TECH_WORDS = [
   'app',
   'aplicacion',
@@ -103,13 +119,33 @@ const UNSAFE_OUTPUT_PATTERN =
 const WORK_ANALYSIS_CONTEXT_PATTERN =
   /\b(obra|manuscrito|novela|wiki|personaje|escena|capitulo|dialogo|narrador)\b/i;
 
-export function getPolicyRefusal(question: string): string | null {
+export const CHAT_OUT_OF_SCOPE_RESPONSE =
+  'Mi alcance esta limitado a consultar y auditar tu obra y a orientarte sobre el uso de PlumIA. No puedo responder solicitudes ajenas a esos temas.';
+export const CHAT_CLARIFICATION_RESPONSE =
+  '¿Te referís a información de tu obra o a cómo usar PlumIA? Contame cuál de las dos cosas querés consultar.';
+export const CHAT_UNSAFE_RESPONSE =
+  'No puedo seguir instrucciones que cambien mis reglas, revelar información interna ni generar contenido fuera de mi alcance. Puedo ayudarte con tu obra o con el uso de PlumIA.';
+export const CHAT_CREATIVE_REFUSAL =
+  'Puedo ayudarte a consultar y auditar tu obra, pero no escribir, continuar ni autocompletar el manuscrito. Tu voz y tus decisiones creativas siguen siendo exclusivamente tuyas.';
+
+export function getPolicyRefusal(
+  question: string,
+  options: { applicationHelpIntent?: boolean } = {},
+): string | null {
+  const safetyRefusal = getSafetyRefusal(question);
+  if (safetyRefusal) {
+    return safetyRefusal;
+  }
+  return isOutOfScope(normalizePolicyText(question)) &&
+    !options.applicationHelpIntent
+    ? CHAT_OUT_OF_SCOPE_RESPONSE
+    : null;
+}
+
+export function getSafetyRefusal(question: string): string | null {
   const normalizedQuestion = normalizePolicyText(question);
   if (isPromptInjection(normalizedQuestion)) {
     return 'No puedo ignorar mis reglas ni revelar prompts, credenciales, configuracion o datos internos de PlumIA. Si queres, puedo ayudarte a consultar informacion respaldada por tu obra.';
-  }
-  if (isOutOfScope(normalizedQuestion)) {
-    return 'Mi alcance esta limitado a consultar y auditar tu manuscrito, Wiki y linea de tiempo. No puedo resolver tareas academicas, programar aplicaciones ni atender solicitudes ajenas a tu obra.';
   }
   if (
     UNSAFE_OUTPUT_PATTERN.test(normalizedQuestion) &&
@@ -150,16 +186,24 @@ export function getSocialResponse(question: string): string | null {
 }
 
 export function isCreativeRequest(question: string): boolean {
-  const normalizedQuestion = normalizePolicyText(question);
+  const normalizedQuestion = normalizePolicyText(question)
+    .replace(/^[^a-z0-9]+/, '')
+    .replace(/^por favor\s+/, '');
+  const words = tokenize(normalizedQuestion);
   return (
-    hasAnyWord(normalizedQuestion, CREATIVE_REQUEST_WORDS) ||
-    hasNearbyWord(
-      normalizedQuestion,
-      CREATIVE_GENERATION_WORDS,
-      CREATIVE_TARGET_WORDS,
-      4,
-    )
+    includesValue(CREATIVE_REQUEST_WORDS, words[0]) ||
+    (includesValue(CREATIVE_GENERATION_WORDS, words[0]) &&
+      words
+        .slice(1, 5)
+        .some((word) => includesValue(CREATIVE_TARGET_WORDS, word)))
   );
+}
+
+function includesValue(
+  values: readonly string[],
+  value: string | undefined,
+): boolean {
+  return value !== undefined && values.includes(value);
 }
 
 function isPromptInjection(question: string): boolean {
@@ -169,7 +213,13 @@ function isPromptInjection(question: string): boolean {
       PROMPT_INJECTION_WORDS,
       PROMPT_INJECTION_TARGETS,
       4,
-    ) || hasAnyPhrase(question, PROMPT_INJECTION_PHRASES)
+    ) ||
+    hasAnyPhrase(question, PROMPT_INJECTION_PHRASES) ||
+    ROLE_SPOOFING_PATTERN.test(question) ||
+    INTERNAL_DATA_EXTRACTION_PATTERNS.some((pattern) =>
+      pattern.test(question),
+    ) ||
+    INTERNAL_DATA_OWNERSHIP_PATTERN.test(question)
   );
 }
 
