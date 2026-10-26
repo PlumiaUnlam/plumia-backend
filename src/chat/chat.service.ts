@@ -490,79 +490,105 @@ export class ChatService {
   ): Promise<ChatExchange> {
     let domain = context.domain;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const sources = await this.retrieveDomainSources(context, domain);
-      throwIfAborted(context.signal);
-      if (sources.length === 0) {
-        return this.persistNoEvidence(context, domain);
-      }
-
-      const openConflicts =
-        domain === 'work'
-          ? await this.conflicts.findRelevant(
-              context.thread.projectId,
-              context.question,
-              sources,
-              context.signal,
-            )
-          : [];
-      throwIfAborted(context.signal);
-
-      const deterministicAnswer =
-        domain === 'work'
-          ? buildDeterministicEvidenceAnswer(
-              context.question,
-              sources,
-              context.workQuestionType,
-            )
-          : null;
-      if (deterministicAnswer) {
-        return this.persistDeterministicAnswer(
-          context,
-          deterministicAnswer,
-          sources,
-          openConflicts,
-        );
-      }
-
-      const result = await this.generator.generate({
-        question: context.question,
-        history: context.history,
-        sources,
-        openConflicts,
-        expectedDomain: domain,
-        workQuestionType:
-          domain === 'work' ? context.workQuestionType : 'general',
-        ...(context.signal ? { signal: context.signal } : {}),
-      });
-      throwIfAborted(context.signal);
-      context.usage.inputTokens += result.inputTokens;
-      context.usage.outputTokens += result.outputTokens;
-
-      if (result.sourceMismatch && !result.outOfScope) {
-        if (attempt === 0) {
-          domain = domain === 'work' ? 'application_help' : 'work';
-          continue;
-        }
-        return this.persistExchange(
-          context.thread,
-          context.question,
-          {
-            answer: CHAT_CLARIFICATION_RESPONSE,
-            sources: [],
-            inputTokens: context.usage.inputTokens,
-            outputTokens: context.usage.outputTokens,
-          },
-          context.signal,
-        );
-      }
-      return this.persistGeneratedResponse(
+      const exchange = await this.processRoutedAttempt(
         context,
         domain,
-        result,
+        attempt === 0,
+      );
+      if (exchange) {
+        return exchange;
+      }
+      domain = domain === 'work' ? 'application_help' : 'work';
+    }
+    return this.persistClarification(context);
+  }
+
+  private async processRoutedAttempt(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    canRetryOnSourceMismatch: boolean,
+  ): Promise<ChatExchange | null> {
+    const sources = await this.retrieveDomainSources(context, domain);
+    throwIfAborted(context.signal);
+    if (sources.length === 0) {
+      return this.persistNoEvidence(context, domain);
+    }
+
+    const openConflicts =
+      domain === 'work'
+        ? await this.conflicts.findRelevant(
+            context.thread.projectId,
+            context.question,
+            sources,
+            context.signal,
+          )
+        : [];
+    throwIfAborted(context.signal);
+
+    const deterministicAnswer =
+      domain === 'work'
+        ? buildDeterministicEvidenceAnswer(
+            context.question,
+            sources,
+            context.workQuestionType,
+          )
+        : null;
+    if (deterministicAnswer) {
+      return this.persistDeterministicAnswer(
+        context,
+        deterministicAnswer,
         sources,
         openConflicts,
       );
     }
+
+    return this.generateRoutedResponse(
+      context,
+      domain,
+      sources,
+      openConflicts,
+      canRetryOnSourceMismatch,
+    );
+  }
+
+  private async generateRoutedResponse(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    sources: ChatSource[],
+    openConflicts: Parameters<typeof withConflictNotice>[1],
+    canRetryOnSourceMismatch: boolean,
+  ): Promise<ChatExchange | null> {
+    const result = await this.generator.generate({
+      question: context.question,
+      history: context.history,
+      sources,
+      openConflicts: [...openConflicts],
+      expectedDomain: domain,
+      workQuestionType:
+        domain === 'work' ? context.workQuestionType : 'general',
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    throwIfAborted(context.signal);
+    context.usage.inputTokens += result.inputTokens;
+    context.usage.outputTokens += result.outputTokens;
+
+    if (result.sourceMismatch && !result.outOfScope) {
+      return canRetryOnSourceMismatch
+        ? null
+        : this.persistClarification(context);
+    }
+    return this.persistGeneratedResponse(
+      context,
+      domain,
+      result,
+      sources,
+      openConflicts,
+    );
+  }
+
+  private persistClarification(
+    context: RoutedChatContext,
+  ): Promise<ChatExchange> {
     return this.persistExchange(
       context.thread,
       context.question,
