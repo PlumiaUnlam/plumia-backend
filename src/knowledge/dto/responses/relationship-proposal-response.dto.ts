@@ -33,6 +33,7 @@ export class RelationshipProposalResponseDto {
   relationType!: RelationType;
   description!: string | null;
   intensity!: number;
+  confidenceScore!: number;
   evidence!: string[];
   status!: RelationshipProposalStatusDto;
   canAccept!: boolean;

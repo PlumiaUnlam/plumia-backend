@@ -1,3 +1,5 @@
+/* eslint-disable max-lines */
+
 import {
   BadRequestException,
   Injectable,
@@ -22,7 +24,7 @@ export interface EntityContinuityAlertInput {
   sourceChunkId: string;
   sourceChunkHash: string | null;
   fingerprint: string;
-  entityId: string;
+  entityId: string | null;
   entityName: string;
   field: string;
   currentValue: string;
@@ -34,6 +36,41 @@ export interface EntityContinuityAlertInput {
   ruleCode?: string;
   category?: AuditCategory;
   detectionLevel?: AuditLevel;
+  relationship?: EntityConflictDetailsDto['relationship'];
+}
+
+export interface SupportingChunkEvidence {
+  chunkId: string;
+  chunkHash: string | null;
+  chunkIndex: number;
+  side: 'first' | 'second';
+  evidence: string[];
+  evidencePositions?: number[];
+}
+
+export interface CrossChunkContinuityAlertInput {
+  projectId: string;
+  sceneId: string;
+  firstChunkId: string;
+  firstChunkHash: string | null;
+  secondChunkId: string;
+  secondChunkHash: string | null;
+  firstChunkIndex: number;
+  secondChunkIndex: number;
+  fingerprint: string;
+  entityId: string | null;
+  entityName: string;
+  field: string;
+  firstValue: string;
+  secondValue: string;
+  explanation: string;
+  firstEvidence: string[];
+  secondEvidence: string[];
+  firstEvidencePositions?: number[];
+  secondEvidencePositions?: number[];
+  confidence: number;
+  severity: AuditSeverity;
+  relationship?: EntityConflictDetailsDto['relationship'];
 }
 
 export interface CreateAuditAlertInput {
@@ -47,7 +84,7 @@ export interface CreateAuditAlertInput {
   category: AuditCategory;
   severity: AuditSeverity;
   title: string;
-  entityId: string;
+  entityId: string | null;
   entityName: string;
   field: string;
   currentValue: string;
@@ -55,6 +92,8 @@ export interface CreateAuditAlertInput {
   explanation: string;
   evidence: string[];
   confidence: number;
+  supportingChunks?: SupportingChunkEvidence[];
+  relationship?: EntityConflictDetailsDto['relationship'];
 }
 
 interface AlertRow {
@@ -142,7 +181,10 @@ export class AuditService {
       }
       const conflict = this.toConflict(alert.sourceConflict);
       const key = conflict ? this.normalizeStateKey(conflict.field) : '';
-      if (!conflict || !['location', 'status', 'health_status'].includes(key)) {
+      if (
+        !conflict?.entityId ||
+        !['location', 'status', 'health_status'].includes(key)
+      ) {
         throw new BadRequestException(
           'This alert cannot be applied as a temporal knowledge update',
         );
@@ -305,6 +347,55 @@ export class AuditService {
       explanation: input.explanation,
       evidence: input.evidence,
       confidence: input.confidence,
+      relationship: input.relationship,
+    });
+  }
+
+  async createCrossChunkContinuityAlert(
+    input: CrossChunkContinuityAlertInput,
+  ): Promise<void> {
+    await this.createAlert({
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      sourceChunkId: input.firstChunkId,
+      sourceChunkHash: input.firstChunkHash,
+      fingerprint: input.fingerprint,
+      ruleCode: 'INTRA_SCENE_CONTRADICTION',
+      detectionLevel: AuditLevel.INTRA_SCENE,
+      category: AuditCategory.CONTINUITY,
+      severity: input.severity,
+      title: 'Se encontraron dos datos incompatibles dentro de esta escena',
+      entityId: input.entityId,
+      entityName: input.entityName,
+      field: input.field,
+      currentValue: input.firstValue,
+      observedValue: input.secondValue,
+      explanation: input.explanation,
+      evidence: input.firstEvidence,
+      confidence: input.confidence,
+      relationship: input.relationship,
+      supportingChunks: [
+        {
+          chunkId: input.firstChunkId,
+          chunkHash: input.firstChunkHash,
+          chunkIndex: input.firstChunkIndex,
+          side: 'first',
+          evidence: input.firstEvidence,
+          ...(input.firstEvidencePositions
+            ? { evidencePositions: input.firstEvidencePositions }
+            : {}),
+        },
+        {
+          chunkId: input.secondChunkId,
+          chunkHash: input.secondChunkHash,
+          chunkIndex: input.secondChunkIndex,
+          side: 'second',
+          evidence: input.secondEvidence,
+          ...(input.secondEvidencePositions
+            ? { evidencePositions: input.secondEvidencePositions }
+            : {}),
+        },
+      ],
     });
   }
 
@@ -318,6 +409,10 @@ export class AuditService {
       evidence: input.evidence,
       sourceChunkId: input.sourceChunkId,
       sourceChunkHash: input.sourceChunkHash,
+      ...(input.supportingChunks
+        ? { supportingChunks: input.supportingChunks }
+        : {}),
+      ...(input.relationship ? { relationship: input.relationship } : {}),
     };
     const existing = await this.prisma.auditAlert.findUnique({
       where: { fingerprint: input.fingerprint },
@@ -338,7 +433,7 @@ export class AuditService {
           description: this.buildDescription(input),
           explanation: input.explanation,
           confidence: input.confidence,
-          sourceConflict,
+          sourceConflict: sourceConflict as unknown as Prisma.InputJsonValue,
           ...(existing.status === AuditStatus.OBSOLETE
             ? {
                 status: AuditStatus.ACTIVE,
@@ -366,7 +461,7 @@ export class AuditService {
         description: this.buildDescription(input),
         explanation: input.explanation,
         confidence: input.confidence,
-        sourceConflict,
+        sourceConflict: sourceConflict as unknown as Prisma.InputJsonValue,
       },
     });
   }
@@ -384,6 +479,7 @@ export class AuditService {
       select: {
         id: true,
         fingerprint: true,
+        ruleCode: true,
         sourceChunkId: true,
         sourceConflict: true,
       },
@@ -391,8 +487,9 @@ export class AuditService {
 
     const staleIds = alerts
       .filter((alert) => {
-        const conflict = this.toConflict(alert.sourceConflict);
+        const conflict = this.toStoredConflict(alert.sourceConflict);
         return (
+          alert.ruleCode !== 'INTRA_SCENE_CONTRADICTION' &&
           (alert.sourceChunkId ?? conflict?.sourceChunkId) ===
             input.sourceChunkId &&
           (!alert.fingerprint ||
@@ -427,18 +524,29 @@ export class AuditService {
     });
     const staleIds = alerts
       .filter((alert) => {
-        const conflict = this.toConflict(alert.sourceConflict);
-        const sourceChunkId = alert.sourceChunkId ?? conflict?.sourceChunkId;
-        const sourceChunkHash =
-          alert.sourceChunkHash ?? conflict?.sourceChunkHash ?? null;
-        if (!sourceChunkId) {
-          return false;
-        }
-        const chunk = input.chunks.get(sourceChunkId);
-        return (
-          !chunk ||
-          (sourceChunkHash !== null && chunk.contentHash !== sourceChunkHash)
+        const conflict = this.toStoredConflict(alert.sourceConflict);
+        const sources = [
+          {
+            chunkId: alert.sourceChunkId ?? conflict?.sourceChunkId ?? null,
+            chunkHash:
+              alert.sourceChunkHash ?? conflict?.sourceChunkHash ?? null,
+          },
+          ...(conflict?.supportingChunks ?? []).map((source) => ({
+            chunkId: source.chunkId,
+            chunkHash: source.chunkHash,
+          })),
+        ].filter(
+          (source): source is { chunkId: string; chunkHash: string | null } =>
+            Boolean(source.chunkId),
         );
+        return sources.some((source) => {
+          const chunk = input.chunks.get(source.chunkId);
+          return (
+            !chunk ||
+            (source.chunkHash !== null &&
+              chunk.contentHash !== source.chunkHash)
+          );
+        });
       })
       .map((alert) => alert.id);
 
@@ -470,6 +578,49 @@ export class AuditService {
           !input.activeFingerprints.has(alert.fingerprint),
       )
       .map((alert) => alert.id);
+    if (staleIds.length > 0) {
+      await this.prisma.auditAlert.updateMany({
+        where: { id: { in: staleIds } },
+        data: { status: AuditStatus.OBSOLETE },
+      });
+    }
+  }
+
+  async obsoleteCrossChunkAlertsForChunks(input: {
+    sceneId: string;
+    sourceChunkIds: ReadonlySet<string>;
+    activeFingerprints: ReadonlySet<string>;
+  }): Promise<void> {
+    const alerts = await this.prisma.auditAlert.findMany({
+      where: {
+        sceneId: input.sceneId,
+        status: AuditStatus.ACTIVE,
+        ruleCode: 'INTRA_SCENE_CONTRADICTION',
+      },
+      select: {
+        id: true,
+        fingerprint: true,
+        sourceChunkId: true,
+        sourceConflict: true,
+      },
+    });
+    const staleIds = alerts
+      .filter((alert) => {
+        const conflict = this.toStoredConflict(alert.sourceConflict);
+        const supportsChangedChunk =
+          (alert.sourceChunkId !== null &&
+            input.sourceChunkIds.has(alert.sourceChunkId)) ||
+          (conflict?.supportingChunks ?? []).some((source) =>
+            input.sourceChunkIds.has(source.chunkId),
+          );
+        return (
+          supportsChangedChunk &&
+          (!alert.fingerprint ||
+            !input.activeFingerprints.has(alert.fingerprint))
+        );
+      })
+      .map((alert) => alert.id);
+
     if (staleIds.length > 0) {
       await this.prisma.auditAlert.updateMany({
         where: { id: { in: staleIds } },
@@ -513,10 +664,12 @@ export class AuditService {
     };
   }
 
-  private toConflict(value: Prisma.JsonValue):
+  private toStoredConflict(value: Prisma.JsonValue):
     | (EntityConflictDetailsDto & {
         sourceChunkId?: string;
         sourceChunkHash?: string | null;
+        supportingChunks?: SupportingChunkEvidence[];
+        relationship?: EntityConflictDetailsDto['relationship'];
       })
     | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -525,7 +678,8 @@ export class AuditService {
 
     const conflict = value as Record<string, unknown>;
     if (
-      typeof conflict['entityId'] !== 'string' ||
+      (typeof conflict['entityId'] !== 'string' &&
+        conflict['entityId'] !== null) ||
       typeof conflict['entityName'] !== 'string' ||
       typeof conflict['field'] !== 'string' ||
       typeof conflict['currentValue'] !== 'string' ||
@@ -533,6 +687,47 @@ export class AuditService {
     ) {
       return null;
     }
+
+    const supportingChunks = Array.isArray(conflict['supportingChunks'])
+      ? conflict['supportingChunks'].flatMap((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return [];
+          }
+          const source = entry as Record<string, unknown>;
+          if (
+            typeof source['chunkId'] !== 'string' ||
+            (source['chunkHash'] !== null &&
+              typeof source['chunkHash'] !== 'string') ||
+            (source['side'] !== 'first' && source['side'] !== 'second')
+          ) {
+            return [];
+          }
+          return [
+            {
+              chunkId: source['chunkId'],
+              chunkHash: source['chunkHash'],
+              chunkIndex:
+                typeof source['chunkIndex'] === 'number'
+                  ? source['chunkIndex']
+                  : 0,
+              side: source['side'],
+              evidence: Array.isArray(source['evidence'])
+                ? source['evidence'].filter(
+                    (entry): entry is string => typeof entry === 'string',
+                  )
+                : [],
+              ...(Array.isArray(source['evidencePositions'])
+                ? {
+                    evidencePositions: source['evidencePositions'].filter(
+                      (entry): entry is number => typeof entry === 'number',
+                    ),
+                  }
+                : {}),
+            } satisfies SupportingChunkEvidence,
+          ];
+        })
+      : [];
+    const relationship = this.toRelationshipConflict(conflict['relationship']);
 
     return {
       entityId: conflict['entityId'],
@@ -552,6 +747,67 @@ export class AuditService {
       conflict['sourceChunkHash'] === null
         ? { sourceChunkHash: conflict['sourceChunkHash'] }
         : {}),
+      ...(supportingChunks.length > 0 ? { supportingChunks } : {}),
+      ...(relationship ? { relationship } : {}),
+    };
+  }
+
+  private toConflict(value: Prisma.JsonValue): EntityConflictDetailsDto | null {
+    const conflict = this.toStoredConflict(value);
+    if (!conflict) {
+      return null;
+    }
+    return {
+      entityId: conflict.entityId,
+      entityName: conflict.entityName,
+      field: conflict.field,
+      currentValue: conflict.currentValue,
+      observedValue: conflict.observedValue,
+      evidence: conflict.evidence,
+      ...(conflict.relationship ? { relationship: conflict.relationship } : {}),
+      ...(conflict.supportingChunks
+        ? {
+            supportingEvidence: conflict.supportingChunks.flatMap((source) =>
+              source.evidence.map((quote) => ({
+                side: source.side,
+                quote,
+              })),
+            ),
+          }
+        : {}),
+    };
+  }
+
+  private toRelationshipConflict(
+    value: unknown,
+  ): EntityConflictDetailsDto['relationship'] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const relation = value as Record<string, unknown>;
+    if (
+      typeof relation['sourceEntityName'] !== 'string' ||
+      typeof relation['targetEntityName'] !== 'string' ||
+      typeof relation['relationType'] !== 'string'
+    ) {
+      return null;
+    }
+    return {
+      relationshipId:
+        typeof relation['relationshipId'] === 'string'
+          ? relation['relationshipId']
+          : null,
+      sourceEntityId:
+        typeof relation['sourceEntityId'] === 'string'
+          ? relation['sourceEntityId']
+          : null,
+      sourceEntityName: relation['sourceEntityName'],
+      targetEntityId:
+        typeof relation['targetEntityId'] === 'string'
+          ? relation['targetEntityId']
+          : null,
+      targetEntityName: relation['targetEntityName'],
+      relationType: relation['relationType'],
     };
   }
 }

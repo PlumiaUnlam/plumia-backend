@@ -31,7 +31,10 @@ interface MockTx {
 describe('RelationshipProposalService', () => {
   let service: RelationshipProposalService;
   let prisma: MockPrisma;
-  let temporalStates: { scheduleRelationshipAudit: jest.Mock };
+  let temporalStates: {
+    scheduleRelationshipAudit: jest.Mock;
+    validateRelationshipWindow: jest.Mock;
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -49,7 +52,10 @@ describe('RelationshipProposalService', () => {
         },
         {
           provide: TemporalStateService,
-          useValue: { scheduleRelationshipAudit: jest.fn() },
+          useValue: {
+            scheduleRelationshipAudit: jest.fn(),
+            validateRelationshipWindow: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();
@@ -180,6 +186,13 @@ describe('RelationshipProposalService', () => {
         targetEntityId: 'entity-2',
         sourceEntityProposal: null,
         targetEntityProposal: null,
+        relationship: {
+          description: 'They have met before.',
+          relationType: RelationType.KNOWS,
+          confidenceScore: new Prisma.Decimal('0.4'),
+          validFromSceneId: 'scene-1',
+          validToSceneId: null,
+        },
         relationType: RelationType.KNOWS,
         description: 'They now work together.',
         intensity: new Prisma.Decimal('0.6'),
@@ -196,23 +209,28 @@ describe('RelationshipProposalService', () => {
       relationType: DomainRelationType.ALLY,
       intensity: 5,
       description: 'They have met before.\n\nThey now work together by choice.',
+      validFromSceneId: 'scene-three',
     });
 
     expect(tx.relationship.update).toHaveBeenCalledWith({
       where: { id: 'relationship-2' },
-      data: {
+      data: { validToSceneId: 'scene-three' },
+    });
+    expect(tx.relationship.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        validFromSceneId: 'scene-three',
+        validToSceneId: null,
         description:
           'They have met before.\n\nThey now work together by choice.',
         relationType: RelationType.ALLY,
         confidenceScore: new Prisma.Decimal(1),
         sourceEntityId: 'entity-1',
         targetEntityId: 'entity-2',
-      },
+      }) as unknown,
     });
-    expect(tx.relationship.create).not.toHaveBeenCalled();
     expect(temporalStates.scheduleRelationshipAudit).toHaveBeenCalledWith(
       'project-1',
-      'scene-2',
+      'scene-three',
     );
   });
 

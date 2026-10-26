@@ -6,6 +6,7 @@ export class EntityStateResponseDto {
   toValue!: string | null;
   validFromSceneId!: string;
   validToSceneId!: string | null;
+  narrativeOrder!: number | null;
   source!: string;
   createdAt!: Date;
 }

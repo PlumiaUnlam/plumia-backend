@@ -172,8 +172,16 @@ describe('SystemService', () => {
     expect(prisma.outbox.findMany).toHaveBeenCalledWith({
       where: {
         processedAt: null,
-        aggregateType: 'Scene',
-        eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
+        OR: [
+          {
+            aggregateType: 'Scene',
+            eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
+          },
+          {
+            aggregateType: 'Project',
+            eventType: 'project_analysis_requested',
+          },
+        ],
       },
       orderBy: { createdAt: 'asc' },
       take: 25,

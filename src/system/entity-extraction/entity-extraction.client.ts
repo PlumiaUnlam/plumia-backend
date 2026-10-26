@@ -2,8 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
 import { UserApiKeyService } from '../../user/user-api-key.service';
+import { CROSS_CHUNK_INCONSISTENCY_PROMPT } from './prompts/cross-chunk-inconsistency.prompt';
+import { CROSS_CHUNK_INCONSISTENCY_SCHEMA } from './prompts/cross-chunk-inconsistency.schema';
 import { ENTITY_EXTRACTION_PROMPT } from './prompts/entity-extraction.prompt';
 import type {
+  ExtractedCrossChunkInconsistency,
   ExtractionResponse,
   TemporalAuditContext,
 } from './entity-extraction.types';
@@ -71,6 +74,10 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           toValue: { type: 'string' },
           confidenceScore: { type: 'number' },
           evidence: { type: 'array', items: { type: 'string' } },
+          sequenceKind: {
+            type: 'string',
+            enum: ['TRANSITION', 'CONTRADICTION', 'UNCERTAIN'],
+          },
         },
         required: [
           'entityName',
@@ -79,6 +86,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           'toValue',
           'confidenceScore',
           'evidence',
+          'sequenceKind',
         ],
       },
     },
@@ -107,6 +115,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           },
           description: { type: ['string', 'null'] },
           intensity: { type: 'number' },
+          confidenceScore: { type: 'number', minimum: 0, maximum: 1 },
           evidence: { type: 'array', items: { type: 'string' } },
         },
         required: [
@@ -116,6 +125,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
           'relationType',
           'description',
           'intensity',
+          'confidenceScore',
           'evidence',
         ],
       },
@@ -126,6 +136,29 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         type: 'object',
         properties: {
           entityName: { type: 'string' },
+          relationship: {
+            type: ['object', 'null'],
+            properties: {
+              sourceEntityName: { type: 'string' },
+              targetEntityName: { type: 'string' },
+              relationType: {
+                type: 'string',
+                enum: [
+                  'ALLY',
+                  'ENEMY',
+                  'FAMILY',
+                  'ROMANTIC',
+                  'MENTOR',
+                  'RIVAL',
+                  'MEMBER_OF',
+                  'LOCATED_IN',
+                  'OWNS',
+                  'KNOWS',
+                ],
+              },
+            },
+            required: ['sourceEntityName', 'targetEntityName', 'relationType'],
+          },
           ruleCode: {
             type: 'string',
             enum: [
@@ -144,6 +177,7 @@ const EXTRACTION_RESPONSE_SCHEMA = {
         },
         required: [
           'entityName',
+          'relationship',
           'ruleCode',
           'field',
           'currentValue',
@@ -265,6 +299,59 @@ export class EntityExtractionClient {
         ? parsed.inconsistencies
         : [],
     };
+  }
+
+  async auditAdjacentChunks(input: {
+    userId?: string;
+    firstText: string;
+    secondText: string;
+    knownEntities: Array<{
+      canonicalName: string;
+      aliases: string[];
+      type: string;
+      description?: string | null;
+      attributes?: Record<string, unknown>;
+    }>;
+    temporalContext?: TemporalAuditContext;
+  }): Promise<ExtractedCrossChunkInconsistency[]> {
+    const ai = await this.getGenerationClient(input.userId);
+    if (!this.model || !ai) {
+      throw new Error(
+        'No extraction API key is configured for this user or the server',
+      );
+    }
+
+    const response = await ai.models.generateContent({
+      model: this.model || DEFAULT_CHAT_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: JSON.stringify({
+                firstChunk: input.firstText,
+                secondChunk: input.secondText,
+                knownEntities: input.knownEntities,
+                ...(input.temporalContext
+                  ? { temporalContext: input.temporalContext }
+                  : {}),
+              }),
+            },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: CROSS_CHUNK_INCONSISTENCY_PROMPT,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseJsonSchema: CROSS_CHUNK_INCONSISTENCY_SCHEMA,
+      },
+    });
+
+    const parsed = this.safeParseJson<{
+      contradictions?: ExtractedCrossChunkInconsistency[];
+    }>(response.text ?? '{}');
+    return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
   }
 
   private async getGenerationClient(

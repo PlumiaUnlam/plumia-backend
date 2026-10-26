@@ -2,6 +2,10 @@ import { EpistemicType, Prisma, RelationType } from '@prisma/client';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { TemporalAuditContext } from '../system/entity-extraction/entity-extraction.types';
+import {
+  normalizeEntityStateKey,
+  SINGLE_VALUE_STATE_KEYS,
+} from '../knowledge/domain/entity-state-keys';
 
 export interface TemporalEntity {
   id: string;
@@ -18,6 +22,8 @@ export interface TemporalEntityState {
   toValue: string | null;
   validFromSceneId: string;
   validToSceneId: string | null;
+  narrativeOrder: number | null;
+  createdAt: Date;
 }
 
 export interface TemporalRelationship {
@@ -133,6 +139,8 @@ export class TemporalKnowledgeSnapshotService {
           toValue: true,
           validFromSceneId: true,
           validToSceneId: true,
+          narrativeOrder: true,
+          createdAt: true,
         },
       }),
       this.prisma.fact.findMany({
@@ -163,6 +171,18 @@ export class TemporalKnowledgeSnapshotService {
       }),
     ]);
 
+    const activeStates = this.selectActiveStates(
+      states.filter((state) =>
+        this.isActiveAt(
+          state.validFromSceneId,
+          state.validToSceneId,
+          positions,
+          currentPosition,
+        ),
+      ),
+      positions,
+    );
+
     return {
       projectId,
       sceneId,
@@ -171,14 +191,7 @@ export class TemporalKnowledgeSnapshotService {
         ...entity,
         attributes: this.toAttributes(entity.attributes),
       })),
-      activeStates: states.filter((state) =>
-        this.isActiveAt(
-          state.validFromSceneId,
-          state.validToSceneId,
-          positions,
-          currentPosition,
-        ),
-      ),
+      activeStates,
       activeFacts: facts
         .filter(
           (fact) =>
@@ -287,6 +300,43 @@ export class TemporalKnowledgeSnapshotService {
         left.id.localeCompare(right.id),
     );
     return new Map(ordered.map((scene, index) => [scene.id, index]));
+  }
+
+  private selectActiveStates(
+    states: TemporalEntityState[],
+    positions: ReadonlyMap<string, number>,
+  ): TemporalEntityState[] {
+    const customStates: TemporalEntityState[] = [];
+    const latestSingleValueStates = new Map<string, TemporalEntityState>();
+
+    for (const state of states) {
+      const key = normalizeEntityStateKey(state.attributeKey);
+      if (!SINGLE_VALUE_STATE_KEYS.has(key)) {
+        customStates.push(state);
+        continue;
+      }
+
+      const stateKey = `${state.entityId}:${key}`;
+      const current = latestSingleValueStates.get(stateKey);
+      const statePosition = positions.get(state.validFromSceneId) ?? -1;
+      const currentPosition = current
+        ? (positions.get(current.validFromSceneId) ?? -1)
+        : -1;
+      const stateOrder = state.narrativeOrder ?? -1;
+      const currentOrder = current?.narrativeOrder ?? -1;
+      if (
+        !current ||
+        statePosition > currentPosition ||
+        (statePosition === currentPosition &&
+          (stateOrder > currentOrder ||
+            (stateOrder === currentOrder &&
+              state.createdAt > current.createdAt)))
+      ) {
+        latestSingleValueStates.set(stateKey, state);
+      }
+    }
+
+    return [...customStates, ...latestSingleValueStates.values()];
   }
 
   private isActiveAt(

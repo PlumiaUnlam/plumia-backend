@@ -8,6 +8,7 @@ import {
   Post,
   Request,
 } from '@nestjs/common';
+import { AcceptStateProposalSequenceDto } from '../dto/accept-state-proposal-sequence.dto';
 import type { AuthenticatedRequest } from './authenticated-request';
 import { EntityStateProposalOverrideDto } from '../dto/entity-state-proposal-override.dto';
 import { EntityStateProposalResponseDto } from '../dto/responses/entity-state-proposal-response.dto';
@@ -33,6 +34,15 @@ export class EntityStateProposalsController {
     @Body() override?: EntityStateProposalOverrideDto,
   ): Promise<EntityStateResponseDto> {
     return this.states.acceptProposal(req.user.id, proposalId, override);
+  }
+
+  @Post('projects/:projectId/state-proposals/accept-sequence')
+  acceptSequence(
+    @Request() req: AuthenticatedRequest,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() dto: AcceptStateProposalSequenceDto,
+  ): Promise<EntityStateResponseDto[]> {
+    return this.states.acceptProposalSequence(req.user.id, projectId, dto);
   }
 
   @Delete('state-proposals/:proposalId')

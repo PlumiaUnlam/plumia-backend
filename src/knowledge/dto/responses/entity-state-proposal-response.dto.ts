@@ -2,6 +2,9 @@ export class EntityStateProposalResponseDto {
   id!: string;
   projectId!: string;
   sceneId!: string;
+  sceneTitle!: string | null;
+  chapterTitle!: string | null;
+  bookTitle!: string | null;
   sourceChunkId!: string | null;
   sourceChunkHash!: string | null;
   entityId!: string;
@@ -12,6 +15,8 @@ export class EntityStateProposalResponseDto {
   evidence!: string[];
   confidenceScore!: number;
   conflictsWithLocked!: boolean;
+  narrativeOrder!: number | null;
+  sequenceKind!: 'TRANSITION' | 'CONTRADICTION' | 'UNCERTAIN' | null;
   status!: 'PENDING' | 'APPROVED' | 'REJECTED' | 'OBSOLETE';
   createdAt!: Date;
 }

@@ -157,7 +157,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
     );
   });
 
-  it('ignores an inconsistency whose entity cannot be resolved', async () => {
+  it('ignores an inconsistency without an entity name', async () => {
     await service.processInconsistencyCandidates({
       projectId: 'project-1',
       sceneId: 'scene-1',
@@ -170,7 +170,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
       },
       inconsistencies: [
         {
-          entityName: 'Desconocida',
+          entityName: '',
           ruleCode: 'ENTITY_CONTRADICTION',
           field: 'estado',
           currentValue: 'Muerta.',
@@ -185,6 +185,42 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
     });
 
     expect(auditService.createEntityContinuityAlert).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit inconsistency when the entity is not confirmed yet', async () => {
+    await service.processInconsistencyCandidates({
+      projectId: 'project-1',
+      sceneId: 'scene-1',
+      chunk: {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Iris llevaba los ojos verdes.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+      inconsistencies: [
+        {
+          entityName: 'Iris',
+          ruleCode: 'ENTITY_CONTRADICTION',
+          field: 'ojos',
+          currentValue: 'Azules',
+          observedValue: 'Verdes',
+          explanation: 'El texto presenta un color incompatible.',
+          severity: 'MEDIUM',
+          confidenceScore: 0.86,
+          evidence: ['Iris llevaba los ojos verdes.'],
+        },
+      ],
+      confirmedEntities: [],
+    });
+
+    expect(auditService.createEntityContinuityAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: null,
+        entityName: 'Iris',
+        field: 'ojos',
+      }),
+    );
   });
 });
 
@@ -419,6 +455,83 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       where: { id: { in: ['relationship-proposal-1'] } },
       data: { status: ProposalStatus.OBSOLETE },
     });
+  });
+
+  it('obsoletes a relationship when its deleted source chunk is identified by hash', async () => {
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'remaining-chunk',
+        chunkIndex: 0,
+        content: 'The scene still has other text.',
+        contentHash: 'remaining-hash',
+        isDirty: false,
+      },
+    ]);
+    prisma.relationshipProposal.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'relationship-proposal-1',
+          sourceChunkId: null,
+          sourceChunkHash: 'deleted-chunk-hash',
+          sourceEntityId: 'entity-a',
+          targetEntityId: 'entity-b',
+          sourceEntityProposalId: null,
+          targetEntityProposalId: null,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 5,
+      userId: 'user-1',
+    });
+
+    expect(prisma.relationshipProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['relationship-proposal-1'] } },
+      data: { status: ProposalStatus.OBSOLETE },
+    });
+    expect(client.extractEntities).not.toHaveBeenCalled();
+  });
+
+  it('keeps a relationship when its source hash still exists in an active chunk', async () => {
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'remaining-chunk',
+        chunkIndex: 0,
+        content: 'Equivalent source evidence remains.',
+        contentHash: 'shared-hash',
+        isDirty: false,
+      },
+    ]);
+    prisma.relationshipProposal.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'relationship-proposal-1',
+          sourceChunkId: null,
+          sourceChunkHash: 'shared-hash',
+          sourceEntityId: 'entity-a',
+          targetEntityId: 'entity-b',
+          sourceEntityProposalId: null,
+          targetEntityProposalId: null,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 5,
+      userId: 'user-1',
+    });
+
+    expect(prisma.relationshipProposal.updateMany).not.toHaveBeenCalled();
+    expect(client.extractEntities).not.toHaveBeenCalled();
   });
 
   it('ignores clean chunks and clears blank dirty chunks without sending them to extraction', async () => {

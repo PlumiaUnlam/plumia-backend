@@ -42,7 +42,26 @@ export interface ExtractionResponse {
 export type InconsistencyRuleCode =
   | 'ENTITY_CONTRADICTION'
   | 'DEAD_CHARACTER_ACTION'
-  | 'WORLDBUILDING_RULE';
+  | 'WORLDBUILDING_RULE'
+  | 'INTRA_SCENE_CONTRADICTION';
+
+export interface ExtractedCrossChunkInconsistency {
+  kind?: 'TRANSITION' | 'CONTRADICTION' | 'UNCERTAIN';
+  entityName: string;
+  field: string;
+  firstValue: string;
+  secondValue: string;
+  explanation: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  confidenceScore: number;
+  firstEvidence: string[];
+  secondEvidence: string[];
+  relationship?: {
+    sourceEntityName: string;
+    targetEntityName: string;
+    relationType: string;
+  } | null;
+}
 
 export interface TemporalAuditContext {
   worldRules: unknown;
@@ -70,6 +89,11 @@ export interface ExtractedInconsistency {
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   confidenceScore: number;
   evidence: string[];
+  relationship?: {
+    sourceEntityName: string;
+    targetEntityName: string;
+    relationType: string;
+  } | null;
 }
 
 export interface ExtractedRelationship {
@@ -79,6 +103,7 @@ export interface ExtractedRelationship {
   relationType: RelationType;
   description: string | null;
   intensity: number;
+  confidenceScore: number;
   evidence: string[];
 }
 
@@ -89,6 +114,7 @@ export interface ExtractedStateChange {
   toValue: string;
   confidenceScore: number;
   evidence: string[];
+  sequenceKind?: 'TRANSITION' | 'CONTRADICTION' | 'UNCERTAIN';
 }
 
 export interface ConfirmedEntityLike {

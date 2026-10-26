@@ -129,6 +129,8 @@ function state(
   toValue: string;
   validFromSceneId: string;
   validToSceneId: null;
+  narrativeOrder: null;
+  createdAt: Date;
 } {
   return {
     id: `${entityId}-${attributeKey}-${toValue}`,
@@ -137,6 +139,8 @@ function state(
     toValue,
     validFromSceneId: 'scene-one',
     validToSceneId: null,
+    narrativeOrder: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
   };
 }
 

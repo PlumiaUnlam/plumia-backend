@@ -53,6 +53,10 @@ import { AuditModule } from '../audit/audit.module';
       useClass: PrismaTimelineEventRepository,
     },
   ],
-  exports: [KnowledgeService, TemporalStateService],
+  exports: [
+    KnowledgeService,
+    TemporalStateService,
+    RelationshipProposalService,
+  ],
 })
 export class KnowledgeModule {}
