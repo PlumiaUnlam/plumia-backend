@@ -42,9 +42,13 @@ const PROMPT_INJECTION_PHRASES = [
   'chain of thought',
 ] as const;
 const ROLE_SPOOFING_PATTERN =
-  /\b(?:actua|comportate|finge|simula|responde)\b.{0,80}\b(?:sistema|system|desarrollador|developer|sin filtros|sin restricciones)\b/;
-const INTERNAL_DATA_EXTRACTION_PATTERN =
-  /\b(?:revela|revelame|mostra|mostrame|muestra|muestrame|imprime|dame|decime|dime|filtra|extrae|lista|pasame)\b.{0,80}\b(?:prompt|instrucciones internas|clave|api key|credenciales|token de acceso|variables? de entorno|razonamiento|codigo privado)\b/;
+  /\b(?:actua|comportate|finge|simula|responde)\b.{0,40}\b(?:como|en modo|ser|de)\b.{0,40}\b(?:sistema|system|desarrollador|developer|sin filtros|sin restricciones)\b/;
+const INTERNAL_DATA_EXTRACTION_PATTERNS = [
+  /\b(?:revela|revelame|mostra|mostrame|muestra|muestrame|imprime)\b.{0,80}\b(?:tu prompt|tus instrucciones|prompt del sistema|prompt interno|instrucciones internas|instrucciones ocultas|razonamiento interno|cadena de pensamiento)\b/,
+  /\b(?:dame|decime|dime|filtra|extrae|lista|pasame)\b.{0,80}\b(?:tu prompt|tus instrucciones|prompt del sistema|prompt interno|instrucciones internas|instrucciones ocultas|razonamiento interno|cadena de pensamiento)\b/,
+  /\b(?:revela|revelame|mostra|mostrame|muestra|muestrame|imprime)\b.{0,80}\b(?:api key|clave(?: de)? api|credenciales|token de acceso|variables? de entorno|codigo privado)\b/,
+  /\b(?:dame|decime|dime|filtra|extrae|lista|pasame)\b.{0,80}\b(?:api key|clave(?: de)? api|credenciales|token de acceso|variables? de entorno|codigo privado)\b/,
+];
 const INTERNAL_DATA_OWNERSHIP_PATTERN =
   /\b(?:cual es|cuales son|donde esta|donde estan)\b.{0,80}\b(?:tu|tus|del sistema|de plumia|interno|internos)\b.{0,80}\b(?:api key|clave|token de acceso|credenciales|variables? de entorno|prompt)\b/;
 const OUT_OF_SCOPE_TECH_WORDS = [
@@ -183,14 +187,19 @@ export function isCreativeRequest(question: string): boolean {
     .replace(/^por favor\s+/, '');
   const words = tokenize(normalizedQuestion);
   return (
-    CREATIVE_REQUEST_WORDS.some((word) => word === words[0]) ||
-    (CREATIVE_GENERATION_WORDS.some((word) => word === words[0]) &&
+    includesValue(CREATIVE_REQUEST_WORDS, words[0]) ||
+    (includesValue(CREATIVE_GENERATION_WORDS, words[0]) &&
       words
         .slice(1, 5)
-        .some((word) =>
-          CREATIVE_TARGET_WORDS.some((target) => target === word),
-        ))
+        .some((word) => includesValue(CREATIVE_TARGET_WORDS, word)))
   );
+}
+
+function includesValue(
+  values: readonly string[],
+  value: string | undefined,
+): boolean {
+  return value !== undefined && values.includes(value);
 }
 
 function isPromptInjection(question: string): boolean {
@@ -203,7 +212,9 @@ function isPromptInjection(question: string): boolean {
     ) ||
     hasAnyPhrase(question, PROMPT_INJECTION_PHRASES) ||
     ROLE_SPOOFING_PATTERN.test(question) ||
-    INTERNAL_DATA_EXTRACTION_PATTERN.test(question) ||
+    INTERNAL_DATA_EXTRACTION_PATTERNS.some((pattern) =>
+      pattern.test(question),
+    ) ||
     INTERNAL_DATA_OWNERSHIP_PATTERN.test(question)
   );
 }

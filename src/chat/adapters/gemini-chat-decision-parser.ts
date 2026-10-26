@@ -33,7 +33,7 @@ export function parseIntentResponse(value: string): {
     intent: intent as ChatIntent,
     ...(intent === 'work' &&
     typeof workQuestionType === 'string' &&
-    WORK_QUESTION_TYPES.some((type) => type === workQuestionType)
+    WORK_QUESTION_TYPES.includes(workQuestionType as WorkQuestionType)
       ? { workQuestionType: workQuestionType as WorkQuestionType }
       : {}),
   };

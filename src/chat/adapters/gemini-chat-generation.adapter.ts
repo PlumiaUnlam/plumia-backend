@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   Injectable,
   Logger,
@@ -235,7 +235,8 @@ export class GeminiChatGenerationAdapter
         responseMimeType: 'application/json',
         responseJsonSchema: INTENT_SCHEMA,
         temperature: 0,
-        maxOutputTokens: 256,
+        maxOutputTokens: 1_024,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
         ...(input.signal ? { abortSignal: input.signal } : {}),
       },
     });
@@ -334,7 +335,8 @@ export class GeminiChatGenerationAdapter
         responseMimeType: 'application/json',
         responseJsonSchema: VERIFICATION_SCHEMA,
         temperature: 0,
-        maxOutputTokens: 256,
+        maxOutputTokens: 1_024,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
         ...(input.signal ? { abortSignal: input.signal } : {}),
       },
     });

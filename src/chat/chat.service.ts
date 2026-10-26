@@ -10,7 +10,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApplicationHelpIndexService } from './application-help-index.service';
 import { ChatEmbeddingIndexService } from './chat-embedding-index.service';
-import { ChatRoutingService } from './chat-routing.service';
+import { ChatRoutingService, type ChatRoute } from './chat-routing.service';
 import { ChatConflictService } from './chat-conflict.service';
 import {
   CHAT_CLARIFICATION_RESPONSE,
@@ -42,6 +42,7 @@ import type {
 import {
   CHAT_GENERATION_PROVIDER,
   type ChatGenerationProvider,
+  type ChatGenerationResult,
   type ChatHistoryEntry,
 } from './ports/chat-generation-provider.port';
 import {
@@ -70,6 +71,21 @@ interface RetrievalPlan {
   entityCandidateFilters: Prisma.EntityWhereInput[];
   relationshipCandidateFilters: Prisma.RelationshipWhereInput[];
   timelineCandidateFilters: Prisma.TimelineEventWhereInput[];
+}
+
+interface ChatTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+interface RoutedChatContext {
+  thread: ChatThreadRecord;
+  question: string;
+  history: ChatHistoryEntry[];
+  signal: AbortSignal | undefined;
+  domain: 'work' | 'application_help';
+  workQuestionType: WorkQuestionType;
+  usage: ChatTokenUsage;
 }
 
 interface RetrievedEntity {
@@ -415,6 +431,16 @@ export class ChatService {
 
     const route = await this.routing.route(question, history, signal);
     throwIfAborted(signal);
+    return this.handleRoutedMessage(thread, question, history, route, signal);
+  }
+
+  private async handleRoutedMessage(
+    thread: ChatThreadRecord,
+    question: string,
+    history: ChatHistoryEntry[],
+    route: ChatRoute,
+    signal: AbortSignal | undefined,
+  ): Promise<ChatExchange> {
     if (route.kind === 'immediate') {
       return this.persistExchange(
         thread,
@@ -445,215 +471,251 @@ export class ChatService {
       );
     }
 
-    let domain: 'work' | 'application_help' = route.kind;
-    let inputTokens = route.inputTokens;
-    let outputTokens = route.outputTokens;
+    return this.processRoutedMessage({
+      thread,
+      question,
+      history,
+      signal,
+      domain: route.kind,
+      workQuestionType,
+      usage: {
+        inputTokens: route.inputTokens,
+        outputTokens: route.outputTokens,
+      },
+    });
+  }
+
+  private async processRoutedMessage(
+    context: RoutedChatContext,
+  ): Promise<ChatExchange> {
+    let domain = context.domain;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const sources =
-        domain === 'application_help'
-          ? await this.applicationHelpIndex.search(
-              question,
-              thread.projectId,
-              signal,
-            )
-          : await this.retrieveSources(
-              thread.projectId,
-              question,
-              history,
-              workQuestionType,
-              signal,
-            );
-      throwIfAborted(signal);
+      const sources = await this.retrieveDomainSources(context, domain);
+      throwIfAborted(context.signal);
       if (sources.length === 0) {
-        return this.persistExchange(
-          thread,
-          question,
-          {
-            answer: noEvidenceAnswer(domain === 'application_help'),
-            sources: [],
-            inputTokens,
-            outputTokens,
-          },
-          signal,
-        );
+        return this.persistNoEvidence(context, domain);
       }
 
       const openConflicts =
         domain === 'work'
           ? await this.conflicts.findRelevant(
-              thread.projectId,
-              question,
+              context.thread.projectId,
+              context.question,
               sources,
-              signal,
+              context.signal,
             )
           : [];
-      throwIfAborted(signal);
+      throwIfAborted(context.signal);
 
       const deterministicAnswer =
         domain === 'work'
           ? buildDeterministicEvidenceAnswer(
-              question,
+              context.question,
               sources,
-              workQuestionType,
+              context.workQuestionType,
             )
           : null;
       if (deterministicAnswer) {
-        const notice = withConflictNotice(
-          deterministicAnswer.answer,
+        return this.persistDeterministicAnswer(
+          context,
+          deterministicAnswer,
+          sources,
           openConflicts,
-          thread.projectId,
-        );
-        return this.persistExchange(
-          thread,
-          question,
-          {
-            answer: notice.answer,
-            sources: presentReviewedSources(
-              deterministicAnswer.sources,
-              sources,
-            ),
-            actions: notice.actions,
-            inputTokens,
-            outputTokens,
-          },
-          signal,
         );
       }
 
       const result = await this.generator.generate({
-        question,
-        history,
+        question: context.question,
+        history: context.history,
         sources,
         openConflicts,
         expectedDomain: domain,
-        workQuestionType: domain === 'work' ? workQuestionType : 'general',
-        ...(signal ? { signal } : {}),
+        workQuestionType:
+          domain === 'work' ? context.workQuestionType : 'general',
+        ...(context.signal ? { signal: context.signal } : {}),
       });
-      throwIfAborted(signal);
-      inputTokens += result.inputTokens;
-      outputTokens += result.outputTokens;
+      throwIfAborted(context.signal);
+      context.usage.inputTokens += result.inputTokens;
+      context.usage.outputTokens += result.outputTokens;
 
-      if (result.outOfScope) {
-        return this.persistExchange(
-          thread,
-          question,
-          {
-            answer: CHAT_OUT_OF_SCOPE_RESPONSE,
-            sources: [],
-            inputTokens,
-            outputTokens,
-          },
-          signal,
-        );
-      }
-      if (result.sourceMismatch) {
+      if (result.sourceMismatch && !result.outOfScope) {
         if (attempt === 0) {
           domain = domain === 'work' ? 'application_help' : 'work';
           continue;
         }
         return this.persistExchange(
-          thread,
-          question,
+          context.thread,
+          context.question,
           {
             answer: CHAT_CLARIFICATION_RESPONSE,
             sources: [],
-            inputTokens,
-            outputTokens,
+            inputTokens: context.usage.inputTokens,
+            outputTokens: context.usage.outputTokens,
           },
-          signal,
+          context.signal,
         );
       }
-      if (result.claims.length === 0) {
-        const notice = withConflictNotice(
-          noEvidenceAnswer(domain === 'application_help'),
-          openConflicts,
-          thread.projectId,
-        );
-        return this.persistExchange(
-          thread,
-          question,
-          {
-            answer: notice.answer,
-            sources: [],
-            actions: notice.actions,
-            inputTokens,
-            outputTokens,
-          },
-          signal,
-        );
-      }
-
-      const groundedResponse = buildGroundedResponse(result, sources);
-      if (groundedResponse.sources.length > 0) {
-        const verification = await this.evidenceVerifier.verify({
-          question,
-          claims: result.claims,
-          sources,
-          openConflicts,
-          workQuestionType: domain === 'work' ? workQuestionType : 'general',
-          ...(signal ? { signal } : {}),
-        });
-        throwIfAborted(signal);
-        inputTokens += verification.inputTokens;
-        outputTokens += verification.outputTokens;
-        if (!verification.supported) {
-          const notice = withConflictNotice(
-            noEvidenceAnswer(domain === 'application_help'),
-            openConflicts,
-            thread.projectId,
-          );
-          return this.persistExchange(
-            thread,
-            question,
-            {
-              answer: notice.answer,
-              sources: [],
-              actions: notice.actions,
-              inputTokens,
-              outputTokens,
-            },
-            signal,
-          );
-        }
-      }
-      const navigationAction =
-        domain === 'application_help'
-          ? buildNavigationAction(groundedResponse.sources)
-          : null;
-      const notice = withConflictNotice(
-        groundedResponse.answer,
+      return this.persistGeneratedResponse(
+        context,
+        domain,
+        result,
+        sources,
         openConflicts,
-        thread.projectId,
-      );
-      return this.persistExchange(
-        thread,
-        question,
-        {
-          answer: notice.answer,
-          sources:
-            groundedResponse.sources.length > 0
-              ? presentReviewedSources(groundedResponse.sources, sources)
-              : [],
-          actions: [
-            ...(navigationAction ? [navigationAction] : []),
-            ...notice.actions,
-          ],
-          inputTokens,
-          outputTokens,
-        },
-        signal,
       );
     }
     return this.persistExchange(
-      thread,
-      question,
+      context.thread,
+      context.question,
       {
         answer: CHAT_CLARIFICATION_RESPONSE,
         sources: [],
-        inputTokens,
-        outputTokens,
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
       },
-      signal,
+      context.signal,
+    );
+  }
+
+  private retrieveDomainSources(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+  ): Promise<ChatSource[]> {
+    return domain === 'application_help'
+      ? this.applicationHelpIndex.search(
+          context.question,
+          context.thread.projectId,
+          context.signal,
+        )
+      : this.retrieveSources(
+          context.thread.projectId,
+          context.question,
+          context.history,
+          context.workQuestionType,
+          context.signal,
+        );
+  }
+
+  private persistNoEvidence(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    conflicts: Parameters<typeof withConflictNotice>[1] = [],
+  ): Promise<ChatExchange> {
+    const notice = withConflictNotice(
+      noEvidenceAnswer(domain === 'application_help'),
+      conflicts,
+      context.thread.projectId,
+    );
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: notice.answer,
+        sources: [],
+        actions: notice.actions,
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
+    );
+  }
+
+  private persistDeterministicAnswer(
+    context: RoutedChatContext,
+    deterministicAnswer: { answer: string; sources: ChatSource[] },
+    reviewedSources: ChatSource[],
+    conflicts: Parameters<typeof withConflictNotice>[1],
+  ): Promise<ChatExchange> {
+    const notice = withConflictNotice(
+      deterministicAnswer.answer,
+      conflicts,
+      context.thread.projectId,
+    );
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: notice.answer,
+        sources: presentReviewedSources(
+          deterministicAnswer.sources,
+          reviewedSources,
+        ),
+        actions: notice.actions,
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
+    );
+  }
+
+  private async persistGeneratedResponse(
+    context: RoutedChatContext,
+    domain: RoutedChatContext['domain'],
+    result: ChatGenerationResult,
+    sources: ChatSource[],
+    conflicts: Parameters<typeof withConflictNotice>[1],
+  ): Promise<ChatExchange> {
+    if (result.outOfScope) {
+      return this.persistExchange(
+        context.thread,
+        context.question,
+        {
+          answer: CHAT_OUT_OF_SCOPE_RESPONSE,
+          sources: [],
+          inputTokens: context.usage.inputTokens,
+          outputTokens: context.usage.outputTokens,
+        },
+        context.signal,
+      );
+    }
+    if (result.claims.length === 0) {
+      return this.persistNoEvidence(context, domain, conflicts);
+    }
+
+    const groundedResponse = buildGroundedResponse(result, sources);
+    if (groundedResponse.sources.length > 0) {
+      const verification = await this.evidenceVerifier.verify({
+        question: context.question,
+        claims: result.claims,
+        sources,
+        openConflicts: conflicts,
+        workQuestionType:
+          domain === 'work' ? context.workQuestionType : 'general',
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      throwIfAborted(context.signal);
+      context.usage.inputTokens += verification.inputTokens;
+      context.usage.outputTokens += verification.outputTokens;
+      if (!verification.supported) {
+        return this.persistNoEvidence(context, domain, conflicts);
+      }
+    }
+
+    const navigationAction =
+      domain === 'application_help'
+        ? buildNavigationAction(groundedResponse.sources)
+        : null;
+    const notice = withConflictNotice(
+      groundedResponse.answer,
+      conflicts,
+      context.thread.projectId,
+    );
+    return this.persistExchange(
+      context.thread,
+      context.question,
+      {
+        answer: notice.answer,
+        sources:
+          groundedResponse.sources.length > 0
+            ? presentReviewedSources(groundedResponse.sources, sources)
+            : [],
+        actions: [
+          ...(navigationAction ? [navigationAction] : []),
+          ...notice.actions,
+        ],
+        inputTokens: context.usage.inputTokens,
+        outputTokens: context.usage.outputTokens,
+      },
+      context.signal,
     );
   }
 
@@ -793,16 +855,17 @@ export class ChatService {
     plan: RetrievalPlan,
     signal?: AbortSignal,
   ): Promise<RetrievalCandidates> {
-    const chunksOrderBy = plan.countTerm
-      ? [{ id: 'asc' as const }]
-      : plan.firstMentionIntent
-        ? [
-            { scene: { chapter: { book: { sortKey: 'asc' as const } } } },
-            { scene: { chapter: { sortKey: 'asc' as const } } },
-            { scene: { sortKey: 'asc' as const } },
-            { chunkIndex: 'asc' as const },
-          ]
-        : null;
+    let chunksOrderBy: Prisma.ChunkOrderByWithRelationInput[] | null = null;
+    if (plan.countTerm) {
+      chunksOrderBy = [{ id: 'asc' as const }];
+    } else if (plan.firstMentionIntent) {
+      chunksOrderBy = [
+        { scene: { chapter: { book: { sortKey: 'asc' as const } } } },
+        { scene: { chapter: { sortKey: 'asc' as const } } },
+        { scene: { sortKey: 'asc' as const } },
+        { chunkIndex: 'asc' as const },
+      ];
+    }
     const chunksQuery = {
       where: buildChunkWhere(projectId, plan),
       include: {
@@ -866,20 +929,26 @@ export class ChatService {
       ],
     );
     throwIfAborted(signal);
-    if (plan.countTerm) {
-      let lastChunkId = chunks.at(-1)?.id;
-      let pageLength = chunks.length;
-      while (pageLength === MAX_ORDERED_CHUNK_CANDIDATES && lastChunkId) {
-        const nextPage = await this.prisma.chunk.findMany({
-          ...chunksQuery,
-          cursor: { id: lastChunkId },
-          skip: 1,
-        });
-        throwIfAborted(signal);
-        chunks.push(...nextPage);
-        pageLength = nextPage.length;
-        lastChunkId = nextPage.at(-1)?.id;
+    const lastChunkId = chunks.at(-1)?.id;
+    const appendRemainingChunks = async (cursorId: string): Promise<void> => {
+      const nextPage = await this.prisma.chunk.findMany({
+        ...chunksQuery,
+        cursor: { id: cursorId },
+        skip: 1,
+      });
+      throwIfAborted(signal);
+      chunks.push(...nextPage);
+      const nextCursorId = nextPage.at(-1)?.id;
+      if (nextPage.length === MAX_ORDERED_CHUNK_CANDIDATES && nextCursorId) {
+        await appendRemainingChunks(nextCursorId);
       }
+    };
+    if (
+      plan.countTerm &&
+      chunks.length === MAX_ORDERED_CHUNK_CANDIDATES &&
+      lastChunkId
+    ) {
+      await appendRemainingChunks(lastChunkId);
     }
     return [
       chunks,
@@ -1030,13 +1099,15 @@ function buildRetrievalPlan(
   const semanticRanks = new Map(
     semanticMatches.map((match, index) => [match.chunkId, index]),
   );
-  const chunkTextTerms = (
-    countTerm
-      ? [countTerm]
-      : firstMentionIntent
-        ? firstMentionTerms(terms)
-        : terms
-  ).slice(0, 10);
+  let chunkTerms: string[];
+  if (countTerm) {
+    chunkTerms = [countTerm];
+  } else if (firstMentionIntent) {
+    chunkTerms = firstMentionTerms(terms);
+  } else {
+    chunkTerms = terms;
+  }
+  const chunkTextTerms = chunkTerms.slice(0, 10);
   const chunkCandidateFilters: Prisma.ChunkWhereInput[] = [
     ...(semanticChunkIds.length > 0 ? [{ id: { in: semanticChunkIds } }] : []),
     ...chunkTextTerms.map((term) => ({
@@ -1393,6 +1464,16 @@ function buildDeterministicEvidenceAnswer(
   sources: ChatSource[],
   workQuestionType: WorkQuestionType,
 ): { answer: string; sources: ChatSource[] } | null {
+  return (
+    buildCountEvidenceAnswer(question, sources) ??
+    buildFirstMentionEvidenceAnswer(question, sources, workQuestionType)
+  );
+}
+
+function buildCountEvidenceAnswer(
+  question: string,
+  sources: ChatSource[],
+): { answer: string; sources: ChatSource[] } | null {
   const countTerm = extractCountTerm(question);
   if (countTerm) {
     const manuscriptSources = sources.filter(
@@ -1434,7 +1515,14 @@ function buildDeterministicEvidenceAnswer(
       };
     }
   }
+  return null;
+}
 
+function buildFirstMentionEvidenceAnswer(
+  question: string,
+  sources: ChatSource[],
+  workQuestionType: WorkQuestionType,
+): { answer: string; sources: ChatSource[] } | null {
   if (
     workQuestionType === 'first_appearance' ||
     isFirstMentionIntent(question)
@@ -1498,14 +1586,17 @@ function rankManuscriptSources<
           (occurrenceCount ? occurrenceCount * 2 : 0),
       };
     })
-    .filter((entry) =>
-      countTerm
-        ? (entry.occurrenceCount ?? 0) > 0
-        : wantsFirst
-          ? matchTerms.length > 0 &&
-            matchTerms.some((term) => includesTerm(entry.chunk.content, term))
-          : entry.lexicalScore > 0 || semanticRanks.has(entry.chunk.id),
-    );
+    .filter((entry) => {
+      if (countTerm) {
+        return (entry.occurrenceCount ?? 0) > 0;
+      }
+      if (wantsFirst) {
+        return matchTerms.some((term) =>
+          includesTerm(entry.chunk.content, term),
+        );
+      }
+      return entry.lexicalScore > 0 || semanticRanks.has(entry.chunk.id);
+    });
 
   const lexicalRanks = new Map(
     [...candidates]

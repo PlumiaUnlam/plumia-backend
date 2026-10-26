@@ -74,8 +74,16 @@ const STOP_WORDS = new Set([
 const APPLICATION_FUNCTION_QUESTION =
   /\bcomo funciona(?:n)?\b(?=.*\b(?:plumia|aplicacion|editor|wiki|storyboard|tablero|chat|modo de escritura|estadisticas|historial|pestana|panel|boton|menu)\b)/;
 
+const APPLICATION_HOW_TO_PATTERNS = [
+  /\bcomo\s+(?:(?:puedo|se)\s+)?(?:usar|uso|creo|crear|agrego|agregar|configuro|configurar|cambio|cambiar)\b/,
+  /\bcomo\s+(?:(?:puedo|se)\s+)?(?:edito|editar|elimino|eliminar|comparto|compartir|exporto|exportar|importo|importar)\b/,
+  /\bcomo\s+(?:(?:puedo|se)\s+)?(?:activo|activar|desactivo|desactivar|guardo|guardar|subo|subir|descargo|descargar)\b/,
+  /\bcomo\s+(?:(?:puedo|se)\s+)?(?:recupero|recuperar|restablezco|restablecer|veo|ver|consulto|consultar|encuentro|encontrar)\b/,
+  /\bcomo\s+(?:(?:puedo|se)\s+)?(?:accedo|acceder|abro|abrir|genero|generar)\b/,
+];
+
 const HELP_QUESTION_PATTERNS = [
-  /\bcomo\s+(?:(?:puedo|se)\s+)?(?:usar|uso|creo|crear|agrego|agregar|configuro|configurar|cambio|cambiar|edito|editar|elimino|eliminar|comparto|compartir|exporto|exportar|importo|importar|activo|activar|desactivo|desactivar|guardo|guardar|subo|subir|descargo|descargar|recupero|recuperar|restablezco|restablecer|veo|ver|consulto|consultar|encuentro|encontrar|accedo|acceder|abro|abrir|genero|generar)\b/,
+  ...APPLICATION_HOW_TO_PATTERNS,
   APPLICATION_FUNCTION_QUESTION,
   /\bdonde\b/,
   /\bcuando\b/,

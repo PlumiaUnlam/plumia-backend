@@ -32,10 +32,11 @@ export function withConflictNotice(
     return { answer, actions: [] };
   }
   const title = first.title.replace(/\s+/g, ' ').trim().slice(0, 140);
+  const extraCount = conflicts.length - 1;
+  const alertLabel =
+    conflicts.length > 2 ? 'alertas relacionadas' : 'alerta relacionada';
   const extra =
-    conflicts.length > 1
-      ? ` Hay al menos ${conflicts.length - 1} alerta${conflicts.length > 2 ? 's' : ''} relacionada${conflicts.length > 2 ? 's' : ''} más.`
-      : '';
+    extraCount > 0 ? ` Hay al menos ${extraCount} ${alertLabel} más.` : '';
   return {
     answer: `${answer}\n\n⚠️ Hay una inconsistencia abierta relacionada: “${title}”.${extra} Revisala en Editor > Revisión > Wiki > Inconsistencias detectadas antes de tomar el dato disputado como definitivo.`,
     actions: [

@@ -832,9 +832,11 @@ model ApplicationHelpChunk {
   embedding            Unsupported("vector(1536)")?
   embeddingContentHash String?                   @map("embedding_content_hash") @db.VarChar(64)
   embeddingProfile     String?                   @map("embedding_profile") @db.VarChar(180)
+  searchVector         Unsupported("tsvector")   @map("search_vector")
   createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  @@index([searchVector], map: "idx_application_help_search", type: Gin)
   @@map("application_help_chunk")
 }
 

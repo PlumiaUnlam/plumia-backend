@@ -6,7 +6,7 @@ export function isSafeChatRoute(route: string): boolean {
     route.startsWith('//') ||
     route.includes('\\') ||
     route.includes('{') ||
-    [...route].some((character) => character.charCodeAt(0) < 32) ||
+    [...route].some((character) => (character.codePointAt(0) ?? 0) < 32) ||
     route.length > 2_048
   ) {
     return false;

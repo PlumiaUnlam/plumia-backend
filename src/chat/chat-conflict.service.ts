@@ -78,18 +78,22 @@ export class ChatConflictService {
     if (alerts.length === 0) {
       return [];
     }
-    let pageLength = alerts.length;
-    let lastAlertId = alerts.at(-1)?.id;
-    while (pageLength === MAX_CANDIDATE_ALERTS && lastAlertId) {
+    const lastAlertId = alerts.at(-1)?.id;
+    const appendRemainingAlerts = async (cursorId: string): Promise<void> => {
       const nextPage = await this.prisma.auditAlert.findMany({
         ...alertsQuery,
-        cursor: { id: lastAlertId },
+        cursor: { id: cursorId },
         skip: 1,
       });
       throwIfAborted(signal);
       alerts.push(...nextPage);
-      pageLength = nextPage.length;
-      lastAlertId = nextPage.at(-1)?.id;
+      const nextCursorId = nextPage.at(-1)?.id;
+      if (nextPage.length === MAX_CANDIDATE_ALERTS && nextCursorId) {
+        await appendRemainingAlerts(nextCursorId);
+      }
+    };
+    if (alerts.length === MAX_CANDIDATE_ALERTS && lastAlertId) {
+      await appendRemainingAlerts(lastAlertId);
     }
 
     const linkedChunkIds = [

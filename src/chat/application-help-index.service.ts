@@ -33,7 +33,12 @@ export class ApplicationHelpIndexService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.ensureSnapshot();
+    try {
+      await this.ensureSnapshot();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Application help corpus unavailable: ${message}`);
+    }
     if (this.embeddingProvider.isConfigured()) {
       this.startBackgroundIndexing();
     }
@@ -133,42 +138,41 @@ export class ApplicationHelpIndexService implements OnModuleInit {
   }
 
   private async indexAllStaleChunks(): Promise<void> {
-    while (true) {
-      const staleChunks = await this.store.findStaleChunks(
-        this.embeddingProvider.profile,
-        EMBEDDING_BATCH_SIZE,
-      );
-      if (staleChunks.length === 0) {
-        return;
-      }
-      const embeddings = await this.embeddingProvider.embedDocuments(
-        staleChunks.map((chunk) => ({
-          title: chunk.title,
-          content: chunk.embedText,
-        })),
-      );
-      if (embeddings.length !== staleChunks.length) {
-        throw new Error('Embedding provider returned an incomplete help batch');
-      }
-      const updated = await Promise.all(
-        staleChunks.map((chunk, index) => {
-          const embedding = embeddings[index];
-          if (!embedding) {
-            throw new Error('Embedding provider returned an empty help vector');
-          }
-          return this.store.updateEmbedding({
-            id: chunk.id,
-            embedding,
-            contentHash: chunk.contentHash,
-            profile: this.embeddingProvider.profile,
-          });
-        }),
-      );
-      if (updated.some((didUpdate) => !didUpdate)) {
-        throw new Error('Application help snapshot changed during embedding');
-      }
-      this.logger.log(`Embedded ${staleChunks.length} PlumIA help documents`);
+    const staleChunks = await this.store.findStaleChunks(
+      this.embeddingProvider.profile,
+      EMBEDDING_BATCH_SIZE,
+    );
+    if (staleChunks.length === 0) {
+      return;
     }
+    const embeddings = await this.embeddingProvider.embedDocuments(
+      staleChunks.map((chunk) => ({
+        title: chunk.title,
+        content: chunk.embedText,
+      })),
+    );
+    if (embeddings.length !== staleChunks.length) {
+      throw new Error('Embedding provider returned an incomplete help batch');
+    }
+    const updated = await Promise.all(
+      staleChunks.map((chunk, index) => {
+        const embedding = embeddings[index];
+        if (!embedding) {
+          throw new Error('Embedding provider returned an empty help vector');
+        }
+        return this.store.updateEmbedding({
+          id: chunk.id,
+          embedding,
+          contentHash: chunk.contentHash,
+          profile: this.embeddingProvider.profile,
+        });
+      }),
+    );
+    if (updated.some((didUpdate) => !didUpdate)) {
+      throw new Error('Application help snapshot changed during embedding');
+    }
+    this.logger.log(`Embedded ${staleChunks.length} PlumIA help documents`);
+    await this.indexAllStaleChunks();
   }
 }
 
