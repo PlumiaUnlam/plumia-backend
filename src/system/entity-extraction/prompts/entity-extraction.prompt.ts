@@ -96,7 +96,9 @@ Reglas:
 - Si temporalContext.deceasedEntityNames incluye una entidad, devolver DEAD_CHARACTER_ACTION
   solo cuando el chunk le atribuya una accion presente, explicita y respaldada por evidencia.
 - Si temporalContext.worldRules contradice una accion o hecho del chunk, devolver
-  WORLDBUILDING_RULE. Si no hay una regla concreta y aplicable, no generes la alerta.
+  WORLDBUILDING_RULE. Si worldRules contiene una propiedad "rules", cada elemento textual
+  representa una regla concreta configurada por el autor. Si no hay una regla concreta y
+  aplicable, no generes la alerta.
 - Usar ENTITY_CONTRADICTION para contradicciones contra la ficha o contexto de una entidad
   que no sean una accion de una entidad fallecida.
 - Devolver una inconsistencia solo si el texto contradice de forma explicita un dato de la ficha
