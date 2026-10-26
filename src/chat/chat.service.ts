@@ -677,7 +677,7 @@ export class ChatService {
         question: context.question,
         claims: result.claims,
         sources,
-        openConflicts: conflicts,
+        openConflicts: [...conflicts],
         workQuestionType:
           domain === 'work' ? context.workQuestionType : 'general',
         ...(context.signal ? { signal: context.signal } : {}),
