@@ -7,6 +7,7 @@ jest.mock('@google/genai', () => ({
   GoogleGenAI: jest.fn().mockImplementation(() => ({
     models: { generateContent: mockGenerateContent },
   })),
+  ThinkingLevel: { MINIMAL: 'MINIMAL' },
 }));
 
 import { GeminiChatGenerationAdapter } from '../../../src/chat/adapters/gemini-chat-generation.adapter';
@@ -18,6 +19,8 @@ interface GenerateRequest {
     responseMimeType?: string;
     systemInstruction?: string;
     safetySettings?: unknown;
+    maxOutputTokens?: number;
+    thinkingConfig?: { thinkingLevel?: string };
     abortSignal?: AbortSignal;
   };
 }
@@ -248,6 +251,8 @@ describe('GeminiChatGenerationAdapter', () => {
     expect(request?.config.systemInstruction).toContain(
       'helpHint es una pista lexical debil',
     );
+    expect(request?.config.maxOutputTokens).toBe(1_024);
+    expect(request?.config.thinkingConfig?.thinkingLevel).toBe('MINIMAL');
     expect(request?.contents?.[0]?.parts[0]?.text).toContain('"helpHint":true');
   });
 
@@ -324,6 +329,8 @@ describe('GeminiChatGenerationAdapter', () => {
       mockGenerateContent.mock.calls as Array<[GenerateRequest]>
     )[0]?.[0];
     expect(request?.config.systemInstruction).toContain('verificador estricto');
+    expect(request?.config.maxOutputTokens).toBe(1_024);
+    expect(request?.config.thinkingConfig?.thinkingLevel).toBe('MINIMAL');
     expect(request?.config.systemInstruction).toContain(
       'manuscrito prevalece sobre la Wiki',
     );
