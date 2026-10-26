@@ -1,7 +1,12 @@
 /* eslint-disable max-lines */
 
 import { Injectable } from '@nestjs/common';
-import { Prisma, ProposalStatus, type Scene } from '@prisma/client';
+import {
+  AuditStatus,
+  Prisma,
+  ProposalStatus,
+  type Scene,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
 import { planSceneChunks } from '../domain/scene-chunking';
@@ -886,12 +891,6 @@ export class PrismaSceneRepository implements SceneRepository {
     content: Record<string, unknown> | null,
     options: { markDirty: boolean },
   ): Promise<void> {
-    if (content === null) {
-      await tx.chunk.deleteMany({ where: { sceneId } });
-      return;
-    }
-
-    const plans = planSceneChunks(content);
     const existing = await tx.chunk.findMany({
       where: { sceneId },
       orderBy: { chunkIndex: 'asc' },
@@ -904,6 +903,18 @@ export class PrismaSceneRepository implements SceneRepository {
         isDirty: true,
       },
     });
+    const changedChunkIds = new Set<string>();
+
+    if (content === null) {
+      for (const chunk of existing) {
+        changedChunkIds.add(chunk.id);
+      }
+      await tx.chunk.deleteMany({ where: { sceneId } });
+      await this.obsoleteAlertsForChangedChunks(tx, sceneId, changedChunkIds);
+      return;
+    }
+
+    const plans = planSceneChunks(content);
 
     const existingByIndex = new Map<number, ChunkRow>(
       existing.map((chunk) => [chunk.chunkIndex, chunk] as const),
@@ -936,6 +947,7 @@ export class PrismaSceneRepository implements SceneRepository {
         current.contentHash !== plan.contentHash ||
         current.content !== plan.content;
       if (hasChanged) {
+        changedChunkIds.add(current.id);
         writes.push(
           tx.chunk.update({
             where: { id: current.id },
@@ -957,8 +969,81 @@ export class PrismaSceneRepository implements SceneRepository {
       .map((chunk) => chunk.id);
 
     if (staleChunkIds.length > 0) {
+      staleChunkIds.forEach((chunkId) => changedChunkIds.add(chunkId));
       await tx.chunk.deleteMany({
         where: { id: { in: staleChunkIds } },
+      });
+    }
+
+    await this.obsoleteAlertsForChangedChunks(tx, sceneId, changedChunkIds);
+  }
+
+  private async obsoleteAlertsForChangedChunks(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+    changedChunkIds: ReadonlySet<string>,
+  ): Promise<void> {
+    if (changedChunkIds.size === 0) {
+      return;
+    }
+
+    const alerts = await tx.auditAlert.findMany({
+      where: { sceneId, status: AuditStatus.ACTIVE },
+      select: {
+        id: true,
+        sourceChunkId: true,
+        sourceConflict: true,
+      },
+    });
+    const staleAlertIds = alerts
+      .filter((alert) => {
+        if (
+          alert.sourceChunkId !== null &&
+          changedChunkIds.has(alert.sourceChunkId)
+        ) {
+          return true;
+        }
+
+        if (
+          !alert.sourceConflict ||
+          typeof alert.sourceConflict !== 'object' ||
+          Array.isArray(alert.sourceConflict)
+        ) {
+          return false;
+        }
+
+        const conflict = alert.sourceConflict as Record<string, unknown>;
+        if (
+          typeof conflict['sourceChunkId'] === 'string' &&
+          changedChunkIds.has(conflict['sourceChunkId'])
+        ) {
+          return true;
+        }
+
+        return (
+          Array.isArray(conflict['supportingChunks']) &&
+          conflict['supportingChunks'].some(
+            (source) =>
+              source !== null &&
+              typeof source === 'object' &&
+              !Array.isArray(source) &&
+              typeof (source as Record<string, unknown>)['chunkId'] ===
+                'string' &&
+              changedChunkIds.has(
+                (source as Record<string, unknown>)['chunkId'] as string,
+              ),
+          )
+        );
+      })
+      .map((alert) => alert.id);
+
+    if (staleAlertIds.length > 0) {
+      await tx.auditAlert.updateMany({
+        where: {
+          id: { in: staleAlertIds },
+          status: AuditStatus.ACTIVE,
+        },
+        data: { status: AuditStatus.OBSOLETE },
       });
     }
   }
