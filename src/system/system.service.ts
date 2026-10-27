@@ -73,7 +73,7 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
 
     if (!this.extractionClient.hasExtractionModel()) {
       this.logger.warn(
-        'Entity extraction worker disabled: ENTITY_EXTRACTION_MODEL is missing',
+        'Entity extraction worker disabled: ENTITY_EXTRACTION_MODEL is missing (required when ENTITY_EXTRACTION_PROVIDER=gemini)',
       );
       this.started = true;
       return;

@@ -10,6 +10,15 @@ jest.mock('@google/genai', () => ({
   })),
 }));
 
+const mockAnthropicCreate = jest.fn();
+
+jest.mock('@anthropic-ai/sdk', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => ({
+    beta: { messages: { create: mockAnthropicCreate } },
+  })),
+}));
+
 import { GoogleGenAI } from '@google/genai';
 import { EntityExtractionClient } from './entity-extraction.client';
 
@@ -190,6 +199,56 @@ describe('EntityExtractionClient user credentials', () => {
       model: 'embedding-test',
       contents: 'texto',
     });
+  });
+
+  it('prefers the user Gemini key over the Anthropic server provider', async () => {
+    const { client } = createClient(
+      {
+        ENTITY_EXTRACTION_PROVIDER: 'anthropic',
+        ANTHROPIC_API_KEY: 'anthropic-key',
+        ENTITY_EXTRACTION_MODEL: 'claude-opus-5-5',
+      },
+      'user-key',
+    );
+
+    await client.extractEntities(input);
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'user-key' }),
+    );
+    expect(mockGenerateContent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gemini-2.5-flash' }),
+    );
+    expect(mockAnthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it('runs audits through Claude with closed schemas when the user has no key', async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      model: 'claude-opus-5-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: '{"contradictions":[]}' }],
+    });
+    const { client } = createClient({
+      ENTITY_EXTRACTION_PROVIDER: 'anthropic',
+      ANTHROPIC_API_KEY: 'anthropic-key',
+    });
+
+    await expect(
+      client.auditSceneChunkGroup({
+        userId: 'user-id',
+        chunks: [{ chunkIndex: 0, text: 'Texto.' }],
+        knownEntities: [],
+      }),
+    ).resolves.toEqual([]);
+
+    expect(mockGenerateContent).not.toHaveBeenCalled();
+    const [request] = mockAnthropicCreate.mock.calls[0] as [
+      { model: string; output_config: { format: { schema: unknown } } },
+    ];
+    expect(request.model).toBe('claude-opus-5-5');
+    const schema = JSON.stringify(request.output_config.format.schema);
+    expect(schema).toContain('"additionalProperties":false');
+    expect(schema).not.toContain('minimum');
   });
 
   it('does not silently use the server key when user-key lookup fails', async () => {

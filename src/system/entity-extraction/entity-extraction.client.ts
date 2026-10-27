@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
+import Anthropic from '@anthropic-ai/sdk';
 import { UserApiKeyService } from '../../user/user-api-key.service';
 import { CROSS_CHUNK_INCONSISTENCY_PROMPT } from './prompts/cross-chunk-inconsistency.prompt';
 import { CROSS_CHUNK_INCONSISTENCY_SCHEMA } from './prompts/cross-chunk-inconsistency.schema';
@@ -19,6 +20,18 @@ import type {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CHAT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
+const DEFAULT_ANTHROPIC_EFFORT = 'medium';
+const ANTHROPIC_MAX_TOKENS = 16_000;
+// Models that accept server-side refusal fallbacks (`fallbacks: "default"`).
+const ANTHROPIC_FALLBACK_MODELS = new Set([
+  'claude-opus-5-5',
+  'claude-sonnet-5-5',
+  'claude-haiku-5-5',
+]);
+
+type ExtractionProvider = 'gemini' | 'anthropic';
+type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 const EXTRACTION_RESPONSE_SCHEMA = {
   type: 'object',
@@ -199,19 +212,95 @@ const EXTRACTION_RESPONSE_SCHEMA = {
   required: ['entities', 'stateChanges', 'relationships', 'inconsistencies'],
 } as const;
 
+/**
+ * Claude structured outputs require `additionalProperties: false` on every
+ * object and reject numeric bounds (`minimum`/`maximum`), so those are
+ * dropped, and free-form `attributes` is sent as a list of key/value pairs
+ * and folded back into a record after parsing.
+ */
+function toAnthropicSchema(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    return node.map(toAnthropicSchema);
+  }
+  if (!node || typeof node !== 'object') {
+    return node;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'minimum' || key === 'maximum') {
+      continue;
+    }
+    result[key] = toAnthropicSchema(value);
+  }
+
+  const properties = result['properties'] as
+    | Record<string, unknown>
+    | undefined;
+  if (properties && 'attributes' in properties) {
+    properties['attributes'] = {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { key: { type: 'string' }, value: { type: 'string' } },
+        required: ['key', 'value'],
+        additionalProperties: false,
+      },
+    };
+  }
+  if (result['type'] === 'object') {
+    result['additionalProperties'] = false;
+  }
+  return result;
+}
+
+const ANTHROPIC_EXTRACTION_SCHEMA = toAnthropicSchema(
+  EXTRACTION_RESPONSE_SCHEMA,
+) as Record<string, unknown>;
+const ANTHROPIC_CROSS_CHUNK_INCONSISTENCY_SCHEMA = toAnthropicSchema(
+  CROSS_CHUNK_INCONSISTENCY_SCHEMA,
+) as Record<string, unknown>;
+const ANTHROPIC_SCENE_GROUP_AUDIT_SCHEMA = toAnthropicSchema(
+  SCENE_GROUP_AUDIT_SCHEMA,
+) as Record<string, unknown>;
+const ANTHROPIC_CONTINUITY_CHECKPOINT_SCHEMA = toAnthropicSchema(
+  CONTINUITY_CHECKPOINT_SCHEMA,
+) as Record<string, unknown>;
+
+/** Where a generation call goes: a Gemini client (server or user key) or Claude. */
+type GenerationTarget =
+  | { provider: 'gemini'; ai: GoogleGenAI; model: string }
+  | { provider: 'anthropic'; model: string };
+
 @Injectable()
 export class EntityExtractionClient {
   private readonly logger = new Logger(EntityExtractionClient.name);
   private readonly ai: GoogleGenAI;
+  private readonly anthropic: Anthropic;
+  private readonly provider: ExtractionProvider;
   private readonly apiKey: string;
+  private readonly anthropicApiKey: string;
+  private readonly anthropicEffort: AnthropicEffort;
   private readonly model: string;
   private readonly embeddingModel: string;
   private readonly timeoutMs: number;
-
   constructor(
     private readonly config: ConfigService,
     private readonly userApiKeys: UserApiKeyService,
   ) {
+    this.provider =
+      this.config
+        .get<string>('ENTITY_EXTRACTION_PROVIDER', 'gemini')
+        .trim()
+        .toLowerCase() === 'anthropic'
+        ? 'anthropic'
+        : 'gemini';
+    this.anthropicApiKey = this.config
+      .get<string>('ANTHROPIC_API_KEY', '')
+      .trim();
+    this.anthropicEffort = this.config
+      .get<string>('ENTITY_EXTRACTION_EFFORT', DEFAULT_ANTHROPIC_EFFORT)
+      .trim() as AnthropicEffort;
     this.apiKey = this.config
       .get<string>('ENTITY_EXTRACTION_API_KEY', '')
       .trim();
@@ -230,10 +319,18 @@ export class EntityExtractionClient {
       apiKey: this.apiKey,
       httpOptions: { timeout: this.timeoutMs },
     });
+    this.anthropic = new Anthropic({
+      apiKey: this.anthropicApiKey || null,
+      timeout: this.timeoutMs,
+    });
   }
 
+  /**
+   * True when some extraction path may be available. Credentials (user Gemini
+   * key, ANTHROPIC_API_KEY or ENTITY_EXTRACTION_API_KEY) are resolved per call.
+   */
   hasExtractionModel(): boolean {
-    return Boolean(this.model);
+    return this.provider === 'anthropic' || Boolean(this.model);
   }
 
   hasEmbeddingModel(): boolean {
@@ -252,47 +349,26 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractionResponse> {
-    const ai = await this.getGenerationClient(input.userId);
-    if (!this.model || !ai) {
-      throw new Error(
-        'No extraction API key is configured for this user or the server',
-      );
-    }
-
+    const target = await this.getGenerationTarget(input.userId);
     this.logger.debug(
-      `Running extraction with model ${this.model || DEFAULT_CHAT_MODEL}`,
+      `Running extraction with ${target.provider} model ${target.model}`,
     );
 
-    const response = await ai.models.generateContent({
-      model: this.model || DEFAULT_CHAT_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: JSON.stringify({
-                sceneText: input.sceneText,
-                knownEntities: input.knownEntities,
-                ...(input.temporalContext
-                  ? { temporalContext: input.temporalContext }
-                  : {}),
-              }),
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: ENTITY_EXTRACTION_PROMPT,
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseJsonSchema: EXTRACTION_RESPONSE_SCHEMA,
-      },
+    const parsed = await this.generateJson<ExtractionResponse>(target, {
+      systemPrompt: ENTITY_EXTRACTION_PROMPT,
+      payload: JSON.stringify({
+        sceneText: input.sceneText,
+        knownEntities: input.knownEntities,
+        ...(input.temporalContext
+          ? { temporalContext: input.temporalContext }
+          : {}),
+      }),
+      geminiSchema: EXTRACTION_RESPONSE_SCHEMA,
+      anthropicSchema: ANTHROPIC_EXTRACTION_SCHEMA,
+      label: 'Entity extraction',
     });
+    this.foldAnthropicAttributes(parsed);
 
-    const content = response.text ?? '{}';
-    this.logger.debug(`Entity extraction response: ${content}`);
-
-    const parsed = this.safeParseJson<ExtractionResponse>(content);
     return {
       entities: Array.isArray(parsed.entities) ? parsed.entities : [],
       stateChanges: Array.isArray(parsed.stateChanges)
@@ -320,43 +396,23 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractedCrossChunkInconsistency[]> {
-    const ai = await this.getGenerationClient(input.userId);
-    if (!this.model || !ai) {
-      throw new Error(
-        'No extraction API key is configured for this user or the server',
-      );
-    }
-
-    const response = await ai.models.generateContent({
-      model: this.model || DEFAULT_CHAT_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: JSON.stringify({
-                firstChunk: input.firstText,
-                secondChunk: input.secondText,
-                knownEntities: input.knownEntities,
-                ...(input.temporalContext
-                  ? { temporalContext: input.temporalContext }
-                  : {}),
-              }),
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: CROSS_CHUNK_INCONSISTENCY_PROMPT,
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseJsonSchema: CROSS_CHUNK_INCONSISTENCY_SCHEMA,
-      },
-    });
-
-    const parsed = this.safeParseJson<{
+    const target = await this.getGenerationTarget(input.userId);
+    const parsed = await this.generateJson<{
       contradictions?: ExtractedCrossChunkInconsistency[];
-    }>(response.text ?? '{}');
+    }>(target, {
+      systemPrompt: CROSS_CHUNK_INCONSISTENCY_PROMPT,
+      payload: JSON.stringify({
+        firstChunk: input.firstText,
+        secondChunk: input.secondText,
+        knownEntities: input.knownEntities,
+        ...(input.temporalContext
+          ? { temporalContext: input.temporalContext }
+          : {}),
+      }),
+      geminiSchema: CROSS_CHUNK_INCONSISTENCY_SCHEMA,
+      anthropicSchema: ANTHROPIC_CROSS_CHUNK_INCONSISTENCY_SCHEMA,
+      label: 'Cross-chunk audit',
+    });
     return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
   }
 
@@ -372,40 +428,22 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractedCrossChunkInconsistency[]> {
-    const ai = await this.getGenerationClient(input.userId);
-    if (!this.model || !ai) {
-      throw new Error(
-        'No extraction API key is configured for this user or the server',
-      );
-    }
-    const response = await ai.models.generateContent({
-      model: this.model || DEFAULT_CHAT_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: JSON.stringify({
-                chunks: input.chunks,
-                knownEntities: input.knownEntities,
-                ...(input.temporalContext
-                  ? { temporalContext: input.temporalContext }
-                  : {}),
-              }),
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: SCENE_GROUP_AUDIT_PROMPT,
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseJsonSchema: SCENE_GROUP_AUDIT_SCHEMA,
-      },
-    });
-    const parsed = this.safeParseJson<{
+    const target = await this.getGenerationTarget(input.userId);
+    const parsed = await this.generateJson<{
       contradictions?: ExtractedCrossChunkInconsistency[];
-    }>(response.text ?? '{}');
+    }>(target, {
+      systemPrompt: SCENE_GROUP_AUDIT_PROMPT,
+      payload: JSON.stringify({
+        chunks: input.chunks,
+        knownEntities: input.knownEntities,
+        ...(input.temporalContext
+          ? { temporalContext: input.temporalContext }
+          : {}),
+      }),
+      geminiSchema: SCENE_GROUP_AUDIT_SCHEMA,
+      anthropicSchema: ANTHROPIC_SCENE_GROUP_AUDIT_SCHEMA,
+      label: 'Scene group audit',
+    });
     return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
   }
 
@@ -422,40 +460,23 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractedContinuityCheckpoint> {
-    const ai = await this.getGenerationClient(input.userId);
-    if (!this.model || !ai) {
-      throw new Error(
-        'No extraction API key is configured for this user or the server',
-      );
-    }
-    const response = await ai.models.generateContent({
-      model: this.model || DEFAULT_CHAT_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: JSON.stringify({
-                chunks: input.chunks,
-                previousClaims: input.previousClaims,
-                knownEntities: input.knownEntities,
-                ...(input.temporalContext
-                  ? { temporalContext: input.temporalContext }
-                  : {}),
-              }),
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: CONTINUITY_CHECKPOINT_PROMPT,
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseJsonSchema: CONTINUITY_CHECKPOINT_SCHEMA,
+    const target = await this.getGenerationTarget(input.userId);
+    const parsed = await this.generateJson<ExtractedContinuityCheckpoint>(
+      target,
+      {
+        systemPrompt: CONTINUITY_CHECKPOINT_PROMPT,
+        payload: JSON.stringify({
+          chunks: input.chunks,
+          previousClaims: input.previousClaims,
+          knownEntities: input.knownEntities,
+          ...(input.temporalContext
+            ? { temporalContext: input.temporalContext }
+            : {}),
+        }),
+        geminiSchema: CONTINUITY_CHECKPOINT_SCHEMA,
+        anthropicSchema: ANTHROPIC_CONTINUITY_CHECKPOINT_SCHEMA,
+        label: 'Continuity checkpoint audit',
       },
-    });
-    const parsed = this.safeParseJson<ExtractedContinuityCheckpoint>(
-      response.text ?? '{}',
     );
     return {
       claims: Array.isArray(parsed.claims) ? parsed.claims : [],
@@ -465,19 +486,138 @@ export class EntityExtractionClient {
     };
   }
 
-  private async getGenerationClient(
+  /**
+   * The user's own Gemini key wins; otherwise the server provider
+   * (ENTITY_EXTRACTION_PROVIDER) is used with the server credentials.
+   */
+  private async getGenerationTarget(
     userId?: string,
-  ): Promise<GoogleGenAI | null> {
+  ): Promise<GenerationTarget> {
     const userApiKey = userId
       ? await this.userApiKeys.getActiveGeminiKey(userId)
       : null;
     if (userApiKey) {
-      return new GoogleGenAI({
-        apiKey: userApiKey,
-        httpOptions: { timeout: this.timeoutMs },
-      });
+      return {
+        provider: 'gemini',
+        ai: new GoogleGenAI({
+          apiKey: userApiKey,
+          httpOptions: { timeout: this.timeoutMs },
+        }),
+        // With provider=anthropic, ENTITY_EXTRACTION_MODEL names a Claude model.
+        model:
+          this.provider === 'gemini'
+            ? this.model || DEFAULT_CHAT_MODEL
+            : DEFAULT_CHAT_MODEL,
+      };
     }
-    return this.apiKey ? this.ai : null;
+    if (this.provider === 'anthropic') {
+      if (!this.anthropicApiKey) {
+        throw new Error(
+          'No extraction API key is configured for this user and ANTHROPIC_API_KEY is not configured',
+        );
+      }
+      return {
+        provider: 'anthropic',
+        model: this.model || DEFAULT_ANTHROPIC_MODEL,
+      };
+    }
+    if (!this.apiKey || !this.model) {
+      throw new Error(
+        'No extraction API key is configured for this user or the server',
+      );
+    }
+    return { provider: 'gemini', ai: this.ai, model: this.model };
+  }
+
+  private async generateJson<T>(
+    target: GenerationTarget,
+    request: {
+      systemPrompt: string;
+      payload: string;
+      geminiSchema: unknown;
+      anthropicSchema: Record<string, unknown>;
+      label: string;
+    },
+  ): Promise<T> {
+    const content =
+      target.provider === 'anthropic'
+        ? await this.generateWithAnthropic(target.model, request)
+        : await this.generateWithGemini(target.ai, target.model, request);
+    this.logger.debug(`${request.label} response: ${content}`);
+    return this.safeParseJson<T>(content || '{}');
+  }
+
+  private async generateWithGemini(
+    ai: GoogleGenAI,
+    model: string,
+    request: { systemPrompt: string; payload: string; geminiSchema: unknown },
+  ): Promise<string> {
+    const response = await ai.models.generateContent({
+      model,
+      contents: [{ role: 'user', parts: [{ text: request.payload }] }],
+      config: {
+        systemInstruction: request.systemPrompt,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseJsonSchema: request.geminiSchema,
+      },
+    });
+    return response.text ?? '{}';
+  }
+
+  private async generateWithAnthropic(
+    model: string,
+    request: {
+      systemPrompt: string;
+      payload: string;
+      anthropicSchema: Record<string, unknown>;
+      label: string;
+    },
+  ): Promise<string> {
+    const response = await this.anthropic.beta.messages.create({
+      model,
+      max_tokens: ANTHROPIC_MAX_TOKENS,
+      system: request.systemPrompt,
+      messages: [{ role: 'user', content: request.payload }],
+      output_config: {
+        effort: this.anthropicEffort,
+        format: { type: 'json_schema', schema: request.anthropicSchema },
+      },
+      ...(ANTHROPIC_FALLBACK_MODELS.has(model)
+        ? {
+            betas: ['server-side-fallback-2026-07-01'],
+            fallbacks: 'default' as const,
+          }
+        : {}),
+    });
+
+    if (response.stop_reason === 'refusal') {
+      throw new Error(
+        `${request.label} refused by ${response.model} (${response.stop_details?.category ?? 'unknown'})`,
+      );
+    }
+    if (response.stop_reason === 'max_tokens') {
+      throw new Error(`${request.label} response truncated (max_tokens)`);
+    }
+
+    return response.content
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+  }
+
+  /** Claude returns `attributes` as key/value pairs (see toAnthropicSchema). */
+  private foldAnthropicAttributes(parsed: ExtractionResponse): void {
+    for (const entity of parsed.entities ?? []) {
+      const pairs = entity.attributes as unknown;
+      if (Array.isArray(pairs)) {
+        entity.attributes = Object.fromEntries(
+          (pairs as Array<{ key: string; value: string }>).map((pair) => [
+            pair.key,
+            pair.value,
+          ]),
+        );
+      }
+    }
   }
 
   async createEmbedding(text: string): Promise<number[] | null> {

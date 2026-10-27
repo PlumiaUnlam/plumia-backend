@@ -10,12 +10,17 @@ import { EntityResolutionService } from './entity-extraction/entity-resolution.s
 import { ProjectKnowledgeReviewController } from './project-knowledge-review.controller';
 import { ProjectKnowledgeReviewService } from './project-knowledge-review.service';
 import { KnowledgeProposalAutomationService } from './knowledge-proposal-automation.service';
+import { HealthController } from './health.controller';
 import { SystemController } from './system.controller';
 import { SystemService } from './system.service';
 
 @Module({
   imports: [PrismaModule, AuditModule, KnowledgeModule, UserModule],
-  controllers: [SystemController, ProjectKnowledgeReviewController],
+  controllers: [
+    SystemController,
+    HealthController,
+    ProjectKnowledgeReviewController,
+  ],
   providers: [
     SystemService,
     EntityExtractionClient,

@@ -169,7 +169,7 @@ describe('SystemService', () => {
     await service.start();
 
     expect(warnSpy).toHaveBeenCalledWith(
-      'Entity extraction worker disabled: ENTITY_EXTRACTION_MODEL is missing',
+      'Entity extraction worker disabled: ENTITY_EXTRACTION_MODEL is missing (required when ENTITY_EXTRACTION_PROVIDER=gemini)',
     );
     expect(Worker).not.toHaveBeenCalled();
   });

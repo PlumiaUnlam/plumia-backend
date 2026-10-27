@@ -8,3 +8,17 @@ coverage
 .eslintrc*
 eslint.config*
 .prettierrc*
+
+# Secretos y archivos locales: nunca entran al contexto de build
+.env
+.env.*
+!.env.example
+firebase-service-account.json
+*.pem
+
+# Carpetas que no se necesitan para buildear
+.claude
+.github
+.vscode
+.venv-whisper
+docker-compose*.yml

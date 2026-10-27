@@ -31,8 +31,12 @@ export class AuthService {
     profile?: { firstName?: string; lastName?: string; username?: string },
   ): Promise<User> {
     let decoded;
+    const start = Date.now();
     try {
       decoded = await this.firebaseAdmin.verifyToken(idToken);
+      if (process.env['LOG_TIMINGS'] === 'true') {
+        this.logger.log(`Firebase verifyIdToken ${Date.now() - start}ms`);
+      }
     } catch (error) {
       const code = firebaseErrorCode(error);
       const message = firebaseErrorMessage(error);
