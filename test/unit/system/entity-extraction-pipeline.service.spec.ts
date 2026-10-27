@@ -355,9 +355,12 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     expect(prisma.scene.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'scene-1', deletedAt: null } }),
     );
-    expect(prisma.outbox.update).toHaveBeenCalledWith({
+    expect(prisma.outbox.update).toHaveBeenLastCalledWith({
       where: { id: 'event-1' },
-      data: { processedAt: expect.any(Date) },
+      data: {
+        processedAt: expect.any(Date),
+        payload: expect.objectContaining({ analysisStatus: 'SUCCEEDED' }),
+      },
     });
   });
 
@@ -691,7 +694,12 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     );
 
     expect(prisma.chunk.update).not.toHaveBeenCalled();
-    expect(prisma.outbox.update).not.toHaveBeenCalled();
+    expect(prisma.outbox.update).toHaveBeenCalledWith({
+      where: { id: 'event-1' },
+      data: {
+        payload: expect.objectContaining({ analysisStatus: 'RUNNING' }),
+      },
+    });
   });
 
   it('creates only resolvable relationship proposals and clamps invalid intensity', async () => {

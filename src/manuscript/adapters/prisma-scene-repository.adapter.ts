@@ -15,6 +15,7 @@ import {
   CreateSceneData,
   SceneContentUpdateResult,
   SceneAnalysisRequestResult,
+  SceneAnalysisExecutionResult,
   SceneRecord,
   SceneRepository,
   SceneVersionContentUpdateResult,
@@ -330,6 +331,65 @@ export class PrismaSceneRepository implements SceneRepository {
     } catch (error: unknown) {
       return translatePrismaConflict(error);
     }
+  }
+
+  async getAnalysisStatusForUser(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisExecutionResult | null> {
+    const scene = await this.prisma.scene.findFirst({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { project: { userId } } },
+      },
+      select: { id: true },
+    });
+    if (!scene) {
+      return null;
+    }
+
+    const event = await this.prisma.outbox.findFirst({
+      where: {
+        aggregateType: 'Scene',
+        aggregateId: sceneId,
+        eventType: 'scene_changed',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { payload: true, processedAt: true },
+    });
+    if (!event) {
+      return { status: 'NO_CHANGES', error: null };
+    }
+
+    const payload =
+      event.payload &&
+      typeof event.payload === 'object' &&
+      !Array.isArray(event.payload)
+        ? (event.payload as Record<string, unknown>)
+        : {};
+    const status = payload['analysisStatus'];
+    const validStatuses = new Set([
+      'QUEUED',
+      'RUNNING',
+      'SUCCEEDED',
+      'FAILED',
+      'NO_CHANGES',
+    ]);
+    const normalizedStatus = validStatuses.has(String(status))
+      ? (status as SceneAnalysisExecutionResult['status'])
+      : event.processedAt
+        ? 'SUCCEEDED'
+        : 'QUEUED';
+
+    return {
+      status: normalizedStatus,
+      error:
+        normalizedStatus === 'FAILED' &&
+        typeof payload['analysisError'] === 'string'
+          ? payload['analysisError']
+          : null,
+    };
   }
 
   async listVersionsForUser(
@@ -711,6 +771,7 @@ export class PrismaSceneRepository implements SceneRepository {
               wordCount: scene.wordCount,
               userId,
               restoredFromVersionId: version.id,
+              analysisStatus: 'QUEUED',
             },
             createdAt: new Date(),
           },
@@ -830,6 +891,7 @@ export class PrismaSceneRepository implements SceneRepository {
           wordCount: data.wordCount,
           userId: data.userId,
           trigger: data.trigger,
+          analysisStatus: 'QUEUED',
         },
         createdAt: new Date(),
       },

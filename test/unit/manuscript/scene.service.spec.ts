@@ -49,6 +49,7 @@ describe('SceneService', () => {
       updateForUser: jest.fn(),
       updateContentForUser: jest.fn(),
       requestAnalysisForUser: jest.fn(),
+      getAnalysisStatusForUser: jest.fn(),
       listVersionsForUser: jest.fn(),
       createVersionForUser: jest.fn(),
       findVersionForUser: jest.fn(),
@@ -63,6 +64,23 @@ describe('SceneService', () => {
       repository,
       analytics as unknown as AnalyticsService,
     );
+  });
+
+  it('returns the background analysis status and handles missing scenes', async () => {
+    const status = { status: 'SUCCEEDED' as const, error: null };
+    repository.getAnalysisStatusForUser.mockResolvedValue(status);
+    await expect(
+      service.getAnalysisStatus('user-1', 'scene-1'),
+    ).resolves.toEqual(status);
+    expect(repository.getAnalysisStatusForUser).toHaveBeenCalledWith(
+      'user-1',
+      'scene-1',
+    );
+
+    repository.getAnalysisStatusForUser.mockResolvedValue(null);
+    await expect(
+      service.getAnalysisStatus('user-1', 'missing'),
+    ).rejects.toThrow(new NotFoundException('Scene not found'));
   });
 
   it('creates only the provided scene fields and reports missing chapters', async () => {

@@ -202,6 +202,12 @@ export class EntityExtractionPipelineService {
       return;
     }
 
+    const isSceneAnalysis =
+      outbox.aggregateType === 'Scene' && outbox.eventType === 'scene_changed';
+    if (isSceneAnalysis) {
+      await this.setSceneAnalysisStatus(outbox, 'RUNNING');
+    }
+
     if (
       outbox.aggregateType === 'Project' &&
       outbox.eventType === 'project_analysis_requested'
@@ -229,7 +235,143 @@ export class EntityExtractionPipelineService {
       const sceneId = this.parseTemporalAuditPayload(outbox.payload);
       await this.processTemporalAudit(sceneId);
     }
-    await this.markProcessed(outbox.id);
+    await this.markProcessed(
+      outbox.id,
+      isSceneAnalysis ? outbox.payload : undefined,
+    );
+  }
+
+  async markOutboxEventFailed(outboxId: string, cause: unknown): Promise<void> {
+    const safeError =
+      'No se pudo completar el análisis. Revisá la configuración de IA y los logs del backend.';
+    const outbox = await this.prisma.outbox.findUnique({
+      where: { id: outboxId },
+      select: {
+        id: true,
+        aggregateType: true,
+        aggregateId: true,
+        eventType: true,
+        payload: true,
+      },
+    });
+    if (!outbox) {
+      return;
+    }
+
+    this.logger.error(
+      `Outbox event ${outboxId} exhausted its retries: ${cause instanceof Error ? (cause.stack ?? cause.message) : String(cause)}`,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      const payload = this.toJsonRecord(outbox.payload);
+      const claimed = await tx.outbox.updateMany({
+        where: { id: outbox.id, processedAt: null },
+        data: {
+          processedAt: new Date(),
+          payload: {
+            ...payload,
+            analysisStatus: 'FAILED',
+            analysisError: safeError,
+          },
+        },
+      });
+      if (claimed.count === 0) {
+        return;
+      }
+
+      if (
+        outbox.aggregateType === 'Scene' &&
+        outbox.eventType === 'scene_changed'
+      ) {
+        await tx.chunk.updateMany({
+          where: { sceneId: outbox.aggregateId },
+          data: { isDirty: true },
+        });
+        return;
+      }
+
+      if (
+        outbox.aggregateType === 'Project' &&
+        outbox.eventType === 'project_analysis_requested' &&
+        typeof payload['runId'] === 'string'
+      ) {
+        const run = await tx.knowledgeAnalysisRun.findUnique({
+          where: { id: payload['runId'] },
+          include: {
+            scenes: {
+              orderBy: { narrativePosition: 'asc' },
+            },
+          },
+        });
+        if (run) {
+          const retryableScenes = run.scenes.filter(
+            (scene) =>
+              scene.status === KnowledgeAnalysisSceneStatus.QUEUED ||
+              scene.status === KnowledgeAnalysisSceneStatus.RUNNING,
+          );
+          const failedScenes =
+            retryableScenes.length > 0 ? retryableScenes : run.scenes.slice(-1);
+
+          for (const scene of failedScenes) {
+            await tx.knowledgeAnalysisRunScene.update({
+              where: { id: scene.id },
+              data: {
+                status: KnowledgeAnalysisSceneStatus.FAILED,
+                error: safeError,
+              },
+            });
+          }
+
+          const failedSceneIds = failedScenes.map((scene) => scene.sceneId);
+          if (failedSceneIds.length > 0) {
+            await tx.chunk.updateMany({
+              where: { sceneId: { in: failedSceneIds } },
+              data: { isDirty: true },
+            });
+          }
+
+          const [failedCount, processedCount, succeededCount] =
+            await Promise.all([
+              tx.knowledgeAnalysisRunScene.count({
+                where: {
+                  runId: run.id,
+                  status: KnowledgeAnalysisSceneStatus.FAILED,
+                },
+              }),
+              tx.knowledgeAnalysisRunScene.count({
+                where: {
+                  runId: run.id,
+                  status: {
+                    in: [
+                      KnowledgeAnalysisSceneStatus.SUCCEEDED,
+                      KnowledgeAnalysisSceneStatus.NO_CHANGES,
+                      KnowledgeAnalysisSceneStatus.FAILED,
+                    ],
+                  },
+                },
+              }),
+              tx.knowledgeAnalysisRunScene.count({
+                where: {
+                  runId: run.id,
+                  status: KnowledgeAnalysisSceneStatus.SUCCEEDED,
+                },
+              }),
+            ]);
+          await tx.knowledgeAnalysisRun.update({
+            where: { id: run.id },
+            data: {
+              status:
+                succeededCount > 0
+                  ? KnowledgeAnalysisRunStatus.PARTIAL
+                  : KnowledgeAnalysisRunStatus.FAILED,
+              processedScenes: processedCount,
+              failedScenes: failedCount,
+              completedAt: new Date(),
+            },
+          });
+        }
+      }
+    });
   }
 
   async processProjectAnalysisRun(runId: string): Promise<void> {
@@ -2209,11 +2351,49 @@ export class EntityExtractionPipelineService {
     });
   }
 
-  private async markProcessed(outboxId: string): Promise<void> {
+  private async markProcessed(
+    outboxId: string,
+    sceneAnalysisPayload?: Prisma.JsonValue,
+  ): Promise<void> {
     await this.prisma.outbox.update({
       where: { id: outboxId },
-      data: { processedAt: new Date() },
+      data: {
+        processedAt: new Date(),
+        ...(sceneAnalysisPayload !== undefined
+          ? {
+              payload: {
+                ...this.toJsonRecord(sceneAnalysisPayload),
+                analysisStatus: 'SUCCEEDED',
+                analysisError: null,
+              },
+            }
+          : {}),
+      },
     });
+  }
+
+  private async setSceneAnalysisStatus(
+    outbox: { id: string; payload: Prisma.JsonValue },
+    status: 'RUNNING',
+  ): Promise<void> {
+    await this.prisma.outbox.update({
+      where: { id: outbox.id },
+      data: {
+        payload: {
+          ...this.toJsonRecord(outbox.payload),
+          analysisStatus: status,
+          analysisError: null,
+        },
+      },
+    });
+  }
+
+  private toJsonRecord(
+    value: Prisma.JsonValue,
+  ): Record<string, Prisma.JsonValue> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, Prisma.JsonValue>)
+      : {};
   }
 
   private extractPlainText(

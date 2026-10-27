@@ -204,6 +204,7 @@ describe('PrismaSceneRepository', () => {
           wordCount: 1,
           userId: 'user-1',
           trigger: 'AUTO_SAVE',
+          analysisStatus: 'QUEUED',
         },
         createdAt: expect.any(Date) as unknown,
       },
