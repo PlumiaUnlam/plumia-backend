@@ -43,6 +43,7 @@ export interface TemporalKnowledgeSnapshot {
   worldRules: Prisma.JsonValue | null;
   entities: TemporalEntity[];
   activeStates: TemporalEntityState[];
+  activeStateRows?: TemporalEntityState[];
   activeFacts: Array<{ entityId: string; content: string }>;
   activeRelationships: TemporalRelationship[];
 }
@@ -72,7 +73,14 @@ export class TemporalKnowledgeSnapshotService {
             book: {
               select: {
                 projectId: true,
-                project: { select: { genreRules: true } },
+                project: {
+                  select: {
+                    genreRules: true,
+                    knowledgeReviewSettings: {
+                      select: { stateTrackingEnabled: true },
+                    },
+                  },
+                },
               },
             },
           },
@@ -116,6 +124,9 @@ export class TemporalKnowledgeSnapshotService {
       return null;
     }
 
+    const stateTrackingEnabled =
+      targetScene.chapter.book.project.knowledgeReviewSettings
+        ?.stateTrackingEnabled ?? false;
     const [entities, states, facts, relationships] = await Promise.all([
       this.prisma.entity.findMany({
         where: { projectId, deletedAt: null },
@@ -127,22 +138,24 @@ export class TemporalKnowledgeSnapshotService {
           attributes: true,
         },
       }),
-      this.prisma.entityState.findMany({
-        where: {
-          entity: { projectId, deletedAt: null },
-          epistemicType: EpistemicType.OBJECTIVE,
-        },
-        select: {
-          id: true,
-          entityId: true,
-          attributeKey: true,
-          toValue: true,
-          validFromSceneId: true,
-          validToSceneId: true,
-          narrativeOrder: true,
-          createdAt: true,
-        },
-      }),
+      stateTrackingEnabled
+        ? this.prisma.entityState.findMany({
+            where: {
+              entity: { projectId, deletedAt: null },
+              epistemicType: EpistemicType.OBJECTIVE,
+            },
+            select: {
+              id: true,
+              entityId: true,
+              attributeKey: true,
+              toValue: true,
+              validFromSceneId: true,
+              validToSceneId: true,
+              narrativeOrder: true,
+              createdAt: true,
+            },
+          })
+        : Promise.resolve([]),
       this.prisma.fact.findMany({
         where: {
           entity: { projectId, deletedAt: null },
@@ -171,17 +184,15 @@ export class TemporalKnowledgeSnapshotService {
       }),
     ]);
 
-    const activeStates = this.selectActiveStates(
-      states.filter((state) =>
-        this.isActiveAt(
-          state.validFromSceneId,
-          state.validToSceneId,
-          positions,
-          currentPosition,
-        ),
+    const activeStateRows = states.filter((state) =>
+      this.isActiveAt(
+        state.validFromSceneId,
+        state.validToSceneId,
+        positions,
+        currentPosition,
       ),
-      positions,
     );
+    const activeStates = this.selectActiveStates(activeStateRows, positions);
 
     return {
       projectId,
@@ -192,6 +203,7 @@ export class TemporalKnowledgeSnapshotService {
         attributes: this.toAttributes(entity.attributes),
       })),
       activeStates,
+      activeStateRows,
       activeFacts: facts
         .filter(
           (fact) =>

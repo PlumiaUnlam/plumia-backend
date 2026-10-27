@@ -4,8 +4,14 @@ import { GoogleGenAI } from '@google/genai';
 import { UserApiKeyService } from '../../user/user-api-key.service';
 import { CROSS_CHUNK_INCONSISTENCY_PROMPT } from './prompts/cross-chunk-inconsistency.prompt';
 import { CROSS_CHUNK_INCONSISTENCY_SCHEMA } from './prompts/cross-chunk-inconsistency.schema';
+import { CONTINUITY_CHECKPOINT_PROMPT } from './prompts/continuity-checkpoint.prompt';
+import { CONTINUITY_CHECKPOINT_SCHEMA } from './prompts/continuity-checkpoint.schema';
 import { ENTITY_EXTRACTION_PROMPT } from './prompts/entity-extraction.prompt';
+import { SCENE_GROUP_AUDIT_PROMPT } from './prompts/scene-group-audit.prompt';
+import { SCENE_GROUP_AUDIT_SCHEMA } from './prompts/scene-group-audit.schema';
 import type {
+  ContinuityCheckpointClaim,
+  ExtractedContinuityCheckpoint,
   ExtractedCrossChunkInconsistency,
   ExtractionResponse,
   TemporalAuditContext,
@@ -352,6 +358,111 @@ export class EntityExtractionClient {
       contradictions?: ExtractedCrossChunkInconsistency[];
     }>(response.text ?? '{}');
     return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
+  }
+
+  async auditSceneChunkGroup(input: {
+    userId?: string;
+    chunks: Array<{ chunkIndex: number; text: string }>;
+    knownEntities: Array<{
+      canonicalName: string;
+      aliases: string[];
+      type: string;
+      description?: string | null;
+      attributes?: Record<string, unknown>;
+    }>;
+    temporalContext?: TemporalAuditContext;
+  }): Promise<ExtractedCrossChunkInconsistency[]> {
+    const ai = await this.getGenerationClient(input.userId);
+    if (!this.model || !ai) {
+      throw new Error(
+        'No extraction API key is configured for this user or the server',
+      );
+    }
+    const response = await ai.models.generateContent({
+      model: this.model || DEFAULT_CHAT_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: JSON.stringify({
+                chunks: input.chunks,
+                knownEntities: input.knownEntities,
+                ...(input.temporalContext
+                  ? { temporalContext: input.temporalContext }
+                  : {}),
+              }),
+            },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: SCENE_GROUP_AUDIT_PROMPT,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseJsonSchema: SCENE_GROUP_AUDIT_SCHEMA,
+      },
+    });
+    const parsed = this.safeParseJson<{
+      contradictions?: ExtractedCrossChunkInconsistency[];
+    }>(response.text ?? '{}');
+    return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
+  }
+
+  async auditSceneAgainstContinuityClaims(input: {
+    userId?: string;
+    chunks: Array<{ chunkIndex: number; text: string }>;
+    previousClaims: ContinuityCheckpointClaim[];
+    knownEntities: Array<{
+      canonicalName: string;
+      aliases: string[];
+      type: string;
+      description?: string | null;
+      attributes?: Record<string, unknown>;
+    }>;
+    temporalContext?: TemporalAuditContext;
+  }): Promise<ExtractedContinuityCheckpoint> {
+    const ai = await this.getGenerationClient(input.userId);
+    if (!this.model || !ai) {
+      throw new Error(
+        'No extraction API key is configured for this user or the server',
+      );
+    }
+    const response = await ai.models.generateContent({
+      model: this.model || DEFAULT_CHAT_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: JSON.stringify({
+                chunks: input.chunks,
+                previousClaims: input.previousClaims,
+                knownEntities: input.knownEntities,
+                ...(input.temporalContext
+                  ? { temporalContext: input.temporalContext }
+                  : {}),
+              }),
+            },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: CONTINUITY_CHECKPOINT_PROMPT,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseJsonSchema: CONTINUITY_CHECKPOINT_SCHEMA,
+      },
+    });
+    const parsed = this.safeParseJson<ExtractedContinuityCheckpoint>(
+      response.text ?? '{}',
+    );
+    return {
+      claims: Array.isArray(parsed.claims) ? parsed.claims : [],
+      contradictions: Array.isArray(parsed.contradictions)
+        ? parsed.contradictions
+        : [],
+    };
   }
 
   private async getGenerationClient(

@@ -110,6 +110,13 @@ enum KnowledgeReviewMode {
   AUTO_THRESHOLD
 }
 
+enum CrossChunkAuditMode {
+  ADJACENT_CHUNKS
+  SCENE_GROUPED
+  PROJECT_SUMMARY
+  DISABLED
+}
+
 enum StateProposalSequenceKind {
   TRANSITION
   CONTRADICTION
@@ -343,6 +350,7 @@ model Project {
   entityRecognitionSettings ProjectEntityRecognitionSettings?
   knowledgeReviewSettings   ProjectKnowledgeReviewSettings?
   knowledgeAnalysisRuns     KnowledgeAnalysisRun[]
+  continuityCheckpoints     ProjectContinuityCheckpoint[]
 
   @@index([userId], map: "idx_project_user")
   @@index([status], map: "idx_project_status")
@@ -365,16 +373,36 @@ model ProjectEntityRecognitionSettings {
 model ProjectKnowledgeReviewSettings {
   id                              String             @id @default(uuid()) @db.Uuid
   projectId                       String             @unique @map("project_id") @db.Uuid
+  stateTrackingEnabled            Boolean            @default(false) @map("state_tracking_enabled")
   stateReviewMode                 KnowledgeReviewMode @default(MANUAL) @map("state_review_mode")
   stateConfidenceThreshold        Decimal            @default(0.90) @map("state_confidence_threshold") @db.Decimal(3, 2)
   relationshipReviewMode          KnowledgeReviewMode @default(MANUAL) @map("relationship_review_mode")
   relationshipConfidenceThreshold Decimal            @default(0.90) @map("relationship_confidence_threshold") @db.Decimal(3, 2)
+  crossChunkAuditMode             CrossChunkAuditMode @default(ADJACENT_CHUNKS) @map("cross_chunk_audit_mode")
   createdAt                       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@map("project_knowledge_review_settings")
+}
+
+model ProjectContinuityCheckpoint {
+  id         String   @id @default(uuid()) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  sceneId    String   @map("scene_id") @db.Uuid
+  sourceHash String   @map("source_hash") @db.VarChar(64)
+  claims     Json     @default("[]") @db.JsonB
+  isValid    Boolean  @default(true) @map("is_valid")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene   Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sceneId], map: "uq_continuity_checkpoint_project_scene")
+  @@index([projectId, isValid, sceneId], map: "idx_continuity_checkpoint_valid")
+  @@map("project_continuity_checkpoint")
 }
 
 model KnowledgeAnalysisRun {
@@ -512,6 +540,7 @@ model Scene {
   writingSessions       WritingSession[]
   versions              SceneVersion[]
   sourceTimelineEvents  TimelineEvent[]        @relation("TimelineEventSourceScene")
+  continuityCheckpoints ProjectContinuityCheckpoint[]
 
   @@unique([chapterId, sortKey])
   @@index([chapterId], map: "idx_scene_chapter")

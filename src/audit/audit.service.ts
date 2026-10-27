@@ -43,6 +43,7 @@ export interface SupportingChunkEvidence {
   chunkId: string;
   chunkHash: string | null;
   chunkIndex: number;
+  sceneId?: string;
   side: 'first' | 'second';
   evidence: string[];
   evidencePositions?: number[];
@@ -71,6 +72,11 @@ export interface CrossChunkContinuityAlertInput {
   confidence: number;
   severity: AuditSeverity;
   relationship?: EntityConflictDetailsDto['relationship'];
+  ruleCode?: string;
+  title?: string;
+  detectionLevel?: AuditLevel;
+  firstSceneId?: string;
+  secondSceneId?: string;
 }
 
 export interface CreateAuditAlertInput {
@@ -360,11 +366,13 @@ export class AuditService {
       sourceChunkId: input.firstChunkId,
       sourceChunkHash: input.firstChunkHash,
       fingerprint: input.fingerprint,
-      ruleCode: 'INTRA_SCENE_CONTRADICTION',
-      detectionLevel: AuditLevel.INTRA_SCENE,
+      ruleCode: input.ruleCode ?? 'INTRA_SCENE_CONTRADICTION',
+      detectionLevel: input.detectionLevel ?? AuditLevel.INTRA_SCENE,
       category: AuditCategory.CONTINUITY,
       severity: input.severity,
-      title: 'Se encontraron dos datos incompatibles dentro de esta escena',
+      title:
+        input.title ??
+        'Se encontraron dos datos incompatibles dentro de esta escena',
       entityId: input.entityId,
       entityName: input.entityName,
       field: input.field,
@@ -379,6 +387,7 @@ export class AuditService {
           chunkId: input.firstChunkId,
           chunkHash: input.firstChunkHash,
           chunkIndex: input.firstChunkIndex,
+          ...(input.firstSceneId ? { sceneId: input.firstSceneId } : {}),
           side: 'first',
           evidence: input.firstEvidence,
           ...(input.firstEvidencePositions
@@ -389,6 +398,7 @@ export class AuditService {
           chunkId: input.secondChunkId,
           chunkHash: input.secondChunkHash,
           chunkIndex: input.secondChunkIndex,
+          ...(input.secondSceneId ? { sceneId: input.secondSceneId } : {}),
           side: 'second',
           evidence: input.secondEvidence,
           ...(input.secondEvidencePositions
@@ -629,6 +639,57 @@ export class AuditService {
     }
   }
 
+  async obsoleteCrossChunkAlertsForProject(input: {
+    projectId: string;
+    affectedChunkIds?: ReadonlySet<string>;
+    activeFingerprints?: ReadonlySet<string>;
+    ruleCodes?: string[];
+  }): Promise<void> {
+    const alerts = await this.prisma.auditAlert.findMany({
+      where: {
+        projectId: input.projectId,
+        status: AuditStatus.ACTIVE,
+        ruleCode: {
+          in: input.ruleCodes ?? [
+            'INTRA_SCENE_CONTRADICTION',
+            'CROSS_SCENE_CONTRADICTION',
+          ],
+        },
+      },
+      select: {
+        id: true,
+        fingerprint: true,
+        sourceChunkId: true,
+        sourceConflict: true,
+      },
+    });
+    const staleIds = alerts
+      .filter((alert) => {
+        if (!input.affectedChunkIds) {
+          return true;
+        }
+        const conflict = this.toStoredConflict(alert.sourceConflict);
+        const isAffected =
+          (alert.sourceChunkId !== null &&
+            input.affectedChunkIds.has(alert.sourceChunkId)) ||
+          (conflict?.supportingChunks ?? []).some((source) =>
+            input.affectedChunkIds!.has(source.chunkId),
+          );
+        return (
+          isAffected &&
+          (!alert.fingerprint ||
+            !input.activeFingerprints?.has(alert.fingerprint))
+        );
+      })
+      .map((alert) => alert.id);
+    if (staleIds.length > 0) {
+      await this.prisma.auditAlert.updateMany({
+        where: { id: { in: staleIds } },
+        data: { status: AuditStatus.OBSOLETE },
+      });
+    }
+  }
+
   private buildDescription(
     input: Pick<CreateAuditAlertInput, 'currentValue' | 'observedValue'>,
   ): string {
@@ -706,6 +767,9 @@ export class AuditService {
             {
               chunkId: source['chunkId'],
               chunkHash: source['chunkHash'],
+              ...(typeof source['sceneId'] === 'string'
+                ? { sceneId: source['sceneId'] }
+                : {}),
               chunkIndex:
                 typeof source['chunkIndex'] === 'number'
                   ? source['chunkIndex']
@@ -771,6 +835,7 @@ export class AuditService {
               source.evidence.map((quote) => ({
                 side: source.side,
                 quote,
+                ...(source.sceneId ? { sceneId: source.sceneId } : {}),
               })),
             ),
           }

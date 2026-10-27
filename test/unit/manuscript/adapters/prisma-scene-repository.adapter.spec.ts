@@ -77,6 +77,7 @@ describe('PrismaSceneRepository', () => {
     const tx = {
       scene: {
         create: jest.fn().mockResolvedValue(scene),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -84,6 +85,7 @@ describe('PrismaSceneRepository', () => {
         update: jest.fn(),
         deleteMany: jest.fn(),
       },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
       async (
@@ -136,6 +138,7 @@ describe('PrismaSceneRepository', () => {
           .mockResolvedValueOnce({
             chapter: { book: { projectId: 'project-1' } },
           }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -152,6 +155,7 @@ describe('PrismaSceneRepository', () => {
           autoAnalyzeOnAutosave: true,
         }),
       },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
       async (
@@ -258,6 +262,7 @@ describe('PrismaSceneRepository', () => {
           .mockResolvedValueOnce({
             chapter: { book: { projectId: 'project-1' } },
           }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -274,6 +279,7 @@ describe('PrismaSceneRepository', () => {
         findFirst: jest.fn(),
         create: jest.fn(),
       },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
       async (callback: (transaction: typeof tx) => Promise<unknown>) =>

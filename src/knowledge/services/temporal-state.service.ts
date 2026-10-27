@@ -2,6 +2,7 @@
 
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -79,7 +80,10 @@ export class TemporalStateService {
     userId: string,
     entityId: string,
   ): Promise<EntityStateResponseDto[]> {
-    await this.getEntityForUser(userId, entityId);
+    const entity = await this.getEntityForUser(userId, entityId);
+    if (!(await this.isStateTrackingEnabled(entity.projectId))) {
+      return [];
+    }
     const states = await this.prisma.entityState.findMany({
       where: { entityId },
       orderBy: { createdAt: 'asc' },
@@ -97,6 +101,9 @@ export class TemporalStateService {
     });
     if (!project) {
       throw new NotFoundException('Project not found');
+    }
+    if (!(await this.isStateTrackingEnabled(projectId))) {
+      return [];
     }
 
     const [states, positions] = await Promise.all([
@@ -170,6 +177,9 @@ export class TemporalStateService {
     dto: CreateEntityStateDto,
   ): Promise<EntityStateResponseDto> {
     const entity = await this.getEntityForUser(userId, entityId);
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(entity.projectId),
+    );
     const state = await this.prisma.$transaction(async (tx) => {
       const positions = await this.getScenePositions(tx, entity.projectId);
       this.assertWindow(positions, dto.validFromSceneId, dto.validToSceneId);
@@ -210,34 +220,51 @@ export class TemporalStateService {
     if (!state) {
       throw new NotFoundException('Entity state not found');
     }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(state.entity.projectId),
+    );
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const positions = await this.getScenePositions(
         tx,
         state.entity.projectId,
       );
-      this.assertWindow(
-        positions,
-        state.validFromSceneId,
+      const attributeKey =
+        dto.attributeKey === undefined
+          ? state.attributeKey
+          : dto.attributeKey.trim();
+      const validFromSceneId = dto.validFromSceneId ?? state.validFromSceneId;
+      const validToSceneId =
         dto.validToSceneId === undefined
           ? state.validToSceneId
-          : dto.validToSceneId,
-      );
+          : dto.validToSceneId;
+      const toValue =
+        dto.toValue === undefined ? undefined : dto.toValue.trim();
+      if (!attributeKey || (toValue !== undefined && !toValue)) {
+        throw new BadRequestException('State attribute and value are required');
+      }
+      this.assertWindow(positions, validFromSceneId, validToSceneId);
       const result = await tx.entityState.update({
         where: { id: state.id },
         data: {
-          ...(dto.toValue === undefined ? {} : { toValue: dto.toValue.trim() }),
-          ...(dto.validToSceneId === undefined
-            ? {}
-            : { validToSceneId: dto.validToSceneId }),
+          attributeKey,
+          validFromSceneId,
+          validToSceneId,
+          ...(toValue === undefined ? {} : { toValue }),
         },
       });
       await this.assertNoStandardOverlaps(tx, state.entityId, positions);
       await this.lockStateKey(tx, state.entityId, state.attributeKey);
+      await this.lockStateKey(tx, state.entityId, attributeKey);
+      const auditStartSceneId =
+        (positions.get(validFromSceneId) ?? Infinity) <
+        (positions.get(state.validFromSceneId) ?? Infinity)
+          ? validFromSceneId
+          : state.validFromSceneId;
       await this.enqueueTemporalAudit(
         tx,
         state.entity.projectId,
-        state.validFromSceneId,
+        auditStartSceneId,
         positions,
       );
       return result;
@@ -256,6 +283,9 @@ export class TemporalStateService {
     if (!state) {
       throw new NotFoundException('Entity state not found');
     }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(state.entity.projectId),
+    );
     await this.prisma.$transaction(async (tx) => {
       const positions = await this.getScenePositions(
         tx,
@@ -275,6 +305,16 @@ export class TemporalStateService {
     userId: string,
     projectId: string,
   ): Promise<EntityStateProposalResponseDto[]> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    if (!(await this.isStateTrackingEnabled(projectId))) {
+      return [];
+    }
     const proposals = await this.prisma.entityStateProposal.findMany({
       where: {
         projectId,
@@ -283,6 +323,7 @@ export class TemporalStateService {
       },
       include: {
         entity: { select: { canonicalName: true } },
+        sourceChunk: { select: { contentHash: true, isDirty: true } },
         scene: {
           select: {
             title: true,
@@ -300,7 +341,25 @@ export class TemporalStateService {
         { createdAt: 'asc' },
       ],
     });
-    return proposals.map((proposal) => this.toProposalResponse(proposal));
+    const staleIds = proposals
+      .filter(
+        (proposal) =>
+          proposal.sourceChunkId === null ||
+          proposal.sourceChunkHash === null ||
+          !proposal.sourceChunk ||
+          proposal.sourceChunk.isDirty ||
+          proposal.sourceChunk.contentHash !== proposal.sourceChunkHash,
+      )
+      .map((proposal) => proposal.id);
+    if (staleIds.length > 0) {
+      await this.prisma.entityStateProposal.updateMany({
+        where: { id: { in: staleIds }, status: ProposalStatus.PENDING },
+        data: { status: ProposalStatus.OBSOLETE },
+      });
+    }
+    return proposals
+      .filter((proposal) => !staleIds.includes(proposal.id))
+      .map((proposal) => this.toProposalResponse(proposal));
   }
 
   async acceptProposal(
@@ -320,6 +379,9 @@ export class TemporalStateService {
       if (!proposal) {
         return null;
       }
+      this.assertStateTrackingEnabled(
+        await this.isStateTrackingEnabled(proposal.projectId, tx),
+      );
       if (proposal.sourceChunkId) {
         const chunk = await tx.chunk.findFirst({
           where: {
@@ -391,6 +453,16 @@ export class TemporalStateService {
     projectId: string,
     dto: AcceptStateProposalSequenceDto,
   ): Promise<EntityStateResponseDto[]> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(projectId),
+    );
     const acceptedIds = [...new Set(dto.acceptedProposalIds)];
     const rejectedIds = [...new Set(dto.rejectedProposalIds ?? [])];
     if (acceptedIds.some((id) => rejectedIds.includes(id))) {
@@ -556,6 +628,19 @@ export class TemporalStateService {
   }
 
   async rejectProposal(userId: string, proposalId: string): Promise<void> {
+    const proposal = await this.prisma.entityStateProposal.findFirst({
+      where: {
+        id: proposalId,
+        project: { userId, deletedAt: null },
+      },
+      select: { projectId: true },
+    });
+    if (!proposal) {
+      throw new NotFoundException('Entity state proposal not found');
+    }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(proposal.projectId),
+    );
     const result = await this.prisma.entityStateProposal.updateMany({
       where: {
         id: proposalId,
@@ -575,6 +660,9 @@ export class TemporalStateService {
   }
 
   async createProposal(input: CreateStateProposalInput): Promise<void> {
+    if (!(await this.isStateTrackingEnabled(input.projectId))) {
+      return;
+    }
     const attributeKey = this.normalizeKey(input.attributeKey);
     const entity = await this.prisma.entity.findFirst({
       where: {
@@ -876,6 +964,25 @@ export class TemporalStateService {
       throw new NotFoundException('Entity not found');
     }
     return entity;
+  }
+
+  private async isStateTrackingEnabled(
+    projectId: string,
+    client: DatabaseClient = this.prisma,
+  ): Promise<boolean> {
+    const settings = await client.projectKnowledgeReviewSettings.findUnique({
+      where: { projectId },
+      select: { stateTrackingEnabled: true },
+    });
+    return settings?.stateTrackingEnabled ?? false;
+  }
+
+  private assertStateTrackingEnabled(enabled: boolean): void {
+    if (!enabled) {
+      throw new ConflictException(
+        'El seguimiento de estados esta desactivado para este proyecto',
+      );
+    }
   }
 
   private async getScenePositions(

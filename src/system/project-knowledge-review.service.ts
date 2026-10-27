@@ -6,6 +6,7 @@ import {
 import {
   KnowledgeAnalysisRunStatus,
   KnowledgeAnalysisSceneStatus,
+  CrossChunkAuditMode,
   KnowledgeReviewMode,
   Prisma,
 } from '@prisma/client';
@@ -49,16 +50,20 @@ export class ProjectKnowledgeReviewService {
       where: { projectId },
       create: {
         projectId,
+        stateTrackingEnabled: dto.stateTrackingEnabled,
         stateReviewMode: dto.stateReviewMode,
         stateConfidenceThreshold: dto.stateConfidenceThreshold,
         relationshipReviewMode: dto.relationshipReviewMode,
         relationshipConfidenceThreshold: dto.relationshipConfidenceThreshold,
+        crossChunkAuditMode: dto.crossChunkAuditMode,
       },
       update: {
+        stateTrackingEnabled: dto.stateTrackingEnabled,
         stateReviewMode: dto.stateReviewMode,
         stateConfidenceThreshold: dto.stateConfidenceThreshold,
         relationshipReviewMode: dto.relationshipReviewMode,
         relationshipConfidenceThreshold: dto.relationshipConfidenceThreshold,
+        crossChunkAuditMode: dto.crossChunkAuditMode,
       },
     });
     return this.toSettingsResponse(settings);
@@ -67,6 +72,14 @@ export class ProjectKnowledgeReviewService {
   async previewAnalysis(userId: string, projectId: string) {
     await this.assertProjectAccess(userId, projectId);
     const scenes = await this.getPendingScenes(projectId);
+    const reviewSettings =
+      await this.prisma.projectKnowledgeReviewSettings?.findUnique?.({
+        where: { projectId },
+        select: { crossChunkAuditMode: true },
+      });
+    const crossChunkAuditMode =
+      reviewSettings?.crossChunkAuditMode ??
+      CrossChunkAuditMode.ADJACENT_CHUNKS;
     const adjacentPairs = scenes.reduce((count, scene) => {
       const chunksByIndex = new Map(
         scene.chunks.map((chunk) => [chunk.chunkIndex, chunk]),
@@ -85,6 +98,96 @@ export class ProjectKnowledgeReviewService {
         ).length
       );
     }, 0);
+    let continuityGroupsToAnalyze = 0;
+    if (crossChunkAuditMode === CrossChunkAuditMode.SCENE_GROUPED) {
+      for (const scene of scenes) {
+        for (let start = 0; start < scene.chunks.length; start += 4) {
+          const group = scene.chunks.slice(start, start + 5);
+          if (group.length < 2) {
+            break;
+          }
+          if (group.some((chunk) => chunk.isDirty)) {
+            continuityGroupsToAnalyze += 1;
+          }
+          if (start + 5 >= scene.chunks.length) {
+            break;
+          }
+        }
+      }
+    }
+
+    let continuityScenesToRecalculate = 0;
+    let continuityCheckpointsToRecalculate = 0;
+    if (
+      reviewSettings?.crossChunkAuditMode ===
+        CrossChunkAuditMode.PROJECT_SUMMARY &&
+      scenes.length > 0
+    ) {
+      const orderedScenes = await this.prisma.scene.findMany({
+        where: {
+          deletedAt: null,
+          chapter: { deletedAt: null, book: { projectId, deletedAt: null } },
+        },
+        select: {
+          id: true,
+          order: true,
+          sortKey: true,
+          chapter: {
+            select: {
+              sortKey: true,
+              book: { select: { sortKey: true } },
+            },
+          },
+        },
+      });
+      orderedScenes.sort(
+        (left, right) =>
+          left.chapter.book.sortKey.localeCompare(right.chapter.book.sortKey) ||
+          left.chapter.sortKey.localeCompare(right.chapter.sortKey) ||
+          left.order - right.order ||
+          left.sortKey.localeCompare(right.sortKey) ||
+          left.id.localeCompare(right.id),
+      );
+      const firstPendingIndex = orderedScenes.findIndex(
+        (scene) => scene.id === scenes[0]?.id,
+      );
+      if (firstPendingIndex >= 0) {
+        const precedingSceneIds = orderedScenes
+          .slice(0, firstPendingIndex)
+          .map((scene) => scene.id);
+        const checkpoints =
+          await this.prisma.projectContinuityCheckpoint.findMany({
+            where: {
+              projectId,
+              isValid: true,
+              sceneId: { in: precedingSceneIds },
+            },
+            select: { sceneId: true },
+          });
+        const sceneIndexById = new Map(
+          orderedScenes.map((scene, index) => [scene.id, index] as const),
+        );
+        const latestPreviousCheckpoint = checkpoints.sort(
+          (left, right) =>
+            (sceneIndexById.get(right.sceneId) ?? -1) -
+            (sceneIndexById.get(left.sceneId) ?? -1),
+        )[0];
+        const startIndex = latestPreviousCheckpoint
+          ? (sceneIndexById.get(latestPreviousCheckpoint.sceneId) ?? -1) + 1
+          : 0;
+        const scenesToRecalculate = orderedScenes.slice(startIndex);
+        continuityScenesToRecalculate = scenesToRecalculate.length;
+        const oldCheckpoints =
+          await this.prisma.projectContinuityCheckpoint.findMany({
+            where: {
+              projectId,
+              sceneId: { in: scenesToRecalculate.map((scene) => scene.id) },
+            },
+            select: { id: true },
+          });
+        continuityCheckpointsToRecalculate = oldCheckpoints.length;
+      }
+    }
 
     return {
       projectId,
@@ -94,7 +197,14 @@ export class ProjectKnowledgeReviewService {
           total + scene.chunks.filter((chunk) => chunk.isDirty).length,
         0,
       ),
-      affectedAdjacentPairs: Math.ceil(adjacentPairs),
+      crossChunkAuditMode,
+      affectedAdjacentPairs:
+        crossChunkAuditMode === CrossChunkAuditMode.ADJACENT_CHUNKS
+          ? Math.ceil(adjacentPairs)
+          : 0,
+      continuityGroupsToAnalyze,
+      continuityScenesToRecalculate,
+      continuityCheckpointsToRecalculate,
       scenes: scenes.map((scene) => ({
         id: scene.id,
         title: scene.title ?? 'Escena sin título',
@@ -344,19 +454,23 @@ export class ProjectKnowledgeReviewService {
   }
 
   private toSettingsResponse(settings: {
+    stateTrackingEnabled: boolean;
     stateReviewMode: KnowledgeReviewMode;
     stateConfidenceThreshold: Prisma.Decimal;
     relationshipReviewMode: KnowledgeReviewMode;
     relationshipConfidenceThreshold: Prisma.Decimal;
+    crossChunkAuditMode: CrossChunkAuditMode;
     updatedAt: Date;
   }) {
     return {
+      stateTrackingEnabled: settings.stateTrackingEnabled,
       stateReviewMode: settings.stateReviewMode,
       stateConfidenceThreshold: Number(settings.stateConfidenceThreshold),
       relationshipReviewMode: settings.relationshipReviewMode,
       relationshipConfidenceThreshold: Number(
         settings.relationshipConfidenceThreshold,
       ),
+      crossChunkAuditMode: settings.crossChunkAuditMode,
       updatedAt: settings.updatedAt,
     };
   }

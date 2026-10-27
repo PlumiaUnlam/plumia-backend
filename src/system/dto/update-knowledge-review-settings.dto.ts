@@ -1,7 +1,10 @@
-import { KnowledgeReviewMode } from '@prisma/client';
-import { IsEnum, IsNumber, Max, Min } from 'class-validator';
+import { CrossChunkAuditMode, KnowledgeReviewMode } from '@prisma/client';
+import { IsBoolean, IsEnum, IsNumber, Max, Min } from 'class-validator';
 
 export class UpdateKnowledgeReviewSettingsDto {
+  @IsBoolean()
+  stateTrackingEnabled!: boolean;
+
   @IsEnum(KnowledgeReviewMode)
   stateReviewMode!: KnowledgeReviewMode;
 
@@ -17,4 +20,7 @@ export class UpdateKnowledgeReviewSettingsDto {
   @Min(0)
   @Max(1)
   relationshipConfidenceThreshold!: number;
+
+  @IsEnum(CrossChunkAuditMode)
+  crossChunkAuditMode!: CrossChunkAuditMode;
 }

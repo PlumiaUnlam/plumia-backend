@@ -910,7 +910,12 @@ export class PrismaSceneRepository implements SceneRepository {
         changedChunkIds.add(chunk.id);
       }
       await tx.chunk.deleteMany({ where: { sceneId } });
-      await this.obsoleteAlertsForChangedChunks(tx, sceneId, changedChunkIds);
+      await this.obsoleteAlertsForChangedChunks(tx, projectId, changedChunkIds);
+      await this.invalidateContinuityCheckpointsFromScene(
+        tx,
+        projectId,
+        sceneId,
+      );
       return;
     }
 
@@ -921,12 +926,14 @@ export class PrismaSceneRepository implements SceneRepository {
     );
     const seenIndices = new Set<number>();
     const writes: Promise<unknown>[] = [];
+    let contentChanged = false;
 
     for (const plan of plans) {
       seenIndices.add(plan.chunkIndex);
       const current = existingByIndex.get(plan.chunkIndex);
 
       if (!current) {
+        contentChanged = true;
         writes.push(
           tx.chunk.create({
             data: {
@@ -947,6 +954,7 @@ export class PrismaSceneRepository implements SceneRepository {
         current.contentHash !== plan.contentHash ||
         current.content !== plan.content;
       if (hasChanged) {
+        contentChanged = true;
         changedChunkIds.add(current.id);
         writes.push(
           tx.chunk.update({
@@ -969,18 +977,26 @@ export class PrismaSceneRepository implements SceneRepository {
       .map((chunk) => chunk.id);
 
     if (staleChunkIds.length > 0) {
+      contentChanged = true;
       staleChunkIds.forEach((chunkId) => changedChunkIds.add(chunkId));
       await tx.chunk.deleteMany({
         where: { id: { in: staleChunkIds } },
       });
     }
 
-    await this.obsoleteAlertsForChangedChunks(tx, sceneId, changedChunkIds);
+    await this.obsoleteAlertsForChangedChunks(tx, projectId, changedChunkIds);
+    if (contentChanged) {
+      await this.invalidateContinuityCheckpointsFromScene(
+        tx,
+        projectId,
+        sceneId,
+      );
+    }
   }
 
   private async obsoleteAlertsForChangedChunks(
     tx: Prisma.TransactionClient,
-    sceneId: string,
+    projectId: string,
     changedChunkIds: ReadonlySet<string>,
   ): Promise<void> {
     if (changedChunkIds.size === 0) {
@@ -988,7 +1004,7 @@ export class PrismaSceneRepository implements SceneRepository {
     }
 
     const alerts = await tx.auditAlert.findMany({
-      where: { sceneId, status: AuditStatus.ACTIVE },
+      where: { projectId, status: AuditStatus.ACTIVE },
       select: {
         id: true,
         sourceChunkId: true,
@@ -1046,6 +1062,47 @@ export class PrismaSceneRepository implements SceneRepository {
         data: { status: AuditStatus.OBSOLETE },
       });
     }
+  }
+
+  private async invalidateContinuityCheckpointsFromScene(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    sceneId: string,
+  ): Promise<void> {
+    const scenes = await tx.scene.findMany({
+      where: {
+        deletedAt: null,
+        chapter: { deletedAt: null, book: { projectId, deletedAt: null } },
+      },
+      select: {
+        id: true,
+        order: true,
+        sortKey: true,
+        chapter: {
+          select: {
+            sortKey: true,
+            book: { select: { sortKey: true } },
+          },
+        },
+      },
+    });
+    scenes.sort(
+      (left, right) =>
+        left.chapter.book.sortKey.localeCompare(right.chapter.book.sortKey) ||
+        left.chapter.sortKey.localeCompare(right.chapter.sortKey) ||
+        left.order - right.order ||
+        left.sortKey.localeCompare(right.sortKey) ||
+        left.id.localeCompare(right.id),
+    );
+    const start = scenes.findIndex((scene) => scene.id === sceneId);
+    if (start < 0) {
+      return;
+    }
+    const affectedSceneIds = scenes.slice(start).map((scene) => scene.id);
+    await tx.projectContinuityCheckpoint.updateMany({
+      where: { projectId, sceneId: { in: affectedSceneIds }, isValid: true },
+      data: { isValid: false },
+    });
   }
 
   private async hasStaleKnowledgeEvidence(

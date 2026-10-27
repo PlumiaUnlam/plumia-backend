@@ -54,6 +54,8 @@ export interface ExtractedCrossChunkInconsistency {
   explanation: string;
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   confidenceScore: number;
+  firstChunkIndex?: number;
+  secondChunkIndex?: number;
   firstEvidence: string[];
   secondEvidence: string[];
   relationship?: {
@@ -61,6 +63,39 @@ export interface ExtractedCrossChunkInconsistency {
     targetEntityName: string;
     relationType: string;
   } | null;
+}
+
+export interface ContinuityCheckpointClaim {
+  entityName: string;
+  field: string;
+  value: string;
+  sceneId: string;
+  chunkId: string;
+  chunkHash: string;
+  chunkIndex: number;
+  evidence: string;
+}
+
+export interface ExtractedContinuityCheckpoint {
+  claims: Array<{
+    entityName: string;
+    field: string;
+    value: string;
+    chunkIndex: number;
+    evidence: string;
+  }>;
+  contradictions: Array<{
+    entityName: string;
+    field: string;
+    previousClaimIndex: number;
+    currentChunkIndex: number;
+    previousValue: string;
+    currentValue: string;
+    explanation: string;
+    severity: 'LOW' | 'MEDIUM' | 'HIGH';
+    confidenceScore: number;
+    currentEvidence: string;
+  }>;
 }
 
 export interface TemporalAuditContext {

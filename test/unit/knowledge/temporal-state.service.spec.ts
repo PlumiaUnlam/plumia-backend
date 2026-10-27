@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ProposalStatus } from '@prisma/client';
 import type { TemporalKnowledgeSnapshotService } from '../../../src/audit/temporal-knowledge-snapshot.service';
 import { TemporalStateService } from '../../../src/knowledge/services/temporal-state.service';
@@ -45,6 +49,7 @@ interface StateTransaction {
   };
   outbox: { createMany: jest.Mock };
   scene: { findMany: jest.Mock };
+  projectKnowledgeReviewSettings: { findUnique: jest.Mock };
 }
 
 interface TransactionRunner {
@@ -101,6 +106,9 @@ describe('TemporalStateService', () => {
     },
     project: { findFirst: jest.fn() },
     scene: { findMany: jest.fn() },
+    projectKnowledgeReviewSettings: {
+      findUnique: jest.fn().mockResolvedValue({ stateTrackingEnabled: true }),
+    },
   };
   const snapshots = { getSnapshot: jest.fn() };
   const service = new TemporalStateService(
@@ -117,6 +125,10 @@ describe('TemporalStateService', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     jest.clearAllMocks();
+    prisma.project.findFirst.mockResolvedValue({ id: 'project-one' });
+    prisma.projectKnowledgeReviewSettings.findUnique.mockResolvedValue({
+      stateTrackingEnabled: true,
+    });
   });
 
   it('closes the active standard state when a new value begins', async () => {
@@ -379,7 +391,12 @@ describe('TemporalStateService', () => {
     ).resolves.toMatchObject({ toValue: 'alive' });
     expect(tx.entityState.update).toHaveBeenCalledWith({
       where: { id: 'state-one' },
-      data: { toValue: 'alive' },
+      data: {
+        attributeKey: 'status',
+        validFromSceneId: 'scene-two',
+        validToSceneId: null,
+        toValue: 'alive',
+      },
     });
 
     await service.removeState('user-one', 'state-one');
@@ -584,6 +601,9 @@ describe('TemporalStateService', () => {
         createdAt,
         confidenceScore: { toString: () => '0.85' },
         entity: { canonicalName: 'Elena' },
+        sourceChunkId: 'chunk-one',
+        sourceChunkHash: 'hash-one',
+        sourceChunk: { contentHash: 'hash-one', isDirty: false },
       },
     ]);
 
@@ -596,6 +616,31 @@ describe('TemporalStateService', () => {
         confidenceScore: 0.85,
       }) as unknown,
     ]);
+  });
+
+  it('hides state proposals and blocks manual state writes when tracking is disabled', async () => {
+    prisma.projectKnowledgeReviewSettings.findUnique.mockResolvedValue({
+      stateTrackingEnabled: false,
+    });
+    prisma.entity.findFirst.mockResolvedValue({
+      id: 'entity-one',
+      projectId: 'project-one',
+    });
+    const tx = stateTransaction([]);
+    setupTransaction(prisma, tx);
+
+    await expect(
+      service.listPendingProposals('user-one', 'project-one'),
+    ).resolves.toEqual([]);
+    expect(prisma.entityStateProposal.findMany).not.toHaveBeenCalled();
+    await expect(
+      service.createState('user-one', 'entity-one', {
+        attributeKey: 'location',
+        toValue: 'Tower',
+        validFromSceneId: 'scene-one',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('accepts a proposal with a current source chunk and schedules an audit', async () => {
@@ -657,11 +702,14 @@ describe('TemporalStateService', () => {
   });
 
   it('rejects missing proposals and records author rejections', async () => {
-    prisma.entityStateProposal.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.entityStateProposal.findFirst.mockResolvedValueOnce(null);
     await expect(service.rejectProposal('user-one', 'missing')).rejects.toThrow(
       NotFoundException,
     );
 
+    prisma.entityStateProposal.findFirst.mockResolvedValueOnce({
+      projectId: 'project-one',
+    });
     prisma.entityStateProposal.updateMany.mockResolvedValueOnce({ count: 1 });
     await expect(
       service.rejectProposal('user-one', 'proposal-one'),
@@ -829,6 +877,9 @@ function stateTransaction(states: unknown[]): StateTransaction {
     },
     outbox: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     scene: { findMany: jest.fn() },
+    projectKnowledgeReviewSettings: {
+      findUnique: jest.fn().mockResolvedValue({ stateTrackingEnabled: true }),
+    },
   };
 }
 

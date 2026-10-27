@@ -5,6 +5,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import {
   AuditCategory,
   AuditSeverity,
+  CrossChunkAuditMode,
   KnowledgeAnalysisRunStatus,
   KnowledgeAnalysisSceneStatus,
   Prisma,
@@ -278,14 +279,17 @@ export class EntityExtractionPipelineService {
           throw new Error('La escena ya no está disponible.');
         }
 
-        await this.processSceneChanged({
-          sceneId: scene.id,
-          chapterId: scene.chapterId,
-          contentHash: scene.contentHash ?? '',
-          wordCount: scene.wordCount,
-          userId: scene.chapter.book.project.userId,
-          trigger: 'MANUAL',
-        });
+        await this.processSceneChanged(
+          {
+            sceneId: scene.id,
+            chapterId: scene.chapterId,
+            contentHash: scene.contentHash ?? '',
+            wordCount: scene.wordCount,
+            userId: scene.chapter.book.project.userId,
+            trigger: 'MANUAL',
+          },
+          { skipContinuityAudit: true },
+        );
         const remainingChunks = await this.prisma.chunk.count({
           where: { sceneId: scene.id, isDirty: true },
         });
@@ -354,6 +358,41 @@ export class EntityExtractionPipelineService {
         completedAt: new Date(),
       },
     });
+    const analyzedScenes = await this.prisma.knowledgeAnalysisRunScene.findMany(
+      {
+        where: {
+          runId,
+          status: KnowledgeAnalysisSceneStatus.SUCCEEDED,
+        },
+        select: { sceneId: true },
+        orderBy: { narrativePosition: 'asc' },
+      },
+    );
+    if (analyzedScenes.length > 0) {
+      const [project, reviewSettings] = await Promise.all([
+        this.prisma.project.findUnique({
+          where: { id: run.projectId },
+          select: { userId: true },
+        }),
+        this.prisma.projectKnowledgeReviewSettings.findUnique({
+          where: { projectId: run.projectId },
+          select: { crossChunkAuditMode: true },
+        }),
+      ]);
+      if (project) {
+        const scenesToAudit =
+          reviewSettings?.crossChunkAuditMode ===
+          CrossChunkAuditMode.PROJECT_SUMMARY
+            ? [analyzedScenes[0]!]
+            : analyzedScenes;
+        for (const scene of scenesToAudit) {
+          await this.crossChunkAudit?.auditScene({
+            sceneId: scene.sceneId,
+            userId: project.userId,
+          });
+        }
+      }
+    }
   }
 
   async processTemporalAudit(sceneId: string): Promise<void> {
@@ -450,7 +489,10 @@ export class EntityExtractionPipelineService {
     await this.crossChunkAudit?.auditScene({ sceneId, userId });
   }
 
-  async processSceneChanged(payload: SceneChangedOutboxPayload): Promise<void> {
+  async processSceneChanged(
+    payload: SceneChangedOutboxPayload,
+    options: { skipContinuityAudit?: boolean } = {},
+  ): Promise<void> {
     const scene = await this.prisma.scene.findFirst({
       where: {
         id: payload.sceneId,
@@ -707,11 +749,13 @@ export class EntityExtractionPipelineService {
       );
     }
     if (dirtyChunkIds.size > 0) {
-      await this.crossChunkAudit?.auditScene({
-        sceneId: scene.id,
-        userId: payload.userId,
-        onlyDirtyChunkIds: dirtyChunkIds,
-      });
+      if (!options.skipContinuityAudit) {
+        await this.crossChunkAudit?.auditScene({
+          sceneId: scene.id,
+          userId: payload.userId,
+          onlyDirtyChunkIds: dirtyChunkIds,
+        });
+      }
       await this.proposalAutomation?.reviewScene(scene.id);
     }
   }

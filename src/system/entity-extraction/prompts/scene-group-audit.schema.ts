@@ -1,0 +1,40 @@
+export const SCENE_GROUP_AUDIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    contradictions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['CONTRADICTION', 'UNCERTAIN'] },
+          entityName: { type: 'string' },
+          field: { type: 'string' },
+          firstValue: { type: 'string' },
+          secondValue: { type: 'string' },
+          firstChunkIndex: { type: 'integer', minimum: 0 },
+          secondChunkIndex: { type: 'integer', minimum: 0 },
+          explanation: { type: 'string' },
+          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
+          confidenceScore: { type: 'number', minimum: 0, maximum: 1 },
+          firstEvidence: { type: 'array', items: { type: 'string' } },
+          secondEvidence: { type: 'array', items: { type: 'string' } },
+        },
+        required: [
+          'kind',
+          'entityName',
+          'field',
+          'firstValue',
+          'secondValue',
+          'firstChunkIndex',
+          'secondChunkIndex',
+          'explanation',
+          'severity',
+          'confidenceScore',
+          'firstEvidence',
+          'secondEvidence',
+        ],
+      },
+    },
+  },
+  required: ['contradictions'],
+} as const;

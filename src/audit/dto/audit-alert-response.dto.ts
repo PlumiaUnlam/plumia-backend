@@ -15,6 +15,7 @@ export interface EntityConflictDetailsDto {
   supportingEvidence?: Array<{
     side: 'first' | 'second';
     quote: string;
+    sceneId?: string;
   }>;
   relationship?: {
     relationshipId: string | null;

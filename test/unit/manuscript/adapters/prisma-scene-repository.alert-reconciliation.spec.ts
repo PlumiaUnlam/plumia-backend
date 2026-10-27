@@ -32,6 +32,14 @@ describe('PrismaSceneRepository alert reconciliation', () => {
           .mockResolvedValueOnce({
             chapter: { book: { projectId: 'project-1' } },
           }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'scene-1',
+            order: 0,
+            sortKey: '001',
+            chapter: { sortKey: '001', book: { sortKey: '001' } },
+          },
+        ]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([
@@ -82,6 +90,7 @@ describe('PrismaSceneRepository alert reconciliation', () => {
         }),
       },
       outbox: { findFirst: jest.fn(), create: jest.fn() },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     const prisma = {
       $transaction: jest.fn(

@@ -41,7 +41,17 @@ export class KnowledgeProposalAutomationService {
       await this.prisma.projectKnowledgeReviewSettings.findUnique({
         where: { projectId },
       });
-    if (!settings) {
+    if (!settings || settings.stateTrackingEnabled === false) {
+      if (
+        settings?.relationshipReviewMode === KnowledgeReviewMode.AUTO_THRESHOLD
+      ) {
+        await this.autoApproveRelationships({
+          userId: project.userId,
+          projectId,
+          sceneId,
+          threshold: Number(settings.relationshipConfidenceThreshold),
+        });
+      }
       return;
     }
 

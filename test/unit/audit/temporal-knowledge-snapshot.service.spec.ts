@@ -24,7 +24,10 @@ describe('TemporalKnowledgeSnapshotService', () => {
       chapter: {
         book: {
           projectId: 'project-one',
-          project: { genreRules: { magic: 'Requiere contacto visual.' } },
+          project: {
+            genreRules: { magic: 'Requiere contacto visual.' },
+            knowledgeReviewSettings: { stateTrackingEnabled: true },
+          },
         },
       },
     });
