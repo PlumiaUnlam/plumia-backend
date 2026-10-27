@@ -12,6 +12,8 @@ import { EntityExtractionPipelineService } from './entity-extraction/entity-extr
 
 const OUTBOX_BATCH_SIZE = 25;
 const POLL_INTERVAL_MS = 5000;
+const JOB_ATTEMPTS = 4;
+const JOB_BACKOFF_MS = 3000;
 const ENTITY_EXTRACTION_QUEUE = 'entity-extraction';
 
 type AppRole = 'web' | 'worker' | 'all';
@@ -57,7 +59,15 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
   }
 
   async start(): Promise<void> {
-    if (this.started || this.role === 'web') {
+    if (this.started) {
+      return;
+    }
+
+    if (this.role === 'web') {
+      this.started = true;
+      this.logger.warn(
+        'Entity extraction worker is disabled for APP_ROLE=web; configure a separate worker process.',
+      );
       return;
     }
 
@@ -87,10 +97,38 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
 
     this.worker.on('failed', (job, error) => {
       this.logger.error(
-        `Entity extraction job ${job?.id ?? 'unknown'} failed: ${error.message}`,
+        `Entity extraction job ${job?.id ?? 'unknown'} failed on attempt ${job?.attemptsMade ?? 0}/${job?.opts.attempts ?? 1}: ${error.message}`,
       );
+      if (job?.data?.outboxId && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+        void this.pipeline
+          .markOutboxEventFailed(job.data.outboxId, error)
+          .catch((error_: unknown) => {
+            this.logger.error(
+              `Could not finalize failed outbox ${job.data.outboxId}: ${error_ instanceof Error ? error_.message : String(error_)}`,
+            );
+          });
+      }
+    });
+    this.worker.on('error', (error) => {
+      this.logger.error(`Entity extraction worker error: ${error.message}`);
+    });
+    this.queue.on('error', (error) => {
+      this.logger.error(`Entity extraction queue error: ${error.message}`);
     });
 
+    try {
+      await Promise.all([
+        this.queue.waitUntilReady(),
+        this.worker.waitUntilReady(),
+      ]);
+      this.logger.log(
+        `Entity extraction worker ready (role=${this.role}, model configured).`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Entity extraction worker could not connect to Redis: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     await this.pollOnce();
     this.pollTimer = setInterval(
       () => {
@@ -117,40 +155,72 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async pollOnce(): Promise<void> {
-    const outboxRows = await this.prisma.outbox.findMany({
-      where: {
-        processedAt: null,
-        aggregateType: 'Scene',
-        eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
-      },
-      orderBy: { createdAt: 'asc' },
-      take: OUTBOX_BATCH_SIZE,
-    });
+    try {
+      const outboxRows = await this.prisma.outbox.findMany({
+        where: {
+          processedAt: null,
+          OR: [
+            {
+              aggregateType: 'Scene',
+              eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
+            },
+            {
+              aggregateType: 'Project',
+              eventType: 'project_analysis_requested',
+            },
+          ],
+        },
+        orderBy: { createdAt: 'asc' },
+        take: OUTBOX_BATCH_SIZE,
+      });
 
-    await outboxRows.reduce(
-      (processing, row) =>
-        processing.then(async () => {
-          try {
-            await this.queue.add(
-              'process-scene-event',
-              { outboxId: row.id },
-              {
-                jobId: row.id,
-                removeOnComplete: true,
-                removeOnFail: false,
-              },
-            );
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            if (message.toLowerCase().includes('already exists')) {
-              return;
+      await outboxRows.reduce(
+        (processing, row) =>
+          processing.then(async () => {
+            try {
+              const existing = await this.queue.getJob(row.id);
+              if (existing) {
+                const state = await existing.getState();
+                if (
+                  state === 'failed' &&
+                  existing.attemptsMade >= (existing.opts.attempts ?? 1)
+                ) {
+                  await this.pipeline.markOutboxEventFailed(
+                    row.id,
+                    new Error(existing.failedReason ?? 'Queue job failed'),
+                  );
+                }
+                return;
+              }
+
+              await this.queue.add(
+                'process-scene-event',
+                { outboxId: row.id },
+                {
+                  jobId: row.id,
+                  attempts: JOB_ATTEMPTS,
+                  backoff: { type: 'exponential', delay: JOB_BACKOFF_MS },
+                  removeOnComplete: true,
+                  removeOnFail: false,
+                },
+              );
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              if (message.toLowerCase().includes('already exists')) {
+                return;
+              }
+              this.logger.error(
+                `Failed to enqueue outbox ${row.id}: ${message}`,
+              );
             }
-
-            this.logger.error(`Failed to enqueue outbox ${row.id}: ${message}`);
-          }
-        }),
-      Promise.resolve(),
-    );
+          }),
+        Promise.resolve(),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Entity extraction outbox poll failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 }

@@ -11,6 +11,7 @@ describe('UserController', () => {
     saveGeminiKey: jest.fn(),
     removeGeminiKey: jest.fn(),
     updateAutoAnalyzeOnAutosave: jest.fn(),
+    updateEntityRecognitionThresholds: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -124,6 +125,33 @@ describe('UserController', () => {
       expect(userApiKeys.updateAutoAnalyzeOnAutosave).toHaveBeenCalledWith(
         'uuid-1',
         false,
+      );
+    });
+
+    it('updates recognition thresholds for the authenticated user', async () => {
+      const settings = { entityExtractionThresholds: { OBJECT: 0.95 } };
+      userApiKeys.updateEntityRecognitionThresholds.mockResolvedValue(settings);
+
+      await expect(
+        userController.updateEntityRecognition(
+          { user: { id: 'uuid-1' } },
+          {
+            thresholds: {
+              CHARACTER: 0.55,
+              LOCATION: 0.65,
+              OBJECT: 0.95,
+              ORGANIZATION: 0.7,
+              EVENT: 0.75,
+              CONCEPT: 0.8,
+            },
+          },
+        ),
+      ).resolves.toBe(settings);
+      expect(
+        userApiKeys.updateEntityRecognitionThresholds,
+      ).toHaveBeenCalledWith(
+        'uuid-1',
+        expect.objectContaining({ OBJECT: 0.95 }),
       );
     });
   });

@@ -3,4 +3,5 @@ export class AiSettingsResponseDto {
   keyPrefix!: string | null;
   updatedAt!: Date | null;
   autoAnalyzeOnAutosave!: boolean;
+  entityExtractionThresholds!: Record<string, number>;
 }

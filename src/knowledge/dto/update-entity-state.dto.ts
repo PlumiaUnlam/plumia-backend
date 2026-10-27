@@ -3,8 +3,17 @@ import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 export class UpdateEntityStateDto {
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  attributeKey?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(1000)
   toValue?: string;
+
+  @IsOptional()
+  @IsUUID()
+  validFromSceneId?: string;
 
   @IsOptional()
   @IsUUID()

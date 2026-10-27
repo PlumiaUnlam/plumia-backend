@@ -13,11 +13,20 @@ import type { AuthenticatedRequest } from './authenticated-request';
 import { CreateEntityStateDto } from '../dto/create-entity-state.dto';
 import { UpdateEntityStateDto } from '../dto/update-entity-state.dto';
 import { EntityStateResponseDto } from '../dto/responses/entity-state-response.dto';
+import { EntityStateHistoryResponseDto } from '../dto/responses/entity-state-history-response.dto';
 import { TemporalStateService } from '../services/temporal-state.service';
 
 @Controller('knowledge')
 export class EntityStatesController {
   constructor(private readonly states: TemporalStateService) {}
+
+  @Get('projects/:projectId/state-history')
+  listProjectHistory(
+    @Request() req: AuthenticatedRequest,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ): Promise<EntityStateHistoryResponseDto[]> {
+    return this.states.listProjectStateHistory(req.user.id, projectId);
+  }
 
   @Get('entities/:entityId/states')
   list(

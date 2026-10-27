@@ -69,7 +69,7 @@ export class TemporalConsistencyRuleService {
       typeof snapshot.activeStates
     >();
 
-    for (const state of snapshot.activeStates) {
+    for (const state of snapshot.activeStateRows ?? snapshot.activeStates) {
       const normalizedKey = this.normalize(state.attributeKey);
       // Free-form attributes can intentionally coexist; only the standard
       // temporal attributes represent a single, objective world state.
@@ -82,7 +82,25 @@ export class TemporalConsistencyRuleService {
       statesByEntityAndKey.set(key, states);
     }
 
-    for (const states of statesByEntityAndKey.values()) {
+    for (const matchingStates of statesByEntityAndKey.values()) {
+      const sameSceneStates = matchingStates.filter(
+        (state) => state.validFromSceneId === snapshot.sceneId,
+      );
+      const latestNarrativeOrder = Math.max(
+        ...sameSceneStates.map((state) => state.narrativeOrder ?? -1),
+      );
+      const states =
+        sameSceneStates.length > 1
+          ? [
+              ...matchingStates.filter(
+                (state) => state.validFromSceneId !== snapshot.sceneId,
+              ),
+              ...sameSceneStates.filter(
+                (state) =>
+                  (state.narrativeOrder ?? -1) === latestNarrativeOrder,
+              ),
+            ]
+          : matchingStates;
       const values = [
         ...new Set(
           states

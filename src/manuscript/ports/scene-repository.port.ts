@@ -52,6 +52,18 @@ export interface SceneAnalysisRequestResult {
   pendingChunks: number;
 }
 
+export type SceneAnalysisExecutionStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'NO_CHANGES';
+
+export interface SceneAnalysisExecutionResult {
+  status: SceneAnalysisExecutionStatus;
+  error: string | null;
+}
+
 export interface SceneContentUpdateResult {
   scene: SceneRecord;
   contentChanged: boolean;
@@ -97,6 +109,10 @@ export interface SceneRepository {
     userId: string,
     sceneId: string,
   ): Promise<SceneAnalysisRequestResult | null>;
+  getAnalysisStatusForUser(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisExecutionResult | null>;
   listVersionsForUser(
     userId: string,
     sceneId: string,

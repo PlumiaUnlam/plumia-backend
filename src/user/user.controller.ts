@@ -12,6 +12,7 @@ import {
 import { AiSettingsResponseDto } from './dto/ai-settings-response.dto';
 import { UpdateGeminiApiKeyDto } from './dto/update-gemini-api-key.dto';
 import { UpdateAutoAnalysisDto } from './dto/update-auto-analysis.dto';
+import { UpdateEntityRecognitionDto } from './dto/update-entity-recognition.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UserService, type UserEntity } from './user.service';
 import { UserApiKeyService } from './user-api-key.service';
@@ -67,6 +68,17 @@ export class UserController {
     return this.userApiKeys.updateAutoAnalyzeOnAutosave(
       req.user.id,
       dto.enabled,
+    );
+  }
+
+  @Put('me/ai-settings/entity-recognition')
+  updateEntityRecognition(
+    @Request() req: { user: { id: string } },
+    @Body() dto: UpdateEntityRecognitionDto,
+  ): Promise<AiSettingsResponseDto> {
+    return this.userApiKeys.updateEntityRecognitionThresholds(
+      req.user.id,
+      dto.thresholds,
     );
   }
 

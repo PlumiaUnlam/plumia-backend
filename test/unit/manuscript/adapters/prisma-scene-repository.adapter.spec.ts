@@ -77,6 +77,7 @@ describe('PrismaSceneRepository', () => {
     const tx = {
       scene: {
         create: jest.fn().mockResolvedValue(scene),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -84,6 +85,7 @@ describe('PrismaSceneRepository', () => {
         update: jest.fn(),
         deleteMany: jest.fn(),
       },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
       async (
@@ -136,6 +138,7 @@ describe('PrismaSceneRepository', () => {
           .mockResolvedValueOnce({
             chapter: { book: { projectId: 'project-1' } },
           }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -152,6 +155,7 @@ describe('PrismaSceneRepository', () => {
           autoAnalyzeOnAutosave: true,
         }),
       },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
       async (
@@ -200,6 +204,7 @@ describe('PrismaSceneRepository', () => {
           wordCount: 1,
           userId: 'user-1',
           trigger: 'AUTO_SAVE',
+          analysisStatus: 'QUEUED',
         },
         createdAt: expect.any(Date) as unknown,
       },
@@ -258,6 +263,7 @@ describe('PrismaSceneRepository', () => {
           .mockResolvedValueOnce({
             chapter: { book: { projectId: 'project-1' } },
           }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       chunk: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -274,6 +280,7 @@ describe('PrismaSceneRepository', () => {
         findFirst: jest.fn(),
         create: jest.fn(),
       },
+      projectContinuityCheckpoint: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
       async (callback: (transaction: typeof tx) => Promise<unknown>) =>
@@ -302,7 +309,12 @@ describe('PrismaSceneRepository', () => {
           wordCount: 10,
         }),
       },
-      chunk: { count: jest.fn().mockResolvedValue(2) },
+      chunk: {
+        count: jest.fn().mockResolvedValue(2),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      entityProposal: { findMany: jest.fn().mockResolvedValue([]) },
+      relationshipProposal: { findMany: jest.fn().mockResolvedValue([]) },
       outbox: {
         findFirst: jest
           .fn()
@@ -348,7 +360,12 @@ describe('PrismaSceneRepository', () => {
           wordCount: 10,
         }),
       },
-      chunk: { count: jest.fn().mockResolvedValue(0) },
+      chunk: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      entityProposal: { findMany: jest.fn().mockResolvedValue([]) },
+      relationshipProposal: { findMany: jest.fn().mockResolvedValue([]) },
       outbox: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
@@ -363,6 +380,51 @@ describe('PrismaSceneRepository', () => {
       repository.requestAnalysisForUser('user-1', 'scene-1'),
     ).resolves.toEqual({ status: 'NO_CHANGES', pendingChunks: 0 });
     expect(tx.outbox.create).not.toHaveBeenCalled();
+  });
+
+  it('queues reconciliation when only stale proposal evidence remains', async () => {
+    const tx = {
+      scene: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'scene-1',
+          chapterId: 'chapter-1',
+          contentHash: 'hash-1',
+          wordCount: 10,
+        }),
+      },
+      chunk: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      entityProposal: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { sourceChunkId: 'deleted-chunk', sourceChunkHash: 'old-hash' },
+          ]),
+      },
+      relationshipProposal: { findMany: jest.fn().mockResolvedValue([]) },
+      outbox: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+    };
+    prisma.$transaction.mockImplementation(
+      async (callback: (transaction: typeof tx) => Promise<unknown>) =>
+        callback(tx),
+    );
+
+    await expect(
+      repository.requestAnalysisForUser('user-1', 'scene-1'),
+    ).resolves.toEqual({ status: 'QUEUED', pendingChunks: 0 });
+    expect(tx.outbox.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: 'scene_changed',
+          payload: expect.objectContaining({ trigger: 'MANUAL' }) as unknown,
+        }) as unknown,
+      }),
+    );
   });
 
   it('does not write outbox when the scene is not owned by the user', async () => {

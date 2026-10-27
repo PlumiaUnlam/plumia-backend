@@ -2,11 +2,13 @@
 
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   EpistemicType,
+  StateProposalSequenceKind,
   type EntityState,
   Prisma,
   ProposalStatus,
@@ -17,17 +19,18 @@ import {
   type TemporalRelationship,
 } from '../../audit/temporal-knowledge-snapshot.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { forEachSequentially } from '../../system/entity-extraction/for-each-sequentially';
 import type { CreateEntityStateDto } from '../dto/create-entity-state.dto';
+import type { AcceptStateProposalSequenceDto } from '../dto/accept-state-proposal-sequence.dto';
 import type { EntityStateProposalOverrideDto } from '../dto/entity-state-proposal-override.dto';
 import { EntityStateProposalResponseDto } from '../dto/responses/entity-state-proposal-response.dto';
+import { EntityStateHistoryResponseDto } from '../dto/responses/entity-state-history-response.dto';
 import { EntityStateResponseDto } from '../dto/responses/entity-state-response.dto';
 import type { UpdateEntityStateDto } from '../dto/update-entity-state.dto';
-
-const SINGLE_VALUE_STATE_KEYS = new Set([
-  'location',
-  'status',
-  'health_status',
-]);
+import {
+  normalizeEntityStateKey,
+  SINGLE_VALUE_STATE_KEYS,
+} from '../domain/entity-state-keys';
 
 type DatabaseClient = PrismaService | Prisma.TransactionClient;
 
@@ -62,6 +65,8 @@ export interface CreateStateProposalInput {
   toValue: string;
   evidence: string[];
   confidenceScore: number;
+  narrativeOrder?: number;
+  sequenceKind?: StateProposalSequenceKind;
 }
 
 /** Owns author-approved state transitions and their reviewable AI proposals. */
@@ -76,12 +81,95 @@ export class TemporalStateService {
     userId: string,
     entityId: string,
   ): Promise<EntityStateResponseDto[]> {
-    await this.getEntityForUser(userId, entityId);
+    const entity = await this.getEntityForUser(userId, entityId);
+    if (!(await this.isStateTrackingEnabled(entity.projectId))) {
+      return [];
+    }
     const states = await this.prisma.entityState.findMany({
       where: { entityId },
       orderBy: { createdAt: 'asc' },
     });
     return states.map((state) => this.toStateResponse(state));
+  }
+
+  async listProjectStateHistory(
+    userId: string,
+    projectId: string,
+  ): Promise<EntityStateHistoryResponseDto[]> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    if (!(await this.isStateTrackingEnabled(projectId))) {
+      return [];
+    }
+
+    const [states, positions] = await Promise.all([
+      this.prisma.entityState.findMany({
+        where: { entity: { projectId, deletedAt: null } },
+        include: {
+          entity: { select: { canonicalName: true } },
+          validFromScene: {
+            select: {
+              id: true,
+              title: true,
+              chapter: {
+                select: { title: true, book: { select: { title: true } } },
+              },
+            },
+          },
+          validToScene: {
+            select: {
+              id: true,
+              title: true,
+              chapter: {
+                select: { title: true, book: { select: { title: true } } },
+              },
+            },
+          },
+        },
+      }),
+      this.getScenePositions(this.prisma, projectId),
+    ]);
+
+    return states
+      .sort(
+        (left, right) =>
+          (positions.get(left.validFromSceneId) ?? Number.MAX_SAFE_INTEGER) -
+            (positions.get(right.validFromSceneId) ??
+              Number.MAX_SAFE_INTEGER) ||
+          (left.narrativeOrder ?? Number.MAX_SAFE_INTEGER) -
+            (right.narrativeOrder ?? Number.MAX_SAFE_INTEGER) ||
+          left.createdAt.getTime() - right.createdAt.getTime(),
+      )
+      .map((state) => ({
+        id: state.id,
+        entityId: state.entityId,
+        entityName: state.entity.canonicalName,
+        attributeKey: state.attributeKey,
+        fromValue: state.fromValue,
+        toValue: state.toValue,
+        validFromScene: {
+          id: state.validFromScene.id,
+          title: state.validFromScene.title,
+          chapterTitle: state.validFromScene.chapter.title,
+          bookTitle: state.validFromScene.chapter.book.title,
+        },
+        validToScene: state.validToScene
+          ? {
+              id: state.validToScene.id,
+              title: state.validToScene.title,
+              chapterTitle: state.validToScene.chapter.title,
+              bookTitle: state.validToScene.chapter.book.title,
+            }
+          : null,
+        narrativeOrder: state.narrativeOrder,
+        source: state.source,
+        createdAt: state.createdAt,
+      }));
   }
 
   async createState(
@@ -90,6 +178,9 @@ export class TemporalStateService {
     dto: CreateEntityStateDto,
   ): Promise<EntityStateResponseDto> {
     const entity = await this.getEntityForUser(userId, entityId);
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(entity.projectId),
+    );
     const state = await this.prisma.$transaction(async (tx) => {
       const positions = await this.getScenePositions(tx, entity.projectId);
       this.assertWindow(positions, dto.validFromSceneId, dto.validToSceneId);
@@ -130,34 +221,51 @@ export class TemporalStateService {
     if (!state) {
       throw new NotFoundException('Entity state not found');
     }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(state.entity.projectId),
+    );
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const positions = await this.getScenePositions(
         tx,
         state.entity.projectId,
       );
-      this.assertWindow(
-        positions,
-        state.validFromSceneId,
+      const attributeKey =
+        dto.attributeKey === undefined
+          ? state.attributeKey
+          : dto.attributeKey.trim();
+      const validFromSceneId = dto.validFromSceneId ?? state.validFromSceneId;
+      const validToSceneId =
         dto.validToSceneId === undefined
           ? state.validToSceneId
-          : dto.validToSceneId,
-      );
+          : dto.validToSceneId;
+      const toValue =
+        dto.toValue === undefined ? undefined : dto.toValue.trim();
+      if (!attributeKey || (toValue !== undefined && !toValue)) {
+        throw new BadRequestException('State attribute and value are required');
+      }
+      this.assertWindow(positions, validFromSceneId, validToSceneId);
       const result = await tx.entityState.update({
         where: { id: state.id },
         data: {
-          ...(dto.toValue === undefined ? {} : { toValue: dto.toValue.trim() }),
-          ...(dto.validToSceneId === undefined
-            ? {}
-            : { validToSceneId: dto.validToSceneId }),
+          attributeKey,
+          validFromSceneId,
+          validToSceneId,
+          ...(toValue === undefined ? {} : { toValue }),
         },
       });
       await this.assertNoStandardOverlaps(tx, state.entityId, positions);
       await this.lockStateKey(tx, state.entityId, state.attributeKey);
+      await this.lockStateKey(tx, state.entityId, attributeKey);
+      const auditStartSceneId =
+        (positions.get(validFromSceneId) ?? Infinity) <
+        (positions.get(state.validFromSceneId) ?? Infinity)
+          ? validFromSceneId
+          : state.validFromSceneId;
       await this.enqueueTemporalAudit(
         tx,
         state.entity.projectId,
-        state.validFromSceneId,
+        auditStartSceneId,
         positions,
       );
       return result;
@@ -176,6 +284,9 @@ export class TemporalStateService {
     if (!state) {
       throw new NotFoundException('Entity state not found');
     }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(state.entity.projectId),
+    );
     await this.prisma.$transaction(async (tx) => {
       const positions = await this.getScenePositions(
         tx,
@@ -195,16 +306,61 @@ export class TemporalStateService {
     userId: string,
     projectId: string,
   ): Promise<EntityStateProposalResponseDto[]> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    if (!(await this.isStateTrackingEnabled(projectId))) {
+      return [];
+    }
     const proposals = await this.prisma.entityStateProposal.findMany({
       where: {
         projectId,
         status: ProposalStatus.PENDING,
         project: { userId, deletedAt: null },
       },
-      include: { entity: { select: { canonicalName: true } } },
-      orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }],
+      include: {
+        entity: { select: { canonicalName: true } },
+        sourceChunk: { select: { contentHash: true, isDirty: true } },
+        scene: {
+          select: {
+            title: true,
+            chapter: {
+              select: { title: true, book: { select: { title: true } } },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { scene: { chapter: { book: { sortKey: 'asc' } } } },
+        { scene: { chapter: { sortKey: 'asc' } } },
+        { scene: { order: 'asc' } },
+        { narrativeOrder: 'asc' },
+        { createdAt: 'asc' },
+      ],
     });
-    return proposals.map((proposal) => this.toProposalResponse(proposal));
+    const staleIds = proposals
+      .filter(
+        (proposal) =>
+          proposal.sourceChunkId === null ||
+          proposal.sourceChunkHash === null ||
+          !proposal.sourceChunk ||
+          proposal.sourceChunk.isDirty ||
+          proposal.sourceChunk.contentHash !== proposal.sourceChunkHash,
+      )
+      .map((proposal) => proposal.id);
+    if (staleIds.length > 0) {
+      await this.prisma.entityStateProposal.updateMany({
+        where: { id: { in: staleIds }, status: ProposalStatus.PENDING },
+        data: { status: ProposalStatus.OBSOLETE },
+      });
+    }
+    return proposals
+      .filter((proposal) => !staleIds.includes(proposal.id))
+      .map((proposal) => this.toProposalResponse(proposal));
   }
 
   async acceptProposal(
@@ -224,10 +380,15 @@ export class TemporalStateService {
       if (!proposal) {
         return null;
       }
+      this.assertStateTrackingEnabled(
+        await this.isStateTrackingEnabled(proposal.projectId, tx),
+      );
       if (proposal.sourceChunkId) {
         const chunk = await tx.chunk.findFirst({
           where: {
             id: proposal.sourceChunkId,
+            sceneId: proposal.sceneId,
+            isDirty: false,
             ...(proposal.sourceChunkHash === null
               ? {}
               : { contentHash: proposal.sourceChunkHash }),
@@ -239,9 +400,7 @@ export class TemporalStateService {
             where: { id: proposal.id },
             data: { status: ProposalStatus.OBSOLETE },
           });
-          throw new BadRequestException(
-            'La evidencia de la propuesta ya no esta vigente',
-          );
+          return { staleEvidence: true as const };
         }
       }
 
@@ -256,6 +415,9 @@ export class TemporalStateService {
         toValue: override?.toValue ?? proposal.toValue ?? '',
         validFromSceneId,
         validToSceneId,
+        ...(proposal.narrativeOrder === null
+          ? {}
+          : { narrativeOrder: proposal.narrativeOrder }),
         source: 'ai_proposed',
         positions,
       });
@@ -274,15 +436,213 @@ export class TemporalStateService {
         validFromSceneId,
         positions,
       );
-      return state;
+      return { state, staleEvidence: false as const };
     });
     if (!result) {
       throw new NotFoundException('Entity state proposal not found');
     }
-    return this.toStateResponse(result);
+    if (result.staleEvidence) {
+      throw new BadRequestException(
+        'La evidencia de la propuesta ya no está vigente',
+      );
+    }
+    return this.toStateResponse(result.state);
+  }
+
+  async acceptProposalSequence(
+    userId: string,
+    projectId: string,
+    dto: AcceptStateProposalSequenceDto,
+  ): Promise<EntityStateResponseDto[]> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(projectId),
+    );
+    const acceptedIds = [...new Set(dto.acceptedProposalIds)];
+    const rejectedIds = [...new Set(dto.rejectedProposalIds ?? [])];
+    if (acceptedIds.some((id) => rejectedIds.includes(id))) {
+      throw new BadRequestException(
+        'Una propuesta no puede aceptarse y rechazarse a la vez',
+      );
+    }
+    const requestedIds = [...new Set([...acceptedIds, ...rejectedIds])];
+    if (requestedIds.length === 0) {
+      throw new BadRequestException('Selecciona al menos un cambio narrativo');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const proposals = await tx.entityStateProposal.findMany({
+        where: {
+          id: { in: requestedIds },
+          projectId,
+          status: ProposalStatus.PENDING,
+          project: { userId, deletedAt: null },
+        },
+        include: { entity: { select: { projectId: true } } },
+      });
+      if (proposals.length !== requestedIds.length) {
+        throw new NotFoundException(
+          'Hay propuestas que ya no estan disponibles',
+        );
+      }
+
+      const accepted = proposals.filter((proposal) =>
+        acceptedIds.includes(proposal.id),
+      );
+      const grouped = new Map<string, typeof accepted>();
+      for (const proposal of accepted) {
+        const key = `${proposal.entityId}:${proposal.attributeKey}:${proposal.sceneId}`;
+        const group = grouped.get(key) ?? [];
+        group.push(proposal);
+        grouped.set(key, group);
+      }
+      for (const group of grouped.values()) {
+        const values = new Set(
+          group.map((proposal) => proposal.toValue?.trim().toLocaleLowerCase()),
+        );
+        if (
+          values.size > 1 &&
+          group.some(
+            (proposal) =>
+              proposal.sequenceKind !== StateProposalSequenceKind.TRANSITION,
+          )
+        ) {
+          throw new BadRequestException(
+            'Hay valores incompatibles en una escena; elegi cual mantener antes de aceptar la secuencia',
+          );
+        }
+      }
+
+      const positions = await this.getScenePositions(tx, projectId);
+      accepted.sort(
+        (left, right) =>
+          (positions.get(left.sceneId) ?? Number.MAX_SAFE_INTEGER) -
+            (positions.get(right.sceneId) ?? Number.MAX_SAFE_INTEGER) ||
+          (left.narrativeOrder ?? Number.MAX_SAFE_INTEGER) -
+            (right.narrativeOrder ?? Number.MAX_SAFE_INTEGER) ||
+          left.createdAt.getTime() - right.createdAt.getTime(),
+      );
+
+      const sourceChunkIds = accepted
+        .map((proposal) => proposal.sourceChunkId)
+        .filter((chunkId): chunkId is string => chunkId !== null);
+      const chunks = sourceChunkIds.length
+        ? await tx.chunk.findMany({
+            where: { id: { in: sourceChunkIds } },
+            select: {
+              id: true,
+              sceneId: true,
+              contentHash: true,
+              isDirty: true,
+            },
+          })
+        : [];
+      const chunksById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+      const staleProposalIds = accepted
+        .filter((proposal) => {
+          if (!proposal.sourceChunkId) {
+            return false;
+          }
+          const chunk = chunksById.get(proposal.sourceChunkId);
+          return (
+            !chunk ||
+            chunk.sceneId !== proposal.sceneId ||
+            chunk.isDirty ||
+            (proposal.sourceChunkHash !== null &&
+              chunk.contentHash !== proposal.sourceChunkHash)
+          );
+        })
+        .map((proposal) => proposal.id);
+      if (staleProposalIds.length > 0) {
+        await tx.entityStateProposal.updateMany({
+          where: { id: { in: staleProposalIds } },
+          data: { status: ProposalStatus.OBSOLETE },
+        });
+        return { states: [], staleEvidence: true as const };
+      }
+
+      const createdStates: EntityState[] = [];
+      await forEachSequentially(accepted, async (proposal) => {
+        if (proposal.conflictsWithLocked) {
+          throw new BadRequestException(
+            'La propuesta contradice un campo bloqueado por el autor',
+          );
+        }
+        const state = await this.applyStateChange(tx, {
+          entityId: proposal.entityId,
+          projectId,
+          attributeKey: proposal.attributeKey,
+          toValue: proposal.toValue ?? '',
+          validFromSceneId: proposal.sceneId,
+          validToSceneId: null,
+          ...(proposal.narrativeOrder === null
+            ? {}
+            : { narrativeOrder: proposal.narrativeOrder }),
+          source: 'ai_proposed',
+          positions,
+        });
+        await tx.entityStateProposal.update({
+          where: { id: proposal.id },
+          data: {
+            status: ProposalStatus.APPROVED,
+            reviewedById: userId,
+            reviewedAt: new Date(),
+            resolutionReason: 'accepted_by_author',
+          },
+        });
+        await this.enqueueTemporalAudit(
+          tx,
+          projectId,
+          proposal.sceneId,
+          positions,
+        );
+        createdStates.push(state);
+      });
+
+      const rejected = proposals.filter((item) =>
+        rejectedIds.includes(item.id),
+      );
+      await forEachSequentially(rejected, async (proposal) => {
+        await tx.entityStateProposal.update({
+          where: { id: proposal.id },
+          data: {
+            status: ProposalStatus.REJECTED,
+            reviewedById: userId,
+            reviewedAt: new Date(),
+            resolutionReason: 'rejected_by_author',
+          },
+        });
+      });
+      return { states: createdStates, staleEvidence: false as const };
+    });
+    if (result.staleEvidence) {
+      throw new BadRequestException(
+        'Algunas propuestas quedaron obsoletas porque cambió su evidencia',
+      );
+    }
+    return result.states.map((state) => this.toStateResponse(state));
   }
 
   async rejectProposal(userId: string, proposalId: string): Promise<void> {
+    const proposal = await this.prisma.entityStateProposal.findFirst({
+      where: {
+        id: proposalId,
+        project: { userId, deletedAt: null },
+      },
+      select: { projectId: true },
+    });
+    if (!proposal) {
+      throw new NotFoundException('Entity state proposal not found');
+    }
+    this.assertStateTrackingEnabled(
+      await this.isStateTrackingEnabled(proposal.projectId),
+    );
     const result = await this.prisma.entityStateProposal.updateMany({
       where: {
         id: proposalId,
@@ -302,6 +662,9 @@ export class TemporalStateService {
   }
 
   async createProposal(input: CreateStateProposalInput): Promise<void> {
+    if (!(await this.isStateTrackingEnabled(input.projectId))) {
+      return;
+    }
     const attributeKey = this.normalizeKey(input.attributeKey);
     const entity = await this.prisma.entity.findFirst({
       where: {
@@ -341,6 +704,12 @@ export class TemporalStateService {
           fromValue: input.fromValue,
           evidence,
           confidenceScore: input.confidenceScore,
+          ...(input.narrativeOrder === undefined
+            ? {}
+            : { narrativeOrder: input.narrativeOrder }),
+          ...(input.sequenceKind === undefined
+            ? {}
+            : { sequenceKind: input.sequenceKind }),
           conflictsWithLocked,
           ...(existing.status === ProposalStatus.OBSOLETE
             ? { status: ProposalStatus.PENDING }
@@ -355,6 +724,8 @@ export class TemporalStateService {
         fromValue: input.fromValue,
         evidence,
         confidenceScore: input.confidenceScore,
+        narrativeOrder: input.narrativeOrder ?? null,
+        sequenceKind: input.sequenceKind ?? null,
         conflictsWithLocked,
       },
     });
@@ -430,8 +801,9 @@ export class TemporalStateService {
     projectId: string,
     validFromSceneId: string | null | undefined,
     validToSceneId: string | null | undefined,
+    client: DatabaseClient = this.prisma,
   ): Promise<void> {
-    const positions = await this.getScenePositions(this.prisma, projectId);
+    const positions = await this.getScenePositions(client, projectId);
     const from = validFromSceneId ? positions.get(validFromSceneId) : undefined;
     const to = validToSceneId ? positions.get(validToSceneId) : undefined;
     if (
@@ -476,6 +848,7 @@ export class TemporalStateService {
       toValue: string;
       validFromSceneId: string;
       validToSceneId: string | null;
+      narrativeOrder?: number;
       source: string;
       positions: ReadonlyMap<string, number>;
     },
@@ -489,6 +862,7 @@ export class TemporalStateService {
       where: { entityId: input.entityId },
       select: {
         id: true,
+        narrativeOrder: true,
         attributeKey: true,
         toValue: true,
         validFromSceneId: true,
@@ -505,38 +879,58 @@ export class TemporalStateService {
     const active = matching.filter((state) =>
       this.isActiveAt(state, input.positions, fromPosition),
     );
-    const sameScene = active.find(
-      (state) => state.validFromSceneId === input.validFromSceneId,
-    );
-    if (this.isSingleValueKey(attributeKey) && sameScene) {
+    const sameScene = active
+      .filter((state) => state.validFromSceneId === input.validFromSceneId)
+      .sort(
+        (left, right) =>
+          (right.narrativeOrder ?? -1) - (left.narrativeOrder ?? -1),
+      )[0];
+    if (
+      this.isSingleValueKey(attributeKey) &&
+      sameScene &&
+      (input.narrativeOrder === undefined ||
+        input.narrativeOrder === sameScene.narrativeOrder)
+    ) {
       return tx.entityState.update({
         where: { id: sameScene.id },
         data: {
           toValue,
           validToSceneId: input.validToSceneId,
           source: input.source,
+          ...(input.narrativeOrder === undefined
+            ? {}
+            : { narrativeOrder: input.narrativeOrder }),
         },
       });
     }
     if (this.isSingleValueKey(attributeKey)) {
       await Promise.all(
-        active.map((state) =>
-          tx.entityState.update({
-            where: { id: state.id },
-            data: { validToSceneId: input.validFromSceneId },
-          }),
-        ),
+        active
+          .filter((state) => state.validFromSceneId !== input.validFromSceneId)
+          .map((state) =>
+            tx.entityState.update({
+              where: { id: state.id },
+              data: { validToSceneId: input.validFromSceneId },
+            }),
+          ),
       );
     }
     const predecessor = matching
       .filter((state) => {
         const position = input.positions.get(state.validFromSceneId);
-        return position !== undefined && position < fromPosition;
+        return (
+          position !== undefined &&
+          (position < fromPosition ||
+            (position === fromPosition &&
+              input.narrativeOrder !== undefined &&
+              (state.narrativeOrder ?? -1) < input.narrativeOrder))
+        );
       })
       .sort(
         (left, right) =>
           (input.positions.get(right.validFromSceneId) ?? -1) -
-          (input.positions.get(left.validFromSceneId) ?? -1),
+            (input.positions.get(left.validFromSceneId) ?? -1) ||
+          (right.narrativeOrder ?? -1) - (left.narrativeOrder ?? -1),
       )[0];
     return tx.entityState.create({
       data: {
@@ -549,6 +943,9 @@ export class TemporalStateService {
         epistemicType: EpistemicType.OBJECTIVE,
         confidenceScore: 1,
         source: input.source,
+        ...(input.narrativeOrder === undefined
+          ? {}
+          : { narrativeOrder: input.narrativeOrder }),
       },
     });
   }
@@ -569,6 +966,25 @@ export class TemporalStateService {
       throw new NotFoundException('Entity not found');
     }
     return entity;
+  }
+
+  private async isStateTrackingEnabled(
+    projectId: string,
+    client: DatabaseClient = this.prisma,
+  ): Promise<boolean> {
+    const settings = await client.projectKnowledgeReviewSettings.findUnique({
+      where: { projectId },
+      select: { stateTrackingEnabled: true },
+    });
+    return settings?.stateTrackingEnabled ?? false;
+  }
+
+  private assertStateTrackingEnabled(enabled: boolean): void {
+    if (!enabled) {
+      throw new ConflictException(
+        'El seguimiento de estados esta desactivado para este proyecto',
+      );
+    }
   }
 
   private async getScenePositions(
@@ -667,6 +1083,12 @@ export class TemporalStateService {
         continue;
       }
       for (const other of matching.slice(index + 1)) {
+        if (
+          current.validFromSceneId === other.validFromSceneId &&
+          (current.narrativeOrder ?? -1) !== (other.narrativeOrder ?? -1)
+        ) {
+          continue;
+        }
         const otherInterval = this.getStateInterval(other, positions);
         if (!otherInterval) {
           continue;
@@ -766,6 +1188,7 @@ export class TemporalStateService {
     toValue: string | null;
     validFromSceneId: string;
     validToSceneId: string | null;
+    narrativeOrder: number | null;
     source: string;
     createdAt: Date;
   }): EntityStateResponseDto {
@@ -776,6 +1199,10 @@ export class TemporalStateService {
     id: string;
     projectId: string;
     sceneId: string;
+    scene?: {
+      title: string | null;
+      chapter: { title: string; book: { title: string } };
+    };
     sourceChunkId: string | null;
     sourceChunkHash: string | null;
     entityId: string;
@@ -785,6 +1212,8 @@ export class TemporalStateService {
     evidence: Prisma.JsonValue;
     confidenceScore: Prisma.Decimal;
     conflictsWithLocked: boolean;
+    narrativeOrder: number | null;
+    sequenceKind: StateProposalSequenceKind | null;
     status: ProposalStatus;
     createdAt: Date;
     entity: { canonicalName: string };
@@ -793,6 +1222,9 @@ export class TemporalStateService {
       id: proposal.id,
       projectId: proposal.projectId,
       sceneId: proposal.sceneId,
+      sceneTitle: proposal.scene?.title ?? null,
+      chapterTitle: proposal.scene?.chapter.title ?? null,
+      bookTitle: proposal.scene?.chapter.book.title ?? null,
       sourceChunkId: proposal.sourceChunkId,
       sourceChunkHash: proposal.sourceChunkHash,
       entityId: proposal.entityId,
@@ -803,6 +1235,8 @@ export class TemporalStateService {
       evidence: this.normalizeEvidence(proposal.evidence),
       confidenceScore: Number(proposal.confidenceScore),
       conflictsWithLocked: proposal.conflictsWithLocked,
+      narrativeOrder: proposal.narrativeOrder,
+      sequenceKind: proposal.sequenceKind,
       status: proposal.status,
       createdAt: proposal.createdAt,
     };
@@ -823,11 +1257,7 @@ export class TemporalStateService {
   }
 
   private normalizeKey(value: string): string {
-    return value
-      .trim()
-      .toLowerCase()
-      .replace(/[\s-]+/g, '_')
-      .replace(/[^a-z0-9_]/g, '');
+    return normalizeEntityStateKey(value);
   }
 
   private isSingleValueKey(key: string): boolean {

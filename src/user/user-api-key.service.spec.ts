@@ -1,5 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { UserApiKeyService } from './user-api-key.service';
+import { DEFAULT_ENTITY_RECOGNITION_THRESHOLDS } from '../system/entity-extraction/entity-recognition-settings';
 
 describe('UserApiKeyService', () => {
   const encryptionKey = 'a'.repeat(64);
@@ -40,6 +41,7 @@ describe('UserApiKeyService', () => {
       keyPrefix: created.keyPrefix,
       updatedAt: created.updatedAt,
       autoAnalyzeOnAutosave: true,
+      entityExtractionThresholds: DEFAULT_ENTITY_RECOGNITION_THRESHOLDS,
     });
     expect(tx.userApiKey.updateMany).toHaveBeenCalledWith({
       where: { userId: 'user-id', provider: 'gemini', isActive: true },
@@ -95,6 +97,7 @@ describe('UserApiKeyService', () => {
       keyPrefix: 'AIzaSec...',
       updatedAt,
       autoAnalyzeOnAutosave: true,
+      entityExtractionThresholds: DEFAULT_ENTITY_RECOGNITION_THRESHOLDS,
     });
     expect(prisma.userApiKey.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -151,10 +154,48 @@ describe('UserApiKeyService', () => {
       keyPrefix: null,
       updatedAt: null,
       autoAnalyzeOnAutosave: false,
+      entityExtractionThresholds: DEFAULT_ENTITY_RECOGNITION_THRESHOLDS,
     });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'user-id' },
       data: { autoAnalyzeOnAutosave: false },
     });
+  });
+
+  it('stores recognition thresholds separately from the user profile', async () => {
+    const upsert = jest.fn().mockResolvedValue({});
+    const prisma = {
+      userEntityRecognitionSettings: {
+        upsert,
+        findUnique: jest.fn().mockResolvedValue({
+          thresholds: { CHARACTER: 0.4, OBJECT: 0.95 },
+        }),
+      },
+      userApiKey: { findFirst: jest.fn().mockResolvedValue(null) },
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ autoAnalyzeOnAutosave: true }),
+      },
+    };
+    const service = new UserApiKeyService(prisma as never, config as never);
+
+    await expect(
+      service.updateEntityRecognitionThresholds('user-id', {
+        CHARACTER: 0.4,
+        LOCATION: 0.65,
+        OBJECT: 0.95,
+        ORGANIZATION: 0.7,
+        EVENT: 0.75,
+        CONCEPT: 0.8,
+      }),
+    ).resolves.toMatchObject({
+      entityExtractionThresholds: {
+        CHARACTER: 0.4,
+        LOCATION: 0.65,
+        OBJECT: 0.95,
+      },
+    });
+    expect(upsert).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,6 +8,7 @@ import { UpdateSceneMetadataDto } from '../dto/scenes/update-scene-metadata.dto'
 import {
   SCENE_REPOSITORY,
   type SceneAnalysisRequestResult,
+  type SceneAnalysisExecutionResult,
   type CreateSceneData,
   type SceneContentUpdateResult,
   type SceneRecord,
@@ -108,6 +109,22 @@ export class SceneService {
     sceneId: string,
   ): Promise<SceneAnalysisRequestResult> {
     const result = await this.sceneRepository.requestAnalysisForUser(
+      userId,
+      sceneId,
+    );
+
+    if (!result) {
+      throw new NotFoundException('Scene not found');
+    }
+
+    return result;
+  }
+
+  async getAnalysisStatus(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisExecutionResult> {
+    const result = await this.sceneRepository.getAnalysisStatusForUser(
       userId,
       sceneId,
     );

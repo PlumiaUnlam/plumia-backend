@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ProposalStatus } from '@prisma/client';
 import type { TemporalKnowledgeSnapshotService } from '../../../src/audit/temporal-knowledge-snapshot.service';
 import { TemporalStateService } from '../../../src/knowledge/services/temporal-state.service';
@@ -23,12 +27,13 @@ interface StateRecord {
   toValue: string;
   validFromSceneId: string;
   validToSceneId: string | null;
+  narrativeOrder: number | null;
   source: string;
   createdAt: Date;
 }
 
 interface StateTransaction {
-  chunk: { findFirst: jest.Mock };
+  chunk: { findFirst: jest.Mock; findMany: jest.Mock };
   entity: { findUnique: jest.Mock; update: jest.Mock };
   entityState: {
     create: jest.Mock;
@@ -38,10 +43,13 @@ interface StateTransaction {
   };
   entityStateProposal: {
     findFirst: jest.Mock;
+    findMany: jest.Mock;
     update: jest.Mock;
+    updateMany: jest.Mock;
   };
   outbox: { createMany: jest.Mock };
   scene: { findMany: jest.Mock };
+  projectKnowledgeReviewSettings: { findUnique: jest.Mock };
 }
 
 interface TransactionRunner {
@@ -51,7 +59,7 @@ interface TransactionRunner {
 interface TemporalStateInternals {
   applyStateChange: (
     tx: StateTransaction,
-    input: StateChangeInput,
+    input: StateChangeInput & { narrativeOrder?: number },
   ) => Promise<unknown>;
   assertNoStandardOverlaps: (
     tx: StateTransaction,
@@ -98,6 +106,9 @@ describe('TemporalStateService', () => {
     },
     project: { findFirst: jest.fn() },
     scene: { findMany: jest.fn() },
+    projectKnowledgeReviewSettings: {
+      findUnique: jest.fn().mockResolvedValue({ stateTrackingEnabled: true }),
+    },
   };
   const snapshots = { getSnapshot: jest.fn() };
   const service = new TemporalStateService(
@@ -114,6 +125,10 @@ describe('TemporalStateService', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     jest.clearAllMocks();
+    prisma.project.findFirst.mockResolvedValue({ id: 'project-one' });
+    prisma.projectKnowledgeReviewSettings.findUnique.mockResolvedValue({
+      stateTrackingEnabled: true,
+    });
   });
 
   it('closes the active standard state when a new value begins', async () => {
@@ -169,6 +184,35 @@ describe('TemporalStateService', () => {
     });
   });
 
+  it('stores ordered transitions in the same scene without closing a state at its start', async () => {
+    const tx = stateTransaction([
+      state('state-first-step', 'location', 'port', 'scene-two', null, 0),
+    ]);
+    tx.entityState.create.mockResolvedValue({ id: 'state-second-step' });
+
+    await internals.applyStateChange(tx, {
+      ...stateChange({
+        attributeKey: 'location',
+        toValue: 'river',
+        validFromSceneId: 'scene-two',
+      }),
+      narrativeOrder: 1000,
+    });
+
+    expect(tx.entityState.update).not.toHaveBeenCalled();
+    expect(tx.entityState.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          fromValue: 'port',
+          toValue: 'river',
+          validFromSceneId: 'scene-two',
+          validToSceneId: null,
+          narrativeOrder: 1000,
+        }) as unknown,
+      }),
+    );
+  });
+
   it('allows custom states to coexist without closing a previous value', async () => {
     const tx = stateTransaction([
       state('state-sword', 'weapon', 'sword', 'scene-one', null),
@@ -217,6 +261,76 @@ describe('TemporalStateService', () => {
       where: { entityId: 'entity-one' },
       orderBy: { createdAt: 'asc' },
     });
+  });
+
+  it('lists all approved state history for an owned project in narrative order', async () => {
+    prisma.project.findFirst.mockResolvedValue({ id: 'project-one' });
+    const sceneRecord = (id: string, title: string) => ({
+      id,
+      title,
+      chapter: { title: 'Chapter', book: { title: 'Book' } },
+    });
+    prisma.entityState.findMany.mockResolvedValue([
+      {
+        ...stateRecord({
+          id: 'state-later',
+          validFromSceneId: 'scene-three',
+          narrativeOrder: 100,
+          toValue: 'Tower',
+        }),
+        entity: { canonicalName: 'Elena' },
+        validFromScene: sceneRecord('scene-three', 'The tower'),
+        validToScene: null,
+      },
+      {
+        ...stateRecord({
+          id: 'state-earlier',
+          validFromSceneId: 'scene-one',
+          narrativeOrder: 0,
+          toValue: 'Port',
+        }),
+        entity: { canonicalName: 'Elena' },
+        validFromScene: sceneRecord('scene-one', 'The harbor'),
+        validToScene: sceneRecord('scene-three', 'The tower'),
+      },
+    ]);
+    jest.spyOn(internals, 'getScenePositions').mockResolvedValue(positions);
+
+    const history = await service.listProjectStateHistory(
+      'user-one',
+      'project-one',
+    );
+
+    expect(prisma.project.findFirst).toHaveBeenCalledWith({
+      where: { id: 'project-one', userId: 'user-one', deletedAt: null },
+      select: { id: true },
+    });
+    expect(history.map((state) => state.id)).toEqual([
+      'state-earlier',
+      'state-later',
+    ]);
+    expect(history[0]).toMatchObject({
+      entityName: 'Elena',
+      fromValue: 'alive',
+      toValue: 'Port',
+      validFromScene: {
+        title: 'The harbor',
+        chapterTitle: 'Chapter',
+        bookTitle: 'Book',
+      },
+      validToScene: {
+        title: 'The tower',
+      },
+    });
+  });
+
+  it('does not expose state history for another author project', async () => {
+    prisma.project.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.listProjectStateHistory('user-one', 'project-one'),
+    ).rejects.toThrow(NotFoundException);
+    expect(prisma.entityState.findMany).not.toHaveBeenCalled();
   });
 
   it('creates a manual state, locks its key, and audits subsequent scenes', async () => {
@@ -277,7 +391,12 @@ describe('TemporalStateService', () => {
     ).resolves.toMatchObject({ toValue: 'alive' });
     expect(tx.entityState.update).toHaveBeenCalledWith({
       where: { id: 'state-one' },
-      data: { toValue: 'alive' },
+      data: {
+        attributeKey: 'status',
+        validFromSceneId: 'scene-two',
+        validToSceneId: null,
+        toValue: 'alive',
+      },
     });
 
     await service.removeState('user-one', 'state-one');
@@ -312,6 +431,113 @@ describe('TemporalStateService', () => {
         conflictsWithLocked: true,
       }) as unknown,
     });
+  });
+
+  it('accepts a state sequence in narrative order and validates current evidence', async () => {
+    const tx = stateTransaction([]);
+    setupTransaction(prisma, tx);
+    tx.entityStateProposal.findMany.mockResolvedValue([
+      stateProposalRecord({
+        id: 'proposal-later',
+        sceneId: 'scene-three',
+        sourceChunkId: 'chunk-later',
+        sourceChunkHash: 'hash-later',
+        narrativeOrder: 1200,
+      }),
+      stateProposalRecord({
+        id: 'proposal-earlier',
+        sceneId: 'scene-one',
+        sourceChunkId: 'chunk-earlier',
+        sourceChunkHash: 'hash-earlier',
+        narrativeOrder: 300,
+      }),
+    ]);
+    tx.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-later',
+        sceneId: 'scene-three',
+        contentHash: 'hash-later',
+        isDirty: false,
+      },
+      {
+        id: 'chunk-earlier',
+        sceneId: 'scene-one',
+        contentHash: 'hash-earlier',
+        isDirty: false,
+      },
+    ]);
+    jest.spyOn(internals, 'getScenePositions').mockResolvedValue(positions);
+    const apply = jest
+      .spyOn(internals, 'applyStateChange')
+      .mockResolvedValue(stateRecord());
+    jest.spyOn(internals, 'enqueueTemporalAudit').mockResolvedValue();
+
+    await service.acceptProposalSequence('user-one', 'project-one', {
+      acceptedProposalIds: ['proposal-later', 'proposal-earlier'],
+      rejectedProposalIds: [],
+    });
+
+    expect(apply.mock.calls.map(([, input]) => input.validFromSceneId)).toEqual(
+      ['scene-one', 'scene-three'],
+    );
+    expect(tx.entityStateProposal.update).toHaveBeenCalledTimes(2);
+    expect(tx.chunk.findMany).toHaveBeenCalled();
+  });
+
+  it('marks stale sequence evidence obsolete without applying any state', async () => {
+    const tx = stateTransaction([]);
+    setupTransaction(prisma, tx);
+    tx.entityStateProposal.findMany.mockResolvedValue([
+      stateProposalRecord({ sourceChunkHash: 'old-hash' }),
+    ]);
+    tx.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-one',
+        sceneId: 'scene-two',
+        contentHash: 'new-hash',
+        isDirty: false,
+      },
+    ]);
+    jest.spyOn(internals, 'getScenePositions').mockResolvedValue(positions);
+    const apply = jest.spyOn(internals, 'applyStateChange');
+
+    await expect(
+      service.acceptProposalSequence('user-one', 'project-one', {
+        acceptedProposalIds: ['proposal-one'],
+        rejectedProposalIds: [],
+      }),
+    ).rejects.toThrow('Algunas propuestas quedaron obsoletas');
+
+    expect(tx.entityStateProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['proposal-one'] } },
+      data: { status: ProposalStatus.OBSOLETE },
+    });
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('blocks incompatible same-scene values unless they are explicit transitions', async () => {
+    const tx = stateTransaction([]);
+    setupTransaction(prisma, tx);
+    tx.entityStateProposal.findMany.mockResolvedValue([
+      stateProposalRecord({
+        id: 'proposal-one',
+        toValue: 'Puerto',
+        sequenceKind: 'CONTRADICTION',
+      }),
+      stateProposalRecord({
+        id: 'proposal-two',
+        toValue: 'Torre',
+        sequenceKind: 'CONTRADICTION',
+      }),
+    ]);
+    jest.spyOn(internals, 'getScenePositions').mockResolvedValue(positions);
+
+    await expect(
+      service.acceptProposalSequence('user-one', 'project-one', {
+        acceptedProposalIds: ['proposal-one', 'proposal-two'],
+        rejectedProposalIds: [],
+      }),
+    ).rejects.toThrow('Hay valores incompatibles en una escena');
   });
 
   it('updates a previously obsolete proposal and preserves rejected evidence', async () => {
@@ -375,6 +601,9 @@ describe('TemporalStateService', () => {
         createdAt,
         confidenceScore: { toString: () => '0.85' },
         entity: { canonicalName: 'Elena' },
+        sourceChunkId: 'chunk-one',
+        sourceChunkHash: 'hash-one',
+        sourceChunk: { contentHash: 'hash-one', isDirty: false },
       },
     ]);
 
@@ -387,6 +616,31 @@ describe('TemporalStateService', () => {
         confidenceScore: 0.85,
       }) as unknown,
     ]);
+  });
+
+  it('hides state proposals and blocks manual state writes when tracking is disabled', async () => {
+    prisma.projectKnowledgeReviewSettings.findUnique.mockResolvedValue({
+      stateTrackingEnabled: false,
+    });
+    prisma.entity.findFirst.mockResolvedValue({
+      id: 'entity-one',
+      projectId: 'project-one',
+    });
+    const tx = stateTransaction([]);
+    setupTransaction(prisma, tx);
+
+    await expect(
+      service.listPendingProposals('user-one', 'project-one'),
+    ).resolves.toEqual([]);
+    expect(prisma.entityStateProposal.findMany).not.toHaveBeenCalled();
+    await expect(
+      service.createState('user-one', 'entity-one', {
+        attributeKey: 'location',
+        toValue: 'Tower',
+        validFromSceneId: 'scene-one',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('accepts a proposal with a current source chunk and schedules an audit', async () => {
@@ -448,11 +702,14 @@ describe('TemporalStateService', () => {
   });
 
   it('rejects missing proposals and records author rejections', async () => {
-    prisma.entityStateProposal.updateMany.mockResolvedValueOnce({ count: 0 });
+    prisma.entityStateProposal.findFirst.mockResolvedValueOnce(null);
     await expect(service.rejectProposal('user-one', 'missing')).rejects.toThrow(
       NotFoundException,
     );
 
+    prisma.entityStateProposal.findFirst.mockResolvedValueOnce({
+      projectId: 'project-one',
+    });
     prisma.entityStateProposal.updateMany.mockResolvedValueOnce({ count: 1 });
     await expect(
       service.rejectProposal('user-one', 'proposal-one'),
@@ -559,6 +816,14 @@ describe('TemporalStateService', () => {
     ).rejects.toThrow(BadRequestException);
 
     tx.entityState.findMany.mockResolvedValue([
+      state('one', 'location', 'port', 'scene-two', null, 0),
+      state('two', 'location', 'river', 'scene-two', null, 1000),
+    ]);
+    await expect(
+      internals.assertNoStandardOverlaps(tx, 'entity-one', positions),
+    ).resolves.toBeUndefined();
+
+    tx.entityState.findMany.mockResolvedValue([
       state('one', 'weapon', 'sword', 'scene-one', null),
       state('two', 'weapon', 'staff', 'scene-two', null),
     ]);
@@ -596,7 +861,7 @@ function setupTransaction(
 
 function stateTransaction(states: unknown[]): StateTransaction {
   return {
-    chunk: { findFirst: jest.fn() },
+    chunk: { findFirst: jest.fn(), findMany: jest.fn() },
     entity: { findUnique: jest.fn(), update: jest.fn() },
     entityState: {
       findMany: jest.fn().mockResolvedValue(states),
@@ -604,9 +869,37 @@ function stateTransaction(states: unknown[]): StateTransaction {
       create: jest.fn(),
       delete: jest.fn(),
     },
-    entityStateProposal: { findFirst: jest.fn(), update: jest.fn() },
+    entityStateProposal: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+    },
     outbox: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     scene: { findMany: jest.fn() },
+    projectKnowledgeReviewSettings: {
+      findUnique: jest.fn().mockResolvedValue({ stateTrackingEnabled: true }),
+    },
+  };
+}
+
+function stateProposalRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'proposal-one',
+    projectId: 'project-one',
+    sceneId: 'scene-two',
+    entityId: 'entity-one',
+    attributeKey: 'location',
+    fromValue: 'Port',
+    toValue: 'Tower',
+    sourceChunkId: 'chunk-one',
+    sourceChunkHash: 'hash-one',
+    conflictsWithLocked: false,
+    narrativeOrder: 700,
+    sequenceKind: 'TRANSITION',
+    status: ProposalStatus.PENDING,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    ...overrides,
   };
 }
 
@@ -616,11 +909,24 @@ function state(
   toValue: string,
   validFromSceneId: string,
   validToSceneId: string | null,
+  narrativeOrder: number | null = null,
 ): Pick<
   StateRecord,
-  'id' | 'attributeKey' | 'toValue' | 'validFromSceneId' | 'validToSceneId'
+  | 'id'
+  | 'attributeKey'
+  | 'toValue'
+  | 'validFromSceneId'
+  | 'validToSceneId'
+  | 'narrativeOrder'
 > {
-  return { id, attributeKey, toValue, validFromSceneId, validToSceneId };
+  return {
+    id,
+    attributeKey,
+    toValue,
+    validFromSceneId,
+    validToSceneId,
+    narrativeOrder,
+  };
 }
 
 function stateRecord(overrides: Partial<StateRecord> = {}): StateRecord {
@@ -632,6 +938,7 @@ function stateRecord(overrides: Partial<StateRecord> = {}): StateRecord {
     toValue: 'dead',
     validFromSceneId: 'scene-two',
     validToSceneId: null,
+    narrativeOrder: null,
     source: 'author_manual',
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,

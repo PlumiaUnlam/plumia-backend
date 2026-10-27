@@ -30,8 +30,11 @@ interface PipelinePrismaMock {
     findMany: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
+    updateMany: jest.Mock;
   };
   relationship: { findFirst: jest.Mock };
+  userEntityRecognitionSettings: { findUnique: jest.Mock };
+  projectEntityRecognitionSettings: { findUnique: jest.Mock };
 }
 
 interface PipelineResolutionMock {
@@ -154,7 +157,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
     );
   });
 
-  it('ignores an inconsistency whose entity cannot be resolved', async () => {
+  it('ignores an inconsistency without an entity name', async () => {
     await service.processInconsistencyCandidates({
       projectId: 'project-1',
       sceneId: 'scene-1',
@@ -167,7 +170,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
       },
       inconsistencies: [
         {
-          entityName: 'Desconocida',
+          entityName: '',
           ruleCode: 'ENTITY_CONTRADICTION',
           field: 'estado',
           currentValue: 'Muerta.',
@@ -182,6 +185,42 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
     });
 
     expect(auditService.createEntityContinuityAlert).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit inconsistency when the entity is not confirmed yet', async () => {
+    await service.processInconsistencyCandidates({
+      projectId: 'project-1',
+      sceneId: 'scene-1',
+      chunk: {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Iris llevaba los ojos verdes.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+      inconsistencies: [
+        {
+          entityName: 'Iris',
+          ruleCode: 'ENTITY_CONTRADICTION',
+          field: 'ojos',
+          currentValue: 'Azules',
+          observedValue: 'Verdes',
+          explanation: 'El texto presenta un color incompatible.',
+          severity: 'MEDIUM',
+          confidenceScore: 0.86,
+          evidence: ['Iris llevaba los ojos verdes.'],
+        },
+      ],
+      confirmedEntities: [],
+    });
+
+    expect(auditService.createEntityContinuityAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: null,
+        entityName: 'Iris',
+        field: 'ojos',
+      }),
+    );
   });
 });
 
@@ -229,8 +268,15 @@ describe('EntityExtractionPipelineService outbox processing', () => {
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
       relationship: { findFirst: jest.fn() },
+      userEntityRecognitionSettings: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      projectEntityRecognitionSettings: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     client = {
       extractEntities: jest.fn().mockResolvedValue({
@@ -309,9 +355,12 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     expect(prisma.scene.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'scene-1', deletedAt: null } }),
     );
-    expect(prisma.outbox.update).toHaveBeenCalledWith({
+    expect(prisma.outbox.update).toHaveBeenLastCalledWith({
       where: { id: 'event-1' },
-      data: { processedAt: expect.any(Date) },
+      data: {
+        processedAt: expect.any(Date),
+        payload: expect.objectContaining({ analysisStatus: 'SUCCEEDED' }),
+      },
     });
   });
 
@@ -374,6 +423,117 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       where: { id: 'chunk-1' },
       data: { isDirty: false },
     });
+    expect(client.extractEntities).not.toHaveBeenCalled();
+  });
+
+  it('obsoletes relationships linked to rejected entity proposals', async () => {
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([]);
+    prisma.relationshipProposal.findMany.mockResolvedValue([
+      {
+        id: 'relationship-proposal-1',
+        sourceChunkId: null,
+        sourceChunkHash: null,
+        sourceEntityId: null,
+        targetEntityId: null,
+        sourceEntityProposalId: 'entity-proposal-1',
+        targetEntityProposalId: null,
+      },
+    ]);
+    prisma.entityProposal.findMany
+      .mockResolvedValueOnce([
+        { id: 'entity-proposal-1', status: ProposalStatus.REJECTED },
+      ])
+      .mockResolvedValueOnce([]);
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 0,
+      userId: 'user-1',
+    });
+
+    expect(prisma.relationshipProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['relationship-proposal-1'] } },
+      data: { status: ProposalStatus.OBSOLETE },
+    });
+  });
+
+  it('obsoletes a relationship when its deleted source chunk is identified by hash', async () => {
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'remaining-chunk',
+        chunkIndex: 0,
+        content: 'The scene still has other text.',
+        contentHash: 'remaining-hash',
+        isDirty: false,
+      },
+    ]);
+    prisma.relationshipProposal.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'relationship-proposal-1',
+          sourceChunkId: null,
+          sourceChunkHash: 'deleted-chunk-hash',
+          sourceEntityId: 'entity-a',
+          targetEntityId: 'entity-b',
+          sourceEntityProposalId: null,
+          targetEntityProposalId: null,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 5,
+      userId: 'user-1',
+    });
+
+    expect(prisma.relationshipProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['relationship-proposal-1'] } },
+      data: { status: ProposalStatus.OBSOLETE },
+    });
+    expect(client.extractEntities).not.toHaveBeenCalled();
+  });
+
+  it('keeps a relationship when its source hash still exists in an active chunk', async () => {
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'remaining-chunk',
+        chunkIndex: 0,
+        content: 'Equivalent source evidence remains.',
+        contentHash: 'shared-hash',
+        isDirty: false,
+      },
+    ]);
+    prisma.relationshipProposal.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'relationship-proposal-1',
+          sourceChunkId: null,
+          sourceChunkHash: 'shared-hash',
+          sourceEntityId: 'entity-a',
+          targetEntityId: 'entity-b',
+          sourceEntityProposalId: null,
+          targetEntityProposalId: null,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 5,
+      userId: 'user-1',
+    });
+
+    expect(prisma.relationshipProposal.updateMany).not.toHaveBeenCalled();
     expect(client.extractEntities).not.toHaveBeenCalled();
   });
 
@@ -534,7 +694,12 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     );
 
     expect(prisma.chunk.update).not.toHaveBeenCalled();
-    expect(prisma.outbox.update).not.toHaveBeenCalled();
+    expect(prisma.outbox.update).toHaveBeenCalledWith({
+      where: { id: 'event-1' },
+      data: {
+        payload: expect.objectContaining({ analysisStatus: 'RUNNING' }),
+      },
+    });
   });
 
   it('creates only resolvable relationship proposals and clamps invalid intensity', async () => {
@@ -717,6 +882,166 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       confirmedEntityId: 'entity-1',
       proposalId: null,
       shouldCreateProposal: false,
+      candidate,
+    });
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 4,
+      userId: 'user-1',
+    });
+
+    expect(prisma.entityProposal.create).not.toHaveBeenCalled();
+    expect(prisma.chunk.update).toHaveBeenCalledWith({
+      where: { id: 'chunk-1' },
+      data: { isDirty: false },
+    });
+  });
+
+  it('skips a new common object below the configured relevance threshold', async () => {
+    const candidate: ExtractionCandidate = {
+      canonicalName: 'Una escalera',
+      aliases: [],
+      type: EntityType.OBJECT,
+      description: 'Una escalera de madera.',
+      attributes: {},
+      imageUrl: null,
+      confidenceScore: 0.95,
+      narrativeRelevance: 0.2,
+      evidence: ['Sube por una escalera.'],
+    };
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Sube por una escalera.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+    ]);
+    client.extractEntities.mockResolvedValue({
+      entities: [candidate],
+      relationships: [],
+      inconsistencies: [],
+    });
+    resolution.resolveCandidate.mockResolvedValue({
+      confirmedEntityId: null,
+      proposalId: null,
+      shouldCreateProposal: true,
+      candidate,
+    });
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 4,
+      userId: 'user-1',
+    });
+
+    expect(prisma.entityProposal.create).not.toHaveBeenCalled();
+    expect(prisma.chunk.update).toHaveBeenCalledWith({
+      where: { id: 'chunk-1' },
+      data: { isDirty: false },
+    });
+  });
+
+  it('keeps a low-relevance object when its exact name is in the project interest list', async () => {
+    const candidate: ExtractionCandidate = {
+      canonicalName: 'Mapa del Santuario',
+      aliases: [],
+      type: EntityType.OBJECT,
+      description: 'Un mapa antiguo.',
+      attributes: {},
+      imageUrl: null,
+      confidenceScore: 0.4,
+      narrativeRelevance: 0.1,
+      evidence: ['Mira el Mapa del Santuario.'],
+    };
+    prisma.projectEntityRecognitionSettings.findUnique.mockResolvedValue({
+      importantEntityNames: ['MAPA DEL SANTUARIO'],
+    });
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Mira el Mapa del Santuario.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+    ]);
+    client.extractEntities.mockResolvedValue({
+      entities: [candidate],
+      relationships: [],
+      inconsistencies: [],
+    });
+    resolution.resolveCandidate.mockResolvedValue({
+      confirmedEntityId: null,
+      proposalId: null,
+      shouldCreateProposal: true,
+      candidate,
+    });
+    prisma.entityProposal.create.mockResolvedValue({
+      id: 'proposal-1',
+      sceneId: 'scene-1',
+      entityId: null,
+      proposedData: candidate,
+      confidenceScore: 0.4,
+      status: ProposalStatus.PENDING,
+      sourceChunkId: 'chunk-1',
+      sourceChunkHash: 'chunk-hash',
+    });
+
+    await service.processSceneChanged({
+      sceneId: 'scene-1',
+      chapterId: 'chapter-1',
+      contentHash: 'hash',
+      wordCount: 4,
+      userId: 'user-1',
+    });
+
+    expect(prisma.entityProposal.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a new entity included in the project ignore list', async () => {
+    const candidate: ExtractionCandidate = {
+      canonicalName: 'Una escalera',
+      aliases: [],
+      type: EntityType.OBJECT,
+      description: 'Una escalera de madera.',
+      attributes: {},
+      imageUrl: null,
+      confidenceScore: 0.99,
+      narrativeRelevance: 0.99,
+      evidence: ['Sube por una escalera.'],
+    };
+    prisma.projectEntityRecognitionSettings.findUnique.mockResolvedValue({
+      importantEntityNames: [],
+      ignoredEntityNames: ['UNA ESCALERA'],
+    });
+    prisma.scene.findFirst.mockResolvedValue(scene);
+    prisma.chunk.findMany.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Sube por una escalera.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+    ]);
+    client.extractEntities.mockResolvedValue({
+      entities: [candidate],
+      relationships: [],
+      inconsistencies: [],
+    });
+    resolution.resolveCandidate.mockResolvedValue({
+      confirmedEntityId: null,
+      proposalId: null,
+      shouldCreateProposal: true,
       candidate,
     });
 

@@ -1,7 +1,12 @@
 /* eslint-disable max-lines */
 
 import { Injectable } from '@nestjs/common';
-import { Prisma, type Scene } from '@prisma/client';
+import {
+  AuditStatus,
+  Prisma,
+  ProposalStatus,
+  type Scene,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createContentHash } from '../domain/json-content';
 import { planSceneChunks } from '../domain/scene-chunking';
@@ -10,6 +15,7 @@ import {
   CreateSceneData,
   SceneContentUpdateResult,
   SceneAnalysisRequestResult,
+  SceneAnalysisExecutionResult,
   SceneRecord,
   SceneRepository,
   SceneVersionContentUpdateResult,
@@ -295,6 +301,10 @@ export class PrismaSceneRepository implements SceneRepository {
         const pendingChunks = await tx.chunk.count({
           where: { sceneId: scene.id, isDirty: true },
         });
+        const hasStaleKnowledgeEvidence = await this.hasStaleKnowledgeEvidence(
+          tx,
+          scene.id,
+        );
 
         if (
           pendingEvent &&
@@ -303,7 +313,7 @@ export class PrismaSceneRepository implements SceneRepository {
           return { status: 'ALREADY_QUEUED', pendingChunks };
         }
 
-        if (pendingChunks === 0) {
+        if (pendingChunks === 0 && !hasStaleKnowledgeEvidence) {
           return { status: 'NO_CHANGES', pendingChunks: 0 };
         }
 
@@ -321,6 +331,68 @@ export class PrismaSceneRepository implements SceneRepository {
     } catch (error: unknown) {
       return translatePrismaConflict(error);
     }
+  }
+
+  async getAnalysisStatusForUser(
+    userId: string,
+    sceneId: string,
+  ): Promise<SceneAnalysisExecutionResult | null> {
+    const scene = await this.prisma.scene.findFirst({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { project: { userId } } },
+      },
+      select: { id: true },
+    });
+    if (!scene) {
+      return null;
+    }
+
+    const event = await this.prisma.outbox.findFirst({
+      where: {
+        aggregateType: 'Scene',
+        aggregateId: sceneId,
+        eventType: 'scene_changed',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { payload: true, processedAt: true },
+    });
+    if (!event) {
+      return { status: 'NO_CHANGES', error: null };
+    }
+
+    const payload =
+      event.payload &&
+      typeof event.payload === 'object' &&
+      !Array.isArray(event.payload)
+        ? (event.payload as Record<string, unknown>)
+        : {};
+    const status = payload['analysisStatus'];
+    const validStatuses = new Set([
+      'QUEUED',
+      'RUNNING',
+      'SUCCEEDED',
+      'FAILED',
+      'NO_CHANGES',
+    ]);
+    let normalizedStatus: SceneAnalysisExecutionResult['status'];
+    if (validStatuses.has(String(status))) {
+      normalizedStatus = status as SceneAnalysisExecutionResult['status'];
+    } else if (event.processedAt) {
+      normalizedStatus = 'SUCCEEDED';
+    } else {
+      normalizedStatus = 'QUEUED';
+    }
+
+    return {
+      status: normalizedStatus,
+      error:
+        normalizedStatus === 'FAILED' &&
+        typeof payload['analysisError'] === 'string'
+          ? payload['analysisError']
+          : null,
+    };
   }
 
   async listVersionsForUser(
@@ -702,6 +774,7 @@ export class PrismaSceneRepository implements SceneRepository {
               wordCount: scene.wordCount,
               userId,
               restoredFromVersionId: version.id,
+              analysisStatus: 'QUEUED',
             },
             createdAt: new Date(),
           },
@@ -821,6 +894,7 @@ export class PrismaSceneRepository implements SceneRepository {
           wordCount: data.wordCount,
           userId: data.userId,
           trigger: data.trigger,
+          analysisStatus: 'QUEUED',
         },
         createdAt: new Date(),
       },
@@ -882,12 +956,6 @@ export class PrismaSceneRepository implements SceneRepository {
     content: Record<string, unknown> | null,
     options: { markDirty: boolean },
   ): Promise<void> {
-    if (content === null) {
-      await tx.chunk.deleteMany({ where: { sceneId } });
-      return;
-    }
-
-    const plans = planSceneChunks(content);
     const existing = await tx.chunk.findMany({
       where: { sceneId },
       orderBy: { chunkIndex: 'asc' },
@@ -900,18 +968,37 @@ export class PrismaSceneRepository implements SceneRepository {
         isDirty: true,
       },
     });
+    const changedChunkIds = new Set<string>();
+
+    if (content === null) {
+      for (const chunk of existing) {
+        changedChunkIds.add(chunk.id);
+      }
+      await tx.chunk.deleteMany({ where: { sceneId } });
+      await this.obsoleteAlertsForChangedChunks(tx, projectId, changedChunkIds);
+      await this.invalidateContinuityCheckpointsFromScene(
+        tx,
+        projectId,
+        sceneId,
+      );
+      return;
+    }
+
+    const plans = planSceneChunks(content);
 
     const existingByIndex = new Map<number, ChunkRow>(
       existing.map((chunk) => [chunk.chunkIndex, chunk] as const),
     );
     const seenIndices = new Set<number>();
     const writes: Promise<unknown>[] = [];
+    let contentChanged = false;
 
     for (const plan of plans) {
       seenIndices.add(plan.chunkIndex);
       const current = existingByIndex.get(plan.chunkIndex);
 
       if (!current) {
+        contentChanged = true;
         writes.push(
           tx.chunk.create({
             data: {
@@ -932,6 +1019,8 @@ export class PrismaSceneRepository implements SceneRepository {
         current.contentHash !== plan.contentHash ||
         current.content !== plan.content;
       if (hasChanged) {
+        contentChanged = true;
+        changedChunkIds.add(current.id);
         writes.push(
           tx.chunk.update({
             where: { id: current.id },
@@ -953,10 +1042,206 @@ export class PrismaSceneRepository implements SceneRepository {
       .map((chunk) => chunk.id);
 
     if (staleChunkIds.length > 0) {
+      contentChanged = true;
+      staleChunkIds.forEach((chunkId) => changedChunkIds.add(chunkId));
       await tx.chunk.deleteMany({
         where: { id: { in: staleChunkIds } },
       });
     }
+
+    await this.obsoleteAlertsForChangedChunks(tx, projectId, changedChunkIds);
+    if (contentChanged) {
+      await this.invalidateContinuityCheckpointsFromScene(
+        tx,
+        projectId,
+        sceneId,
+      );
+    }
+  }
+
+  private async obsoleteAlertsForChangedChunks(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    changedChunkIds: ReadonlySet<string>,
+  ): Promise<void> {
+    if (changedChunkIds.size === 0) {
+      return;
+    }
+
+    const alerts = await tx.auditAlert.findMany({
+      where: { projectId, status: AuditStatus.ACTIVE },
+      select: {
+        id: true,
+        sourceChunkId: true,
+        sourceConflict: true,
+      },
+    });
+    const staleAlertIds = alerts
+      .filter((alert) => {
+        if (
+          alert.sourceChunkId !== null &&
+          changedChunkIds.has(alert.sourceChunkId)
+        ) {
+          return true;
+        }
+
+        if (
+          !alert.sourceConflict ||
+          typeof alert.sourceConflict !== 'object' ||
+          Array.isArray(alert.sourceConflict)
+        ) {
+          return false;
+        }
+
+        const conflict = alert.sourceConflict as Record<string, unknown>;
+        if (
+          typeof conflict['sourceChunkId'] === 'string' &&
+          changedChunkIds.has(conflict['sourceChunkId'])
+        ) {
+          return true;
+        }
+
+        return (
+          Array.isArray(conflict['supportingChunks']) &&
+          conflict['supportingChunks'].some(
+            (source) =>
+              source !== null &&
+              typeof source === 'object' &&
+              !Array.isArray(source) &&
+              typeof (source as Record<string, unknown>)['chunkId'] ===
+                'string' &&
+              changedChunkIds.has(
+                (source as Record<string, unknown>)['chunkId'] as string,
+              ),
+          )
+        );
+      })
+      .map((alert) => alert.id);
+
+    if (staleAlertIds.length > 0) {
+      await tx.auditAlert.updateMany({
+        where: {
+          id: { in: staleAlertIds },
+          status: AuditStatus.ACTIVE,
+        },
+        data: { status: AuditStatus.OBSOLETE },
+      });
+    }
+  }
+
+  private async invalidateContinuityCheckpointsFromScene(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    sceneId: string,
+  ): Promise<void> {
+    const scenes = await tx.scene.findMany({
+      where: {
+        deletedAt: null,
+        chapter: { deletedAt: null, book: { projectId, deletedAt: null } },
+      },
+      select: {
+        id: true,
+        order: true,
+        sortKey: true,
+        chapter: {
+          select: {
+            sortKey: true,
+            book: { select: { sortKey: true } },
+          },
+        },
+      },
+    });
+    scenes.sort(
+      (left, right) =>
+        left.chapter.book.sortKey.localeCompare(right.chapter.book.sortKey) ||
+        left.chapter.sortKey.localeCompare(right.chapter.sortKey) ||
+        left.order - right.order ||
+        left.sortKey.localeCompare(right.sortKey) ||
+        left.id.localeCompare(right.id),
+    );
+    const start = scenes.findIndex((scene) => scene.id === sceneId);
+    if (start < 0) {
+      return;
+    }
+    const affectedSceneIds = scenes.slice(start).map((scene) => scene.id);
+    await tx.projectContinuityCheckpoint.updateMany({
+      where: { projectId, sceneId: { in: affectedSceneIds }, isValid: true },
+      data: { isValid: false },
+    });
+  }
+
+  private async hasStaleKnowledgeEvidence(
+    tx: Prisma.TransactionClient,
+    sceneId: string,
+  ): Promise<boolean> {
+    const [chunks, entityProposals, relationshipProposals] = await Promise.all([
+      tx.chunk.findMany({
+        where: { sceneId },
+        select: { id: true, contentHash: true },
+      }),
+      tx.entityProposal.findMany({
+        where: {
+          sceneId,
+          status: ProposalStatus.PENDING,
+        },
+        select: {
+          sourceChunkId: true,
+          sourceChunkHash: true,
+          proposedData: true,
+        },
+      }),
+      tx.relationshipProposal.findMany({
+        where: {
+          sceneId,
+          status: ProposalStatus.PENDING,
+        },
+        select: { sourceChunkId: true, sourceChunkHash: true },
+      }),
+    ]);
+    const chunksById = new Map(
+      chunks.map((chunk) => [chunk.id, chunk.contentHash] as const),
+    );
+    const hasStaleEvidence = (
+      sourceChunkId: string | null,
+      sourceChunkHash: string | null,
+    ): boolean => {
+      if (sourceChunkId !== null) {
+        const currentHash = chunksById.get(sourceChunkId);
+        return (
+          currentHash === undefined ||
+          (sourceChunkHash !== null && currentHash !== sourceChunkHash)
+        );
+      }
+      return (
+        sourceChunkHash !== null &&
+        ![...chunksById.values()].includes(sourceChunkHash)
+      );
+    };
+    const entityEvidenceIsStale = entityProposals.some((proposal) => {
+      const data =
+        proposal.proposedData !== null &&
+        typeof proposal.proposedData === 'object' &&
+        !Array.isArray(proposal.proposedData)
+          ? (proposal.proposedData as Record<string, unknown>)
+          : {};
+      const sourceChunkId =
+        proposal.sourceChunkId ??
+        (typeof data['sourceChunkId'] === 'string'
+          ? data['sourceChunkId']
+          : null);
+      const sourceChunkHash =
+        proposal.sourceChunkHash ??
+        (typeof data['sourceChunkHash'] === 'string'
+          ? data['sourceChunkHash']
+          : null);
+      return hasStaleEvidence(sourceChunkId, sourceChunkHash);
+    });
+    return (
+      entityEvidenceIsStale ||
+      relationshipProposals.some((proposal) =>
+        hasStaleEvidence(proposal.sourceChunkId, proposal.sourceChunkHash),
+      )
+    );
   }
 
   private async getProjectIdForScene(

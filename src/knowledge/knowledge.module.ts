@@ -11,6 +11,7 @@ import { TimelineController } from './controllers/timeline.controller';
 import { EntityStatesController } from './controllers/entity-states.controller';
 import { EntityStateProposalsController } from './controllers/entity-state-proposals.controller';
 import { TemporalViewController } from './controllers/temporal-view.controller';
+import { EntityRecognitionSettingsController } from './controllers/entity-recognition-settings.controller';
 import { KnowledgeService } from './knowledge.service';
 import { EntityProposalService } from './services/entity-proposal.service';
 import { RelationshipProposalService } from './services/relationship-proposal.service';
@@ -19,6 +20,7 @@ import { ENTITY_SEARCH } from './ports/entity-search.port';
 import { RELATIONSHIP_REPOSITORY } from './ports/relationship-repository.port';
 import { TIMELINE_EVENT_REPOSITORY } from './ports/timeline-event-repository.port';
 import { TemporalStateService } from './services/temporal-state.service';
+import { EntityRecognitionSettingsService } from './services/entity-recognition-settings.service';
 import { AuditModule } from '../audit/audit.module';
 
 @Module({
@@ -32,12 +34,14 @@ import { AuditModule } from '../audit/audit.module';
     EntityStatesController,
     EntityStateProposalsController,
     TemporalViewController,
+    EntityRecognitionSettingsController,
   ],
   providers: [
     KnowledgeService,
     EntityProposalService,
     RelationshipProposalService,
     TemporalStateService,
+    EntityRecognitionSettingsService,
     { provide: ENTITY_SEARCH, useClass: PgEntitySearch },
     { provide: ENTITY_REPOSITORY, useClass: PrismaEntityRepository },
     {
@@ -49,6 +53,10 @@ import { AuditModule } from '../audit/audit.module';
       useClass: PrismaTimelineEventRepository,
     },
   ],
-  exports: [KnowledgeService, TemporalStateService],
+  exports: [
+    KnowledgeService,
+    TemporalStateService,
+    RelationshipProposalService,
+  ],
 })
 export class KnowledgeModule {}

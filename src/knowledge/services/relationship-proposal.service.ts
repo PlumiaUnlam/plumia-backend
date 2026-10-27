@@ -65,6 +65,48 @@ export class RelationshipProposalService {
         projectId,
         status: ProposalStatus.PENDING,
         project: { userId, deletedAt: null },
+        AND: [
+          {
+            OR: [
+              { sourceEntityId: { not: null } },
+              {
+                AND: [
+                  { sourceEntityProposalId: { not: null } },
+                  {
+                    sourceEntityProposal: {
+                      status: {
+                        notIn: [
+                          ProposalStatus.REJECTED,
+                          ProposalStatus.OBSOLETE,
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            OR: [
+              { targetEntityId: { not: null } },
+              {
+                AND: [
+                  { targetEntityProposalId: { not: null } },
+                  {
+                    targetEntityProposal: {
+                      status: {
+                        notIn: [
+                          ProposalStatus.REJECTED,
+                          ProposalStatus.OBSOLETE,
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
       },
       include: {
         sourceEntity: { select: { id: true, canonicalName: true } },
@@ -111,6 +153,8 @@ export class RelationshipProposalService {
               description: true,
               relationType: true,
               confidenceScore: true,
+              validFromSceneId: true,
+              validToSceneId: true,
             },
           },
         },
@@ -142,6 +186,7 @@ export class RelationshipProposalService {
         override?.intensity === undefined
           ? proposal.intensity
           : new Prisma.Decimal(override.intensity / 5);
+      const effectiveSceneId = override?.validFromSceneId ?? proposal.sceneId;
       if (!sourceEntityId || !targetEntityId) {
         throw new BadRequestException(
           'Las entidades relacionadas deben estar aceptadas antes de aprobar la relacion',
@@ -166,18 +211,58 @@ export class RelationshipProposalService {
         );
       }
 
+      await this.temporalStates.validateRelationshipWindow(
+        proposal.projectId,
+        effectiveSceneId,
+        override?.validToSceneId,
+        tx,
+      );
+      if (proposal.relationship?.validFromSceneId) {
+        await this.temporalStates.validateRelationshipWindow(
+          proposal.projectId,
+          proposal.relationship.validFromSceneId,
+          effectiveSceneId,
+          tx,
+        );
+      }
+      if (proposal.relationship?.validToSceneId) {
+        await this.temporalStates.validateRelationshipWindow(
+          proposal.projectId,
+          effectiveSceneId,
+          proposal.relationship.validToSceneId,
+          tx,
+        );
+      }
+
       let relationship: Relationship;
       if (proposal.kind === RelationshipProposalKind.END) {
-        relationship = await this.closeRelationshipProposal(tx, proposal);
+        relationship = await this.closeRelationshipProposal(tx, {
+          relationshipId: proposal.relationshipId,
+          sceneId: effectiveSceneId,
+        });
       } else if (proposal.relationshipId) {
-        relationship = await tx.relationship.update({
+        const previous = proposal.relationship;
+        if (!previous) {
+          throw new BadRequestException(
+            'La relacion a actualizar ya no existe',
+          );
+        }
+        await tx.relationship.update({
           where: { id: proposal.relationshipId },
+          data: { validToSceneId: effectiveSceneId },
+        });
+        relationship = await tx.relationship.create({
           data: {
+            projectId: proposal.projectId,
             description,
             relationType,
             confidenceScore,
             sourceEntityId,
             targetEntityId,
+            validFromSceneId: effectiveSceneId,
+            validToSceneId: override?.validToSceneId ?? previous.validToSceneId,
+            epistemicType: 'OBJECTIVE',
+            source: 'ai_proposed',
           },
         });
       } else {
@@ -190,7 +275,8 @@ export class RelationshipProposalService {
             description,
             confidenceScore,
             source: 'ai_proposed',
-            validFromSceneId: proposal.sceneId,
+            validFromSceneId: effectiveSceneId,
+            validToSceneId: override?.validToSceneId ?? null,
           },
         });
       }
@@ -207,7 +293,7 @@ export class RelationshipProposalService {
           resolutionReason: 'accepted_by_author',
         },
       });
-      return { relationship, changedAtSceneId: proposal.sceneId };
+      return { relationship, changedAtSceneId: effectiveSceneId };
     });
 
     if (!result) {
@@ -288,6 +374,7 @@ export class RelationshipProposalService {
       relationType: toRelationType(proposal.relationType),
       description: proposal.description,
       intensity: Number(proposal.intensity),
+      confidenceScore: Number(proposal.confidenceScore),
       evidence: Array.isArray(proposal.evidence)
         ? proposal.evidence.filter(
             (value: unknown): value is string => typeof value === 'string',
@@ -334,11 +421,11 @@ export class RelationshipProposalService {
 
     const normalizedCurrent = currentValue.toLowerCase();
     const normalizedSuggested = suggestedValue.toLowerCase();
-    if (
-      normalizedCurrent.includes(normalizedSuggested) ||
-      normalizedSuggested.includes(normalizedCurrent)
-    ) {
+    if (normalizedCurrent.includes(normalizedSuggested)) {
       return currentValue;
+    }
+    if (normalizedSuggested.includes(normalizedCurrent)) {
+      return suggestedValue;
     }
 
     return `${currentValue}\n\n${suggestedValue}`;

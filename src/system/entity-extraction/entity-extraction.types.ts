@@ -21,6 +21,7 @@ export interface ExtractionCandidate {
   attributes: Record<string, unknown>;
   imageUrl: string | null;
   confidenceScore: number;
+  narrativeRelevance?: number;
   evidence: string[];
   normalizedName?: string;
 }
@@ -41,7 +42,63 @@ export interface ExtractionResponse {
 export type InconsistencyRuleCode =
   | 'ENTITY_CONTRADICTION'
   | 'DEAD_CHARACTER_ACTION'
-  | 'WORLDBUILDING_RULE';
+  | 'WORLDBUILDING_RULE'
+  | 'INTRA_SCENE_CONTRADICTION';
+
+export type ExtractedCrossChunkSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
+
+export interface ExtractedCrossChunkInconsistency {
+  kind?: 'TRANSITION' | 'CONTRADICTION' | 'UNCERTAIN';
+  entityName: string;
+  field: string;
+  firstValue: string;
+  secondValue: string;
+  explanation: string;
+  severity: ExtractedCrossChunkSeverity;
+  confidenceScore: number;
+  firstChunkIndex?: number;
+  secondChunkIndex?: number;
+  firstEvidence: string[];
+  secondEvidence: string[];
+  relationship?: {
+    sourceEntityName: string;
+    targetEntityName: string;
+    relationType: string;
+  } | null;
+}
+
+export interface ContinuityCheckpointClaim {
+  entityName: string;
+  field: string;
+  value: string;
+  sceneId: string;
+  chunkId: string;
+  chunkHash: string;
+  chunkIndex: number;
+  evidence: string;
+}
+
+export interface ExtractedContinuityCheckpoint {
+  claims: Array<{
+    entityName: string;
+    field: string;
+    value: string;
+    chunkIndex: number;
+    evidence: string;
+  }>;
+  contradictions: Array<{
+    entityName: string;
+    field: string;
+    previousClaimIndex: number;
+    currentChunkIndex: number;
+    previousValue: string;
+    currentValue: string;
+    explanation: string;
+    severity: 'LOW' | 'MEDIUM' | 'HIGH';
+    confidenceScore: number;
+    currentEvidence: string;
+  }>;
+}
 
 export interface TemporalAuditContext {
   worldRules: unknown;
@@ -69,6 +126,11 @@ export interface ExtractedInconsistency {
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   confidenceScore: number;
   evidence: string[];
+  relationship?: {
+    sourceEntityName: string;
+    targetEntityName: string;
+    relationType: string;
+  } | null;
 }
 
 export interface ExtractedRelationship {
@@ -78,6 +140,7 @@ export interface ExtractedRelationship {
   relationType: RelationType;
   description: string | null;
   intensity: number;
+  confidenceScore: number;
   evidence: string[];
 }
 
@@ -88,6 +151,7 @@ export interface ExtractedStateChange {
   toValue: string;
   confidenceScore: number;
   evidence: string[];
+  sequenceKind?: 'TRANSITION' | 'CONTRADICTION' | 'UNCERTAIN';
 }
 
 export interface ConfirmedEntityLike {
@@ -115,6 +179,7 @@ export interface ProposalDataLike {
   imageUrl: string | null;
   proposalKind?: EntityProposalKind;
   confidenceScore: number;
+  narrativeRelevance?: number;
   evidence: string[];
   normalizedName: string;
   sourceChunkId?: string | null;

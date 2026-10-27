@@ -105,6 +105,41 @@ enum RelationshipProposalKind {
   END
 }
 
+enum KnowledgeReviewMode {
+  MANUAL
+  AUTO_THRESHOLD
+}
+
+enum CrossChunkAuditMode {
+  ADJACENT_CHUNKS
+  SCENE_GROUPED
+  PROJECT_SUMMARY
+  DISABLED
+}
+
+enum StateProposalSequenceKind {
+  TRANSITION
+  CONTRADICTION
+  UNCERTAIN
+}
+
+enum KnowledgeAnalysisRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  NO_CHANGES
+}
+
+enum KnowledgeAnalysisSceneStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  NO_CHANGES
+}
+
 enum AuditLevel {
   INTRA_SCENE
   INTER_SCENE
@@ -166,36 +201,38 @@ enum ImageGenerationJobStatus {
 // ============================================================
 
 model User {
-  id          String    @id // Firebase uid
-  name        String
-  lastname    String
-  email       String    @unique
-  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  id                    String    @id // Firebase uid
+  name                  String
+  lastname              String
+  email                 String    @unique
+  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
   // --- campos agregados desde la doc ---
-  displayName String?   @map("display_name") @db.VarChar(100)
-  avatarUrl   String?   @map("avatar_url") @db.VarChar(500)
-  role        UserRole  @default(AUTHOR)
-  plan        PlanType  @default(FREE)
-  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
-  autoAnalyzeOnAutosave Boolean @default(true) @map("auto_analyze_on_autosave")
+  displayName           String?   @map("display_name") @db.VarChar(100)
+  avatarUrl             String?   @map("avatar_url") @db.VarChar(500)
+  role                  UserRole  @default(AUTHOR)
+  plan                  PlanType  @default(FREE)
+  deletedAt             DateTime? @map("deleted_at") @db.Timestamptz(6)
+  autoAnalyzeOnAutosave Boolean   @default(true) @map("auto_analyze_on_autosave")
 
   apiKeys                       UserApiKey[]
+  entityRecognitionSettings     UserEntityRecognitionSettings?
   tokenLedgers                  TokenLedger[]
   subscription                  Subscription?
   projects                      Project[]
-  reviewedProposals             EntityProposal[]       @relation("ProposalReviewer")
-  reviewedStateProposals        EntityStateProposal[]  @relation("StateProposalReviewer")
-  reviewedRelationshipProposals RelationshipProposal[] @relation("RelationshipProposalReviewer")
-  resolvedAlerts                AuditAlert[]           @relation("AlertResolver")
+  reviewedProposals             EntityProposal[]               @relation("ProposalReviewer")
+  reviewedStateProposals        EntityStateProposal[]          @relation("StateProposalReviewer")
+  reviewedRelationshipProposals RelationshipProposal[]         @relation("RelationshipProposalReviewer")
+  knowledgeAnalysisRuns        KnowledgeAnalysisRun[]
+  resolvedAlerts                AuditAlert[]                   @relation("AlertResolver")
   exportJobs                    ExportJob[]
   writingSessions               WritingSession[]
   writingGoals                  WritingGoal[]
   imageGenerationJobs           ImageGenerationJob[]
-  createdShareLinks             ShareLink[]                @relation("ShareCreator")
-  acceptedShareLinks            ShareLink[]                @relation("ShareRecipient")
-  readerComments                ReaderComment[]            @relation("ReaderCommentAuthor")
-  resolvedReaderComments        ReaderComment[]            @relation("ReaderCommentResolver")
+  createdShareLinks             ShareLink[]                    @relation("ShareCreator")
+  acceptedShareLinks            ShareLink[]                    @relation("ShareRecipient")
+  readerComments                ReaderComment[]                @relation("ReaderCommentAuthor")
+  resolvedReaderComments        ReaderComment[]                @relation("ReaderCommentResolver")
   authorAnnotations             AuthorAnnotation[]
   readerCommentReplies          ReaderCommentReply[]
   readerCommentStatusEvents     ReaderCommentStatusEvent[]
@@ -218,6 +255,18 @@ model UserApiKey {
   @@index([userId], map: "idx_apikey_user")
   @@index([provider], map: "idx_apikey_provider")
   @@map("user_api_key")
+}
+
+model UserEntityRecognitionSettings {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @unique @map("user_id")
+  thresholds Json     @default("{}") @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_entity_recognition_settings")
 }
 
 model TokenLedger {
@@ -274,34 +323,128 @@ model Project {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  books                 Book[]
-  entities              Entity[]
-  relationships         Relationship[]
-  entityProposals       EntityProposal[]
-  entityStateProposals  EntityStateProposal[]
-  relationshipProposals RelationshipProposal[]
-  auditAlerts           AuditAlert[]
-  auditFalsePositives   AuditFalsePositive[]
-  chatThreads           ChatThread[]
-  chunks                Chunk[]
-  summaries             Summary[]
-  summaryGenerationJobs SummaryGenerationJob[]
-  versions              Version[]
-  exportJobs            ExportJob[]
-  exportSettings        ExportSettings?
-  storyboardNotes       StoryboardNote[]
-  storyboardArcs        StoryboardArc[]
-  shareLinks            ShareLink[]
-  writingSessions       WritingSession[]
-  writingGoals          WritingGoal[]
-  tokenLedgers          TokenLedger[]
-  timelineEvents        TimelineEvent[]
-  editorTextStyles      EditorTextStyle[]
+  user                      User                              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  books                     Book[]
+  entities                  Entity[]
+  relationships             Relationship[]
+  entityProposals           EntityProposal[]
+  entityStateProposals      EntityStateProposal[]
+  relationshipProposals     RelationshipProposal[]
+  auditAlerts               AuditAlert[]
+  auditFalsePositives       AuditFalsePositive[]
+  chatThreads               ChatThread[]
+  chunks                    Chunk[]
+  summaries                 Summary[]
+  summaryGenerationJobs     SummaryGenerationJob[]
+  versions                  Version[]
+  exportJobs                ExportJob[]
+  exportSettings            ExportSettings?
+  storyboardNotes           StoryboardNote[]
+  storyboardArcs            StoryboardArc[]
+  shareLinks                ShareLink[]
+  writingSessions           WritingSession[]
+  writingGoals              WritingGoal[]
+  tokenLedgers              TokenLedger[]
+  timelineEvents            TimelineEvent[]
+  editorTextStyles          EditorTextStyle[]
+  entityRecognitionSettings ProjectEntityRecognitionSettings?
+  knowledgeReviewSettings   ProjectKnowledgeReviewSettings?
+  knowledgeAnalysisRuns     KnowledgeAnalysisRun[]
+  continuityCheckpoints     ProjectContinuityCheckpoint[]
 
   @@index([userId], map: "idx_project_user")
   @@index([status], map: "idx_project_status")
   @@map("project")
+}
+
+model ProjectEntityRecognitionSettings {
+  id                   String   @id @default(uuid()) @db.Uuid
+  projectId            String   @unique @map("project_id") @db.Uuid
+  importantEntityNames Json     @default("[]") @map("important_entity_names") @db.JsonB
+  ignoredEntityNames   Json     @default("[]") @map("ignored_entity_names") @db.JsonB
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_entity_recognition_settings")
+}
+
+model ProjectKnowledgeReviewSettings {
+  id                              String             @id @default(uuid()) @db.Uuid
+  projectId                       String             @unique @map("project_id") @db.Uuid
+  stateTrackingEnabled            Boolean            @default(false) @map("state_tracking_enabled")
+  stateReviewMode                 KnowledgeReviewMode @default(MANUAL) @map("state_review_mode")
+  stateConfidenceThreshold        Decimal            @default(0.90) @map("state_confidence_threshold") @db.Decimal(3, 2)
+  relationshipReviewMode          KnowledgeReviewMode @default(MANUAL) @map("relationship_review_mode")
+  relationshipConfidenceThreshold Decimal            @default(0.90) @map("relationship_confidence_threshold") @db.Decimal(3, 2)
+  crossChunkAuditMode             CrossChunkAuditMode @default(ADJACENT_CHUNKS) @map("cross_chunk_audit_mode")
+  createdAt                       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_knowledge_review_settings")
+}
+
+model ProjectContinuityCheckpoint {
+  id         String   @id @default(uuid()) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  sceneId    String   @map("scene_id") @db.Uuid
+  sourceHash String   @map("source_hash") @db.VarChar(64)
+  claims     Json     @default("[]") @db.JsonB
+  isValid    Boolean  @default(true) @map("is_valid")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene   Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sceneId], map: "uq_continuity_checkpoint_project_scene")
+  @@index([projectId, isValid, sceneId], map: "idx_continuity_checkpoint_valid")
+  @@map("project_continuity_checkpoint")
+}
+
+model KnowledgeAnalysisRun {
+  id              String                     @id @default(uuid()) @db.Uuid
+  projectId       String                     @map("project_id") @db.Uuid
+  requestedById   String                     @map("requested_by_id")
+  status          KnowledgeAnalysisRunStatus @default(QUEUED)
+  totalScenes     Int                        @default(0) @map("total_scenes")
+  processedScenes Int                        @default(0) @map("processed_scenes")
+  failedScenes    Int                        @default(0) @map("failed_scenes")
+  totalChunks     Int                        @default(0) @map("total_chunks")
+  completedAt     DateTime?                  @map("completed_at") @db.Timestamptz(6)
+  createdAt       DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project     Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestedBy User                       @relation(fields: [requestedById], references: [id], onDelete: Cascade)
+  scenes      KnowledgeAnalysisRunScene[]
+
+  @@index([projectId, status], map: "idx_knowledge_run_project_status")
+  @@map("knowledge_analysis_run")
+}
+
+model KnowledgeAnalysisRunScene {
+  id              String                       @id @default(uuid()) @db.Uuid
+  runId           String                       @map("run_id") @db.Uuid
+  sceneId         String                       @map("scene_id") @db.Uuid
+  narrativePosition Int                        @map("narrative_position")
+  status          KnowledgeAnalysisSceneStatus @default(QUEUED)
+  totalChunks     Int                          @default(0) @map("total_chunks")
+  processedChunks Int                          @default(0) @map("processed_chunks")
+  error           String?
+  attempts        Int                          @default(0)
+  createdAt       DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  run   KnowledgeAnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  scene Scene                @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sceneId])
+  @@index([runId, status], map: "idx_knowledge_run_scene_status")
+  @@map("knowledge_analysis_run_scene")
 }
 
 model EditorTextStyle {
@@ -391,11 +534,13 @@ model Scene {
   entityProposals       EntityProposal[]
   entityStateProposals  EntityStateProposal[]
   relationshipProposals RelationshipProposal[]
+  analysisRunScenes     KnowledgeAnalysisRunScene[]
   readerComments        ReaderComment[]
   authorAnnotations     AuthorAnnotation[]
   writingSessions       WritingSession[]
   versions              SceneVersion[]
   sourceTimelineEvents  TimelineEvent[]        @relation("TimelineEventSourceScene")
+  continuityCheckpoints ProjectContinuityCheckpoint[]
 
   @@unique([chapterId, sortKey])
   @@index([chapterId], map: "idx_scene_chapter")
@@ -584,20 +729,21 @@ model TimelineEventEntity {
 }
 
 model EntityProposal {
-  id               String         @id @default(uuid()) @db.Uuid
-  projectId        String         @map("project_id") @db.Uuid
-  sceneId          String         @map("scene_id") @db.Uuid
-  sourceChunkId    String?        @map("source_chunk_id") @db.Uuid
-  sourceChunkHash  String?        @map("source_chunk_hash") @db.VarChar(64)
-  entityId         String?        @map("entity_id") @db.Uuid
-  proposedData     Json           @map("proposed_data") @db.JsonB
-  conflictsWithLocked Boolean     @default(false) @map("conflicts_with_locked")
-  status           ProposalStatus @default(PENDING)
-  confidenceScore  Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
-  resolutionReason String?        @map("resolution_reason")
-  reviewedById     String?        @map("reviewed_by_id")
-  reviewedAt       DateTime?      @map("reviewed_at") @db.Timestamptz(6)
-  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                  String         @id @default(uuid()) @db.Uuid
+  projectId           String         @map("project_id") @db.Uuid
+  sceneId             String         @map("scene_id") @db.Uuid
+  sourceChunkId       String?        @map("source_chunk_id") @db.Uuid
+  sourceChunkHash     String?        @map("source_chunk_hash") @db.VarChar(64)
+  entityId            String?        @map("entity_id") @db.Uuid
+  proposedData        Json           @map("proposed_data") @db.JsonB
+  conflictsWithLocked Boolean        @default(false) @map("conflicts_with_locked")
+  status              ProposalStatus @default(PENDING)
+  confidenceScore     Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  narrativeOrder      Int?           @map("narrative_order")
+  resolutionReason    String?        @map("resolution_reason")
+  reviewedById        String?        @map("reviewed_by_id")
+  reviewedAt          DateTime?      @map("reviewed_at") @db.Timestamptz(6)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
 
   project                     Project                @relation(fields: [projectId], references: [id])
   scene                       Scene                  @relation(fields: [sceneId], references: [id])
@@ -627,6 +773,8 @@ model EntityStateProposal {
   evidence            Json           @default("[]") @db.JsonB
   confidenceScore     Decimal        @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
   conflictsWithLocked Boolean        @default(false) @map("conflicts_with_locked")
+  narrativeOrder      Int?           @map("narrative_order")
+  sequenceKind        StateProposalSequenceKind? @map("sequence_kind")
   status              ProposalStatus @default(PENDING)
   resolutionReason    String?        @map("resolution_reason")
   reviewedById        String?        @map("reviewed_by_id")
@@ -647,27 +795,28 @@ model EntityStateProposal {
 }
 
 model RelationshipProposal {
-  id                     String         @id @default(uuid()) @db.Uuid
-  projectId              String         @map("project_id") @db.Uuid
-  sceneId                String         @map("scene_id") @db.Uuid
-  sourceChunkId          String?        @map("source_chunk_id") @db.Uuid
-  sourceChunkHash        String?        @map("source_chunk_hash") @db.VarChar(64)
-  relationshipId         String?        @map("relationship_id") @db.Uuid
-  sourceEntityId         String?        @map("source_entity_id") @db.Uuid
-  targetEntityId         String?        @map("target_entity_id") @db.Uuid
-  sourceEntityProposalId String?        @map("source_entity_proposal_id") @db.Uuid
-  targetEntityProposalId String?        @map("target_entity_proposal_id") @db.Uuid
+  id                     String                   @id @default(uuid()) @db.Uuid
+  projectId              String                   @map("project_id") @db.Uuid
+  sceneId                String                   @map("scene_id") @db.Uuid
+  sourceChunkId          String?                  @map("source_chunk_id") @db.Uuid
+  sourceChunkHash        String?                  @map("source_chunk_hash") @db.VarChar(64)
+  relationshipId         String?                  @map("relationship_id") @db.Uuid
+  sourceEntityId         String?                  @map("source_entity_id") @db.Uuid
+  targetEntityId         String?                  @map("target_entity_id") @db.Uuid
+  sourceEntityProposalId String?                  @map("source_entity_proposal_id") @db.Uuid
+  targetEntityProposalId String?                  @map("target_entity_proposal_id") @db.Uuid
   kind                   RelationshipProposalKind @default(CREATE)
-  relationType           RelationType   @map("relation_type")
+  relationType           RelationType             @map("relation_type")
   description            String?
-  intensity              Decimal        @default(0.0) @db.Decimal(3, 2)
-  evidence               Json           @default("[]") @db.JsonB
-  status                 ProposalStatus @default(PENDING)
-  resolutionReason       String?        @map("resolution_reason")
-  reviewedById           String?        @map("reviewed_by_id")
-  reviewedAt             DateTime?      @map("reviewed_at") @db.Timestamptz(6)
-  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt              DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  intensity              Decimal                  @default(0.0) @db.Decimal(3, 2)
+  confidenceScore        Decimal                  @default(0.0) @map("confidence_score") @db.Decimal(3, 2)
+  evidence               Json                     @default("[]") @db.JsonB
+  status                 ProposalStatus           @default(PENDING)
+  resolutionReason       String?                  @map("resolution_reason")
+  reviewedById           String?                  @map("reviewed_by_id")
+  reviewedAt             DateTime?                @map("reviewed_at") @db.Timestamptz(6)
+  createdAt              DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   project              Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   scene                Scene           @relation(fields: [sceneId], references: [id], onDelete: Cascade)

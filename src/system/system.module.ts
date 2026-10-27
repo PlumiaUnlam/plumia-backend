@@ -5,18 +5,25 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { UserModule } from '../user/user.module';
 import { EntityExtractionClient } from './entity-extraction/entity-extraction.client';
 import { EntityExtractionPipelineService } from './entity-extraction/entity-extraction-pipeline.service';
+import { CrossChunkAuditService } from './entity-extraction/cross-chunk-audit.service';
 import { EntityResolutionService } from './entity-extraction/entity-resolution.service';
+import { ProjectKnowledgeReviewController } from './project-knowledge-review.controller';
+import { ProjectKnowledgeReviewService } from './project-knowledge-review.service';
+import { KnowledgeProposalAutomationService } from './knowledge-proposal-automation.service';
 import { SystemController } from './system.controller';
 import { SystemService } from './system.service';
 
 @Module({
   imports: [PrismaModule, AuditModule, KnowledgeModule, UserModule],
-  controllers: [SystemController],
+  controllers: [SystemController, ProjectKnowledgeReviewController],
   providers: [
     SystemService,
     EntityExtractionClient,
     EntityExtractionPipelineService,
+    CrossChunkAuditService,
     EntityResolutionService,
+    ProjectKnowledgeReviewService,
+    KnowledgeProposalAutomationService,
   ],
   exports: [SystemService],
 })

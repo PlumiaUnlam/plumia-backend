@@ -33,4 +33,12 @@ export class RelationshipProposalOverrideDto {
   @IsOptional()
   @MaxLength(1000)
   description?: string | null;
+
+  @IsUUID()
+  @IsOptional()
+  validFromSceneId?: string;
+
+  @IsUUID()
+  @IsOptional()
+  validToSceneId?: string | null;
 }

@@ -24,7 +24,10 @@ describe('TemporalKnowledgeSnapshotService', () => {
       chapter: {
         book: {
           projectId: 'project-one',
-          project: { genreRules: { magic: 'Requiere contacto visual.' } },
+          project: {
+            genreRules: { magic: 'Requiere contacto visual.' },
+            knowledgeReviewSettings: { stateTrackingEnabled: true },
+          },
         },
       },
     });
@@ -59,6 +62,8 @@ describe('TemporalKnowledgeSnapshotService', () => {
         toValue: 'dead',
         validFromSceneId: 'scene-one',
         validToSceneId: null,
+        narrativeOrder: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
       },
       {
         id: 'state-future',
@@ -67,6 +72,8 @@ describe('TemporalKnowledgeSnapshotService', () => {
         toValue: 'Torre',
         validFromSceneId: 'scene-two',
         validToSceneId: null,
+        narrativeOrder: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
       },
     ]);
     prisma.fact.findMany.mockResolvedValue([
@@ -115,6 +122,37 @@ describe('TemporalKnowledgeSnapshotService', () => {
     expect(
       snapshot?.activeRelationships.map((relationship) => relationship.id),
     ).toEqual(['relation-global']);
+  });
+
+  it('uses the last ordered single-value state within the selected scene', async () => {
+    prisma.entityState.findMany.mockResolvedValue([
+      {
+        id: 'location-first',
+        entityId: 'elena',
+        attributeKey: 'location',
+        toValue: 'Puerto',
+        validFromSceneId: 'scene-two',
+        validToSceneId: null,
+        narrativeOrder: 0,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'location-last',
+        entityId: 'elena',
+        attributeKey: 'location',
+        toValue: 'Río',
+        validFromSceneId: 'scene-two',
+        validToSceneId: null,
+        narrativeOrder: 1000,
+        createdAt: new Date('2026-01-01T00:01:00.000Z'),
+      },
+    ]);
+
+    const snapshot = await service.getSnapshot('scene-two');
+
+    expect(snapshot?.activeStates.map((state) => state.id)).toEqual([
+      'location-last',
+    ]);
   });
 
   it('exposes deceased relevant entities and world rules to the extractor', async () => {

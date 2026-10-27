@@ -104,6 +104,7 @@ describe('Manuscript child services', () => {
             updateForUser: jest.fn(),
             updateContentForUser: jest.fn(),
             requestAnalysisForUser: jest.fn(),
+            getAnalysisStatusForUser: jest.fn(),
             softDeleteForUser: jest.fn(),
           },
         },

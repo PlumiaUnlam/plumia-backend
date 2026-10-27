@@ -9,17 +9,23 @@ import { SystemService } from '../../../src/system/system.service';
 
 jest.mock('bullmq', () => {
   const add = jest.fn();
+  const getJob = jest.fn();
   const close = jest.fn();
   const on = jest.fn();
+  const waitUntilReady = jest.fn().mockResolvedValue(undefined);
 
   return {
     Queue: jest.fn().mockImplementation(() => ({
       add,
+      getJob,
       close,
+      on,
+      waitUntilReady,
     })),
     Worker: jest.fn().mockImplementation(() => ({
       on,
       close,
+      waitUntilReady,
     })),
   };
 });
@@ -50,8 +56,15 @@ describe('SystemService', () => {
   let prisma: MockPrismaService;
   let config: { get: jest.Mock };
   let extractionClient: { hasExtractionModel: jest.Mock };
-  let pipeline: { processOutboxEvent: jest.Mock };
-  let queueInstance: { add: jest.Mock; close: jest.Mock };
+  let pipeline: {
+    processOutboxEvent: jest.Mock;
+    markOutboxEventFailed: jest.Mock;
+  };
+  let queueInstance: {
+    add: jest.Mock;
+    getJob: jest.Mock;
+    close: jest.Mock;
+  };
   let workerInstance: { on: jest.Mock; close: jest.Mock };
 
   beforeEach(async () => {
@@ -100,6 +113,7 @@ describe('SystemService', () => {
           provide: EntityExtractionPipelineService,
           useValue: {
             processOutboxEvent: jest.fn(),
+            markOutboxEventFailed: jest.fn(),
           },
         },
       ],
@@ -112,6 +126,7 @@ describe('SystemService', () => {
     pipeline = module.get(EntityExtractionPipelineService);
     queueInstance = getQueueMock().mock.results[0]?.value as {
       add: jest.Mock;
+      getJob: jest.Mock;
       close: jest.Mock;
     };
   });
@@ -172,8 +187,16 @@ describe('SystemService', () => {
     expect(prisma.outbox.findMany).toHaveBeenCalledWith({
       where: {
         processedAt: null,
-        aggregateType: 'Scene',
-        eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
+        OR: [
+          {
+            aggregateType: 'Scene',
+            eventType: { in: ['scene_changed', 'scene_temporal_audit'] },
+          },
+          {
+            aggregateType: 'Project',
+            eventType: 'project_analysis_requested',
+          },
+        ],
       },
       orderBy: { createdAt: 'asc' },
       take: 25,
@@ -183,6 +206,8 @@ describe('SystemService', () => {
       { outboxId: 'outbox-1' },
       {
         jobId: 'outbox-1',
+        attempts: 4,
+        backoff: { type: 'exponential', delay: 3000 },
         removeOnComplete: true,
         removeOnFail: false,
       },
@@ -204,6 +229,27 @@ describe('SystemService', () => {
 
     expect(prisma.outbox.update).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('finalizes a BullMQ job that exhausted its retries before the poller restarted', async () => {
+    extractionClient.hasExtractionModel.mockReturnValue(true);
+    prisma.outbox.findMany.mockResolvedValue([
+      { id: 'outbox-stuck', createdAt: new Date('2026-07-18T10:00:00.000Z') },
+    ]);
+    queueInstance.getJob.mockResolvedValue({
+      attemptsMade: 4,
+      opts: { attempts: 4 },
+      failedReason: 'model timeout',
+      getState: jest.fn().mockResolvedValue('failed'),
+    });
+
+    await service.start();
+
+    expect(pipeline.markOutboxEventFailed).toHaveBeenCalledWith(
+      'outbox-stuck',
+      expect.objectContaining({ message: 'model timeout' }),
+    );
+    expect(queueInstance.add).not.toHaveBeenCalled();
   });
 
   it('forwards worker jobs to the extraction pipeline', async () => {
