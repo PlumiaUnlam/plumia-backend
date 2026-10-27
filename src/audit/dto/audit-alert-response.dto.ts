@@ -43,5 +43,6 @@ export class AuditAlertResponseDto {
   confidence!: number;
   status!: AuditStatus;
   createdAt!: Date;
+  resolvedAt!: Date | null;
   conflict!: EntityConflictDetailsDto | null;
 }

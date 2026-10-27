@@ -118,10 +118,14 @@ interface AlertRow {
   confidence: Prisma.Decimal | number;
   status: AuditStatus;
   createdAt: Date;
+  resolvedAt: Date | null;
   sourceConflict: Prisma.JsonValue;
 }
 
-type AuditResolutionStatus = Extract<AuditStatus, 'RESOLVED' | 'DISMISSED'>;
+type AuditUpdateStatus = Extract<
+  AuditStatus,
+  'ACTIVE' | 'RESOLVED' | 'DISMISSED'
+>;
 
 @Injectable()
 export class AuditService {
@@ -147,25 +151,65 @@ export class AuditService {
   async updateStatus(
     userId: string,
     alertId: string,
-    status: AuditResolutionStatus,
+    status: AuditUpdateStatus,
   ): Promise<AuditAlertResponseDto> {
-    const alert = await this.prisma.auditAlert.findFirst({
-      where: { id: alertId, project: { userId, deletedAt: null } },
-      select: { id: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const alert = await tx.auditAlert.findFirst({
+        where: { id: alertId, project: { userId, deletedAt: null } },
+      });
+      if (!alert) {
+        return null;
+      }
+
+      if (status === AuditStatus.DISMISSED) {
+        const conflict = this.toStoredConflict(alert.sourceConflict);
+        const incorrectPattern = this.createSuppressionKey(
+          alert.sceneId,
+          alert.ruleCode ?? '',
+          conflict,
+        );
+        const existingSuppression = await tx.auditFalsePositive.findFirst({
+          where: { projectId: alert.projectId, incorrectPattern },
+          select: { id: true },
+        });
+        if (!existingSuppression) {
+          await tx.auditFalsePositive.create({
+            data: {
+              projectId: alert.projectId,
+              alertId: alert.id,
+              offendingTextQuote: conflict?.evidence[0] ?? alert.title,
+              explanation: alert.explanation ?? alert.title,
+              incorrectPattern,
+            },
+          });
+        }
+      }
+
+      if (status === AuditStatus.ACTIVE) {
+        const conflict = this.toStoredConflict(alert.sourceConflict);
+        const incorrectPattern = this.createSuppressionKey(
+          alert.sceneId,
+          alert.ruleCode ?? '',
+          conflict,
+        );
+        await tx.auditFalsePositive.deleteMany({
+          where: { projectId: alert.projectId, incorrectPattern },
+        });
+      }
+
+      return tx.auditAlert.update({
+        where: { id: alert.id },
+        data: {
+          status,
+          resolvedById: status === AuditStatus.ACTIVE ? null : userId,
+          resolvedAt: status === AuditStatus.ACTIVE ? null : new Date(),
+        },
+      });
     });
 
-    if (!alert) {
+    if (!updated) {
       throw new NotFoundException('Audit alert not found');
     }
-
-    const updated = await this.prisma.auditAlert.update({
-      where: { id: alert.id },
-      data: {
-        status,
-        resolvedById: userId,
-        resolvedAt: new Date(),
-      },
-    });
 
     return this.toResponse(updated);
   }
@@ -424,12 +468,73 @@ export class AuditService {
         : {}),
       ...(input.relationship ? { relationship: input.relationship } : {}),
     };
+    const suppressionKey = this.createSuppressionKey(
+      input.sceneId,
+      input.ruleCode,
+      {
+        entityId: input.entityId,
+        entityName: input.entityName,
+        field: input.field,
+        currentValue: input.currentValue,
+        observedValue: input.observedValue,
+        evidence: input.evidence,
+        ...(input.relationship ? { relationship: input.relationship } : {}),
+      },
+    );
+    const suppression = await this.prisma.auditFalsePositive.findFirst({
+      where: { projectId: input.projectId, incorrectPattern: suppressionKey },
+      select: { id: true },
+    });
+    if (suppression) {
+      return;
+    }
+
+    const legacyDismissed = await this.prisma.auditAlert.findMany({
+      where: {
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        ruleCode: input.ruleCode,
+        status: AuditStatus.DISMISSED,
+      },
+      select: { id: true, sourceConflict: true },
+    });
+    const legacyMatch = legacyDismissed.find((alert) =>
+      this.conflictMatchesSuppressionKey(
+        alert.sourceConflict,
+        input.sceneId,
+        input.ruleCode,
+        suppressionKey,
+      ),
+    );
+    if (legacyMatch) {
+      await this.prisma.auditFalsePositive.create({
+        data: {
+          projectId: input.projectId,
+          alertId: legacyMatch.id,
+          offendingTextQuote: input.evidence[0] ?? input.title,
+          explanation: input.explanation,
+          incorrectPattern: suppressionKey,
+        },
+      });
+      return;
+    }
+
     const existing = await this.prisma.auditAlert.findUnique({
       where: { fingerprint: input.fingerprint },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        projectId: true,
+        sceneId: true,
+        ruleCode: true,
+        sourceConflict: true,
+      },
     });
 
     if (existing) {
+      if (existing.status === AuditStatus.DISMISSED) {
+        return;
+      }
       await this.prisma.auditAlert.update({
         where: { id: existing.id },
         data: {
@@ -444,13 +549,55 @@ export class AuditService {
           explanation: input.explanation,
           confidence: input.confidence,
           sourceConflict: sourceConflict as unknown as Prisma.InputJsonValue,
-          ...(existing.status === AuditStatus.OBSOLETE
+          ...(existing.status === AuditStatus.OBSOLETE ||
+          existing.status === AuditStatus.RESOLVED
             ? {
                 status: AuditStatus.ACTIVE,
                 resolvedAt: null,
                 resolvedById: null,
               }
             : {}),
+        },
+      });
+      return;
+    }
+
+    const resolvedAlerts = await this.prisma.auditAlert.findMany({
+      where: {
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        ruleCode: input.ruleCode,
+        status: AuditStatus.RESOLVED,
+      },
+      select: { id: true, sourceConflict: true },
+    });
+    const resolvedMatch = resolvedAlerts.find((alert) =>
+      this.conflictMatchesSuppressionKey(
+        alert.sourceConflict,
+        input.sceneId,
+        input.ruleCode,
+        suppressionKey,
+      ),
+    );
+    if (resolvedMatch) {
+      await this.prisma.auditAlert.update({
+        where: { id: resolvedMatch.id },
+        data: {
+          fingerprint: input.fingerprint,
+          ruleCode: input.ruleCode,
+          sourceChunkId: input.sourceChunkId,
+          sourceChunkHash: input.sourceChunkHash,
+          detectionLevel: input.detectionLevel,
+          category: input.category,
+          severity: input.severity,
+          title: input.title,
+          description: this.buildDescription(input),
+          explanation: input.explanation,
+          confidence: input.confidence,
+          sourceConflict: sourceConflict as unknown as Prisma.InputJsonValue,
+          status: AuditStatus.ACTIVE,
+          resolvedAt: null,
+          resolvedById: null,
         },
       });
       return;
@@ -704,6 +851,55 @@ export class AuditService {
       .replace(/[^a-z0-9_]/g, '');
   }
 
+  private createSuppressionKey(
+    sceneId: string,
+    ruleCode: string,
+    conflict:
+      | (EntityConflictDetailsDto & {
+          relationship?: EntityConflictDetailsDto['relationship'];
+        })
+      | null,
+  ): string {
+    const normalize = (value: string): string =>
+      value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+    const subject = conflict?.relationship
+      ? [
+          conflict.relationship.relationshipId ??
+            `${normalize(conflict.relationship.sourceEntityName)}>${normalize(conflict.relationship.targetEntityName)}`,
+          normalize(conflict.relationship.relationType),
+        ].join(':')
+      : (conflict?.entityId ?? normalize(conflict?.entityName ?? ''));
+    const values = [
+      normalize(conflict?.currentValue ?? ''),
+      normalize(conflict?.observedValue ?? ''),
+    ].sort();
+
+    return JSON.stringify([
+      sceneId,
+      ruleCode,
+      subject,
+      normalize(conflict?.field ?? ''),
+      ...values,
+    ]);
+  }
+
+  private conflictMatchesSuppressionKey(
+    sourceConflict: Prisma.JsonValue,
+    sceneId: string,
+    ruleCode: string,
+    suppressionKey: string,
+  ): boolean {
+    const conflict = this.toStoredConflict(sourceConflict);
+    return (
+      this.createSuppressionKey(sceneId, ruleCode, conflict) === suppressionKey
+    );
+  }
+
   private toResponse(alert: AlertRow): AuditAlertResponseDto {
     return {
       id: alert.id,
@@ -721,6 +917,7 @@ export class AuditService {
       confidence: Number(alert.confidence),
       status: alert.status,
       createdAt: alert.createdAt,
+      resolvedAt: alert.resolvedAt,
       conflict: this.toConflict(alert.sourceConflict),
     };
   }
