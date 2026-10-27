@@ -99,16 +99,12 @@ export class SystemService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `Entity extraction job ${job?.id ?? 'unknown'} failed on attempt ${job?.attemptsMade ?? 0}/${job?.opts.attempts ?? 1}: ${error.message}`,
       );
-      if (
-        job &&
-        job.data?.outboxId &&
-        job.attemptsMade >= (job.opts.attempts ?? 1)
-      ) {
+      if (job?.data?.outboxId && job.attemptsMade >= (job.opts.attempts ?? 1)) {
         void this.pipeline
           .markOutboxEventFailed(job.data.outboxId, error)
-          .catch((failure: unknown) => {
+          .catch((error_: unknown) => {
             this.logger.error(
-              `Could not finalize failed outbox ${job.data.outboxId}: ${failure instanceof Error ? failure.message : String(failure)}`,
+              `Could not finalize failed outbox ${job.data.outboxId}: ${error_ instanceof Error ? error_.message : String(error_)}`,
             );
           });
       }

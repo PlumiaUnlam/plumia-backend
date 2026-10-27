@@ -80,115 +80,11 @@ export class ProjectKnowledgeReviewService {
     const crossChunkAuditMode =
       reviewSettings?.crossChunkAuditMode ??
       CrossChunkAuditMode.ADJACENT_CHUNKS;
-    const adjacentPairs = scenes.reduce((count, scene) => {
-      const chunksByIndex = new Map(
-        scene.chunks.map((chunk) => [chunk.chunkIndex, chunk]),
-      );
-      return (
-        count +
-        scene.chunks.filter(
-          (chunk) =>
-            chunk.isDirty &&
-            chunksByIndex.get(chunk.chunkIndex + 1) !== undefined,
-        ).length +
-        scene.chunks.filter(
-          (chunk) =>
-            !chunk.isDirty &&
-            chunksByIndex.get(chunk.chunkIndex + 1)?.isDirty === true,
-        ).length
-      );
-    }, 0);
-    let continuityGroupsToAnalyze = 0;
-    if (crossChunkAuditMode === CrossChunkAuditMode.SCENE_GROUPED) {
-      for (const scene of scenes) {
-        for (let start = 0; start < scene.chunks.length; start += 4) {
-          const group = scene.chunks.slice(start, start + 5);
-          if (group.length < 2) {
-            break;
-          }
-          if (group.some((chunk) => chunk.isDirty)) {
-            continuityGroupsToAnalyze += 1;
-          }
-          if (start + 5 >= scene.chunks.length) {
-            break;
-          }
-        }
-      }
-    }
-
-    let continuityScenesToRecalculate = 0;
-    let continuityCheckpointsToRecalculate = 0;
-    if (
-      reviewSettings?.crossChunkAuditMode ===
-        CrossChunkAuditMode.PROJECT_SUMMARY &&
-      scenes.length > 0
-    ) {
-      const orderedScenes = await this.prisma.scene.findMany({
-        where: {
-          deletedAt: null,
-          chapter: { deletedAt: null, book: { projectId, deletedAt: null } },
-        },
-        select: {
-          id: true,
-          order: true,
-          sortKey: true,
-          chapter: {
-            select: {
-              sortKey: true,
-              book: { select: { sortKey: true } },
-            },
-          },
-        },
-      });
-      orderedScenes.sort(
-        (left, right) =>
-          left.chapter.book.sortKey.localeCompare(right.chapter.book.sortKey) ||
-          left.chapter.sortKey.localeCompare(right.chapter.sortKey) ||
-          left.order - right.order ||
-          left.sortKey.localeCompare(right.sortKey) ||
-          left.id.localeCompare(right.id),
-      );
-      const firstPendingIndex = orderedScenes.findIndex(
-        (scene) => scene.id === scenes[0]?.id,
-      );
-      if (firstPendingIndex >= 0) {
-        const precedingSceneIds = orderedScenes
-          .slice(0, firstPendingIndex)
-          .map((scene) => scene.id);
-        const checkpoints =
-          await this.prisma.projectContinuityCheckpoint.findMany({
-            where: {
-              projectId,
-              isValid: true,
-              sceneId: { in: precedingSceneIds },
-            },
-            select: { sceneId: true },
-          });
-        const sceneIndexById = new Map(
-          orderedScenes.map((scene, index) => [scene.id, index] as const),
-        );
-        const latestPreviousCheckpoint = checkpoints.sort(
-          (left, right) =>
-            (sceneIndexById.get(right.sceneId) ?? -1) -
-            (sceneIndexById.get(left.sceneId) ?? -1),
-        )[0];
-        const startIndex = latestPreviousCheckpoint
-          ? (sceneIndexById.get(latestPreviousCheckpoint.sceneId) ?? -1) + 1
-          : 0;
-        const scenesToRecalculate = orderedScenes.slice(startIndex);
-        continuityScenesToRecalculate = scenesToRecalculate.length;
-        const oldCheckpoints =
-          await this.prisma.projectContinuityCheckpoint.findMany({
-            where: {
-              projectId,
-              sceneId: { in: scenesToRecalculate.map((scene) => scene.id) },
-            },
-            select: { id: true },
-          });
-        continuityCheckpointsToRecalculate = oldCheckpoints.length;
-      }
-    }
-
+    const continuityPreview = await this.getContinuityRecalculationPreview(
+      projectId,
+      scenes,
+      crossChunkAuditMode,
+    );
     return {
       projectId,
       sceneCount: scenes.length,
@@ -200,11 +96,14 @@ export class ProjectKnowledgeReviewService {
       crossChunkAuditMode,
       affectedAdjacentPairs:
         crossChunkAuditMode === CrossChunkAuditMode.ADJACENT_CHUNKS
-          ? Math.ceil(adjacentPairs)
+          ? Math.ceil(this.countAdjacentDirtyPairs(scenes))
           : 0,
-      continuityGroupsToAnalyze,
-      continuityScenesToRecalculate,
-      continuityCheckpointsToRecalculate,
+      continuityGroupsToAnalyze:
+        crossChunkAuditMode === CrossChunkAuditMode.SCENE_GROUPED
+          ? this.countDirtySceneGroups(scenes)
+          : 0,
+      continuityScenesToRecalculate: continuityPreview.scenes,
+      continuityCheckpointsToRecalculate: continuityPreview.checkpoints,
       scenes: scenes.map((scene) => ({
         id: scene.id,
         title: scene.title ?? 'Escena sin título',
@@ -212,6 +111,121 @@ export class ProjectKnowledgeReviewService {
         bookTitle: scene.chapter.book.title,
         pendingChunks: scene.chunks.filter((chunk) => chunk.isDirty).length,
       })),
+    };
+  }
+
+  private countAdjacentDirtyPairs(scenes: PendingScene[]): number {
+    return scenes.reduce((count, scene) => {
+      const chunksByIndex = new Map(
+        scene.chunks.map((chunk) => [chunk.chunkIndex, chunk]),
+      );
+      const changedFirst = scene.chunks.filter(
+        (chunk) =>
+          chunk.isDirty &&
+          chunksByIndex.get(chunk.chunkIndex + 1) !== undefined,
+      ).length;
+      const changedSecond = scene.chunks.filter(
+        (chunk) =>
+          !chunk.isDirty &&
+          chunksByIndex.get(chunk.chunkIndex + 1)?.isDirty === true,
+      ).length;
+      return count + changedFirst + changedSecond;
+    }, 0);
+  }
+
+  private countDirtySceneGroups(scenes: PendingScene[]): number {
+    return scenes.reduce((count, scene) => {
+      const stride = 4;
+      const groupCount = Math.ceil(
+        Math.max(0, scene.chunks.length - 1) / stride,
+      );
+      const starts = Array.from(
+        { length: groupCount },
+        (_, index) => index * stride,
+      );
+      return (
+        count +
+        starts.filter((start) => {
+          const group = scene.chunks.slice(start, start + 5);
+          return group.length >= 2 && group.some((chunk) => chunk.isDirty);
+        }).length
+      );
+    }, 0);
+  }
+
+  private async getContinuityRecalculationPreview(
+    projectId: string,
+    pendingScenes: PendingScene[],
+    mode: CrossChunkAuditMode,
+  ): Promise<{ scenes: number; checkpoints: number }> {
+    if (
+      mode !== CrossChunkAuditMode.PROJECT_SUMMARY ||
+      pendingScenes.length === 0
+    ) {
+      return { scenes: 0, checkpoints: 0 };
+    }
+    const orderedScenes = await this.prisma.scene.findMany({
+      where: {
+        deletedAt: null,
+        chapter: { deletedAt: null, book: { projectId, deletedAt: null } },
+      },
+      select: {
+        id: true,
+        order: true,
+        sortKey: true,
+        chapter: {
+          select: {
+            sortKey: true,
+            book: { select: { sortKey: true } },
+          },
+        },
+      },
+    });
+    orderedScenes.sort(
+      (left, right) =>
+        left.chapter.book.sortKey.localeCompare(right.chapter.book.sortKey) ||
+        left.chapter.sortKey.localeCompare(right.chapter.sortKey) ||
+        left.order - right.order ||
+        left.sortKey.localeCompare(right.sortKey) ||
+        left.id.localeCompare(right.id),
+    );
+    const firstPendingIndex = orderedScenes.findIndex(
+      (scene) => scene.id === pendingScenes[0]?.id,
+    );
+    if (firstPendingIndex < 0) {
+      return { scenes: 0, checkpoints: 0 };
+    }
+
+    const precedingSceneIds = orderedScenes
+      .slice(0, firstPendingIndex)
+      .map((scene) => scene.id);
+    const checkpoints = await this.prisma.projectContinuityCheckpoint.findMany({
+      where: { projectId, isValid: true, sceneId: { in: precedingSceneIds } },
+      select: { sceneId: true },
+    });
+    const sceneIndexById = new Map(
+      orderedScenes.map((scene, index) => [scene.id, index] as const),
+    );
+    const latestPreviousCheckpoint = checkpoints.sort(
+      (left, right) =>
+        (sceneIndexById.get(right.sceneId) ?? -1) -
+        (sceneIndexById.get(left.sceneId) ?? -1),
+    )[0];
+    const startIndex = latestPreviousCheckpoint
+      ? (sceneIndexById.get(latestPreviousCheckpoint.sceneId) ?? -1) + 1
+      : 0;
+    const scenesToRecalculate = orderedScenes.slice(startIndex);
+    const oldCheckpoints =
+      await this.prisma.projectContinuityCheckpoint.findMany({
+        where: {
+          projectId,
+          sceneId: { in: scenesToRecalculate.map((scene) => scene.id) },
+        },
+        select: { id: true },
+      });
+    return {
+      scenes: scenesToRecalculate.length,
+      checkpoints: oldCheckpoints.length,
     };
   }
 
@@ -351,7 +365,7 @@ export class ProjectKnowledgeReviewService {
     return this.getRunWith(this.prisma, runId);
   }
 
-  private async getPendingScenes(
+  private getPendingScenes(
     projectId: string,
     client: PrismaService | Prisma.TransactionClient = this.prisma,
     onlySceneIds?: string[],

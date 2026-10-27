@@ -19,6 +19,7 @@ import {
   type TemporalRelationship,
 } from '../../audit/temporal-knowledge-snapshot.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { forEachSequentially } from '../../system/entity-extraction/for-each-sequentially';
 import type { CreateEntityStateDto } from '../dto/create-entity-state.dto';
 import type { AcceptStateProposalSequenceDto } from '../dto/accept-state-proposal-sequence.dto';
 import type { EntityStateProposalOverrideDto } from '../dto/entity-state-proposal-override.dto';
@@ -567,7 +568,7 @@ export class TemporalStateService {
       }
 
       const createdStates: EntityState[] = [];
-      for (const proposal of accepted) {
+      await forEachSequentially(accepted, async (proposal) => {
         if (proposal.conflictsWithLocked) {
           throw new BadRequestException(
             'La propuesta contradice un campo bloqueado por el autor',
@@ -602,11 +603,12 @@ export class TemporalStateService {
           positions,
         );
         createdStates.push(state);
-      }
+      });
 
-      for (const proposal of proposals.filter((item) =>
+      const rejected = proposals.filter((item) =>
         rejectedIds.includes(item.id),
-      )) {
+      );
+      await forEachSequentially(rejected, async (proposal) => {
         await tx.entityStateProposal.update({
           where: { id: proposal.id },
           data: {
@@ -616,7 +618,7 @@ export class TemporalStateService {
             resolutionReason: 'rejected_by_author',
           },
         });
-      }
+      });
       return { states: createdStates, staleEvidence: false as const };
     });
     if (result.staleEvidence) {

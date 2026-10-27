@@ -376,11 +376,14 @@ export class PrismaSceneRepository implements SceneRepository {
       'FAILED',
       'NO_CHANGES',
     ]);
-    const normalizedStatus = validStatuses.has(String(status))
-      ? (status as SceneAnalysisExecutionResult['status'])
-      : event.processedAt
-        ? 'SUCCEEDED'
-        : 'QUEUED';
+    let normalizedStatus: SceneAnalysisExecutionResult['status'];
+    if (validStatuses.has(String(status))) {
+      normalizedStatus = status as SceneAnalysisExecutionResult['status'];
+    } else if (event.processedAt) {
+      normalizedStatus = 'SUCCEEDED';
+    } else {
+      normalizedStatus = 'QUEUED';
+    }
 
     return {
       status: normalizedStatus,

@@ -877,7 +877,7 @@ export class AuditService {
     const values = [
       normalize(conflict?.currentValue ?? ''),
       normalize(conflict?.observedValue ?? ''),
-    ].sort();
+    ].sort((left, right) => left.localeCompare(right));
 
     return JSON.stringify([
       sceneId,

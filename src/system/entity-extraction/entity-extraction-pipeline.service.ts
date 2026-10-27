@@ -257,120 +257,139 @@ export class EntityExtractionPipelineService {
     if (!outbox) {
       return;
     }
-
     this.logger.error(
       `Outbox event ${outboxId} exhausted its retries: ${cause instanceof Error ? (cause.stack ?? cause.message) : String(cause)}`,
     );
+    await this.prisma.$transaction((tx) =>
+      this.handleFailedOutboxTransaction({
+        tx,
+        outbox,
+        safeError,
+      }),
+    );
+  }
 
-    await this.prisma.$transaction(async (tx) => {
-      const payload = this.toJsonRecord(outbox.payload);
-      const claimed = await tx.outbox.updateMany({
-        where: { id: outbox.id, processedAt: null },
-        data: {
-          processedAt: new Date(),
-          payload: {
-            ...payload,
-            analysisStatus: 'FAILED',
-            analysisError: safeError,
+  private async handleFailedOutboxTransaction(input: {
+    tx: Prisma.TransactionClient;
+    outbox: {
+      id: string;
+      aggregateType: string;
+      aggregateId: string;
+      eventType: string;
+      payload: Prisma.JsonValue;
+    };
+    safeError: string;
+  }): Promise<void> {
+    const payload = this.toJsonRecord(input.outbox.payload);
+    const claimed = await input.tx.outbox.updateMany({
+      where: { id: input.outbox.id, processedAt: null },
+      data: {
+        processedAt: new Date(),
+        payload: {
+          ...payload,
+          analysisStatus: 'FAILED',
+          analysisError: input.safeError,
+        },
+      },
+    });
+    if (claimed.count === 0) {
+      return;
+    }
+    if (
+      input.outbox.aggregateType === 'Scene' &&
+      input.outbox.eventType === 'scene_changed'
+    ) {
+      await input.tx.chunk.updateMany({
+        where: { sceneId: input.outbox.aggregateId },
+        data: { isDirty: true },
+      });
+      return;
+    }
+    const runId = payload['runId'];
+    if (
+      input.outbox.aggregateType !== 'Project' ||
+      input.outbox.eventType !== 'project_analysis_requested' ||
+      typeof runId !== 'string'
+    ) {
+      return;
+    }
+    await this.markFailedProjectAnalysisRun(input.tx, runId, input.safeError);
+  }
+
+  private async markFailedProjectAnalysisRun(
+    tx: Prisma.TransactionClient,
+    runId: string,
+    safeError: string,
+  ): Promise<void> {
+    const run = await tx.knowledgeAnalysisRun.findUnique({
+      where: { id: runId },
+      include: { scenes: { orderBy: { narrativePosition: 'asc' } } },
+    });
+    if (!run) {
+      return;
+    }
+
+    const retryableScenes = run.scenes.filter(
+      (scene) =>
+        scene.status === KnowledgeAnalysisSceneStatus.QUEUED ||
+        scene.status === KnowledgeAnalysisSceneStatus.RUNNING,
+    );
+    const failedScenes =
+      retryableScenes.length > 0 ? retryableScenes : run.scenes.slice(-1);
+    await forEachSequentially(failedScenes, (scene) =>
+      tx.knowledgeAnalysisRunScene
+        .update({
+          where: { id: scene.id },
+          data: {
+            status: KnowledgeAnalysisSceneStatus.FAILED,
+            error: safeError,
+          },
+        })
+        .then(() => undefined),
+    );
+
+    const failedSceneIds = failedScenes.map((scene) => scene.sceneId);
+    if (failedSceneIds.length > 0) {
+      await tx.chunk.updateMany({
+        where: { sceneId: { in: failedSceneIds } },
+        data: { isDirty: true },
+      });
+    }
+    const [failedCount, processedCount, succeededCount] = await Promise.all([
+      tx.knowledgeAnalysisRunScene.count({
+        where: { runId: run.id, status: KnowledgeAnalysisSceneStatus.FAILED },
+      }),
+      tx.knowledgeAnalysisRunScene.count({
+        where: {
+          runId: run.id,
+          status: {
+            in: [
+              KnowledgeAnalysisSceneStatus.SUCCEEDED,
+              KnowledgeAnalysisSceneStatus.NO_CHANGES,
+              KnowledgeAnalysisSceneStatus.FAILED,
+            ],
           },
         },
-      });
-      if (claimed.count === 0) {
-        return;
-      }
-
-      if (
-        outbox.aggregateType === 'Scene' &&
-        outbox.eventType === 'scene_changed'
-      ) {
-        await tx.chunk.updateMany({
-          where: { sceneId: outbox.aggregateId },
-          data: { isDirty: true },
-        });
-        return;
-      }
-
-      if (
-        outbox.aggregateType === 'Project' &&
-        outbox.eventType === 'project_analysis_requested' &&
-        typeof payload['runId'] === 'string'
-      ) {
-        const run = await tx.knowledgeAnalysisRun.findUnique({
-          where: { id: payload['runId'] },
-          include: {
-            scenes: {
-              orderBy: { narrativePosition: 'asc' },
-            },
-          },
-        });
-        if (run) {
-          const retryableScenes = run.scenes.filter(
-            (scene) =>
-              scene.status === KnowledgeAnalysisSceneStatus.QUEUED ||
-              scene.status === KnowledgeAnalysisSceneStatus.RUNNING,
-          );
-          const failedScenes =
-            retryableScenes.length > 0 ? retryableScenes : run.scenes.slice(-1);
-
-          for (const scene of failedScenes) {
-            await tx.knowledgeAnalysisRunScene.update({
-              where: { id: scene.id },
-              data: {
-                status: KnowledgeAnalysisSceneStatus.FAILED,
-                error: safeError,
-              },
-            });
-          }
-
-          const failedSceneIds = failedScenes.map((scene) => scene.sceneId);
-          if (failedSceneIds.length > 0) {
-            await tx.chunk.updateMany({
-              where: { sceneId: { in: failedSceneIds } },
-              data: { isDirty: true },
-            });
-          }
-
-          const [failedCount, processedCount, succeededCount] =
-            await Promise.all([
-              tx.knowledgeAnalysisRunScene.count({
-                where: {
-                  runId: run.id,
-                  status: KnowledgeAnalysisSceneStatus.FAILED,
-                },
-              }),
-              tx.knowledgeAnalysisRunScene.count({
-                where: {
-                  runId: run.id,
-                  status: {
-                    in: [
-                      KnowledgeAnalysisSceneStatus.SUCCEEDED,
-                      KnowledgeAnalysisSceneStatus.NO_CHANGES,
-                      KnowledgeAnalysisSceneStatus.FAILED,
-                    ],
-                  },
-                },
-              }),
-              tx.knowledgeAnalysisRunScene.count({
-                where: {
-                  runId: run.id,
-                  status: KnowledgeAnalysisSceneStatus.SUCCEEDED,
-                },
-              }),
-            ]);
-          await tx.knowledgeAnalysisRun.update({
-            where: { id: run.id },
-            data: {
-              status:
-                succeededCount > 0
-                  ? KnowledgeAnalysisRunStatus.PARTIAL
-                  : KnowledgeAnalysisRunStatus.FAILED,
-              processedScenes: processedCount,
-              failedScenes: failedCount,
-              completedAt: new Date(),
-            },
-          });
-        }
-      }
+      }),
+      tx.knowledgeAnalysisRunScene.count({
+        where: {
+          runId: run.id,
+          status: KnowledgeAnalysisSceneStatus.SUCCEEDED,
+        },
+      }),
+    ]);
+    const status =
+      succeededCount > 0
+        ? KnowledgeAnalysisRunStatus.PARTIAL
+        : KnowledgeAnalysisRunStatus.FAILED;
+    await tx.knowledgeAnalysisRun.update({
+      where: { id: run.id },
+      data: {
+        status,
+        processedScenes: processedCount,
+        failedScenes: failedCount,
+        completedAt: new Date(),
+      },
     });
   }
 
@@ -382,123 +401,148 @@ export class EntityExtractionPipelineService {
     if (!run || run.status === KnowledgeAnalysisRunStatus.NO_CHANGES) {
       return;
     }
-
     await this.prisma.knowledgeAnalysisRun.update({
       where: { id: runId },
       data: { status: KnowledgeAnalysisRunStatus.RUNNING },
     });
+    await forEachSequentially(run.scenes, (sceneRun) =>
+      this.processProjectAnalysisScene({
+        runId,
+        projectId: run.projectId,
+        sceneRun,
+      }),
+    );
+    await this.completeProjectAnalysisRun(runId, run.projectId);
+  }
 
-    for (const sceneRun of run.scenes) {
+  private async processProjectAnalysisScene(input: {
+    runId: string;
+    projectId: string;
+    sceneRun: { id: string; sceneId: string; totalChunks: number };
+  }): Promise<void> {
+    await this.prisma.knowledgeAnalysisRunScene.update({
+      where: { id: input.sceneRun.id },
+      data: {
+        status: KnowledgeAnalysisSceneStatus.RUNNING,
+        attempts: { increment: 1 },
+        error: null,
+      },
+    });
+    try {
+      await this.analyzeProjectScene(input.sceneRun.sceneId, input.projectId);
       await this.prisma.knowledgeAnalysisRunScene.update({
-        where: { id: sceneRun.id },
+        where: { id: input.sceneRun.id },
         data: {
-          status: KnowledgeAnalysisSceneStatus.RUNNING,
-          attempts: { increment: 1 },
-          error: null,
+          status: KnowledgeAnalysisSceneStatus.SUCCEEDED,
+          processedChunks: input.sceneRun.totalChunks,
         },
       });
-
-      try {
-        const scene = await this.prisma.scene.findFirst({
-          where: {
-            id: sceneRun.sceneId,
-            deletedAt: null,
-            chapter: { book: { projectId: run.projectId } },
-          },
-          select: {
-            id: true,
-            contentHash: true,
-            wordCount: true,
-            chapterId: true,
-            chapter: {
-              select: {
-                book: { select: { project: { select: { userId: true } } } },
-              },
-            },
-          },
-        });
-        if (!scene) {
-          throw new Error('La escena ya no está disponible.');
-        }
-
-        await this.processSceneChanged(
-          {
-            sceneId: scene.id,
-            chapterId: scene.chapterId,
-            contentHash: scene.contentHash ?? '',
-            wordCount: scene.wordCount,
-            userId: scene.chapter.book.project.userId,
-            trigger: 'MANUAL',
-          },
-          { skipContinuityAudit: true },
-        );
-        const remainingChunks = await this.prisma.chunk.count({
-          where: { sceneId: scene.id, isDirty: true },
-        });
-        if (remainingChunks > 0) {
-          throw new Error('Quedaron fragmentos pendientes de analizar.');
-        }
-
-        await this.prisma.knowledgeAnalysisRunScene.update({
-          where: { id: sceneRun.id },
-          data: {
-            status: KnowledgeAnalysisSceneStatus.SUCCEEDED,
-            processedChunks: sceneRun.totalChunks,
-          },
-        });
-      } catch (error) {
-        await this.prisma.knowledgeAnalysisRunScene.update({
-          where: { id: sceneRun.id },
-          data: {
-            status: KnowledgeAnalysisSceneStatus.FAILED,
-            error:
-              error instanceof Error
-                ? error.message.slice(0, 1000)
-                : 'No se pudo analizar la escena.',
-          },
-        });
-      }
-      const [processedScenes, failedScenes] = await Promise.all([
-        this.prisma.knowledgeAnalysisRunScene.count({
-          where: {
-            runId,
-            status: {
-              in: [
-                KnowledgeAnalysisSceneStatus.SUCCEEDED,
-                KnowledgeAnalysisSceneStatus.NO_CHANGES,
-                KnowledgeAnalysisSceneStatus.FAILED,
-              ],
-            },
-          },
-        }),
-        this.prisma.knowledgeAnalysisRunScene.count({
-          where: { runId, status: KnowledgeAnalysisSceneStatus.FAILED },
-        }),
-      ]);
-      await this.prisma.knowledgeAnalysisRun.update({
-        where: { id: runId },
-        data: { processedScenes, failedScenes },
+    } catch (error) {
+      await this.prisma.knowledgeAnalysisRunScene.update({
+        where: { id: input.sceneRun.id },
+        data: {
+          status: KnowledgeAnalysisSceneStatus.FAILED,
+          error:
+            error instanceof Error
+              ? error.message.slice(0, 1000)
+              : 'No se pudo analizar la escena.',
+        },
       });
     }
+    await this.updateProjectAnalysisProgress(input.runId);
+  }
 
-    const failedScenes = await this.prisma.knowledgeAnalysisRunScene.count({
-      where: { runId, status: KnowledgeAnalysisSceneStatus.FAILED },
+  private async analyzeProjectScene(
+    sceneId: string,
+    projectId: string,
+  ): Promise<void> {
+    const scene = await this.prisma.scene.findFirst({
+      where: {
+        id: sceneId,
+        deletedAt: null,
+        chapter: { book: { projectId } },
+      },
+      select: {
+        id: true,
+        contentHash: true,
+        wordCount: true,
+        chapterId: true,
+        chapter: {
+          select: {
+            book: { select: { project: { select: { userId: true } } } },
+          },
+        },
+      },
     });
-    const succeededScenes = await this.prisma.knowledgeAnalysisRunScene.count({
-      where: { runId, status: KnowledgeAnalysisSceneStatus.SUCCEEDED },
+    if (!scene) {
+      throw new Error('La escena ya no está disponible.');
+    }
+    await this.processSceneChanged(
+      {
+        sceneId: scene.id,
+        chapterId: scene.chapterId,
+        contentHash: scene.contentHash ?? '',
+        wordCount: scene.wordCount,
+        userId: scene.chapter.book.project.userId,
+        trigger: 'MANUAL',
+      },
+      { skipContinuityAudit: true },
+    );
+    const remainingChunks = await this.prisma.chunk.count({
+      where: { sceneId: scene.id, isDirty: true },
     });
+    if (remainingChunks > 0) {
+      throw new Error('Quedaron fragmentos pendientes de analizar.');
+    }
+  }
+
+  private async updateProjectAnalysisProgress(runId: string): Promise<void> {
+    const [processedScenes, failedScenes] = await Promise.all([
+      this.prisma.knowledgeAnalysisRunScene.count({
+        where: {
+          runId,
+          status: {
+            in: [
+              KnowledgeAnalysisSceneStatus.SUCCEEDED,
+              KnowledgeAnalysisSceneStatus.NO_CHANGES,
+              KnowledgeAnalysisSceneStatus.FAILED,
+            ],
+          },
+        },
+      }),
+      this.prisma.knowledgeAnalysisRunScene.count({
+        where: { runId, status: KnowledgeAnalysisSceneStatus.FAILED },
+      }),
+    ]);
     await this.prisma.knowledgeAnalysisRun.update({
       where: { id: runId },
-      data: {
-        failedScenes,
-        status:
-          failedScenes === 0
-            ? KnowledgeAnalysisRunStatus.SUCCEEDED
-            : succeededScenes === 0
-              ? KnowledgeAnalysisRunStatus.FAILED
-              : KnowledgeAnalysisRunStatus.PARTIAL,
-        completedAt: new Date(),
-      },
+      data: { processedScenes, failedScenes },
+    });
+  }
+
+  private async completeProjectAnalysisRun(
+    runId: string,
+    projectId: string,
+  ): Promise<void> {
+    const [failedScenes, succeededScenes] = await Promise.all([
+      this.prisma.knowledgeAnalysisRunScene.count({
+        where: { runId, status: KnowledgeAnalysisSceneStatus.FAILED },
+      }),
+      this.prisma.knowledgeAnalysisRunScene.count({
+        where: { runId, status: KnowledgeAnalysisSceneStatus.SUCCEEDED },
+      }),
+    ]);
+    let status: KnowledgeAnalysisRunStatus;
+    if (failedScenes === 0) {
+      status = KnowledgeAnalysisRunStatus.SUCCEEDED;
+    } else if (succeededScenes === 0) {
+      status = KnowledgeAnalysisRunStatus.FAILED;
+    } else {
+      status = KnowledgeAnalysisRunStatus.PARTIAL;
+    }
+    await this.prisma.knowledgeAnalysisRun.update({
+      where: { id: runId },
+      data: { failedScenes, status, completedAt: new Date() },
     });
     const analyzedScenes = await this.prisma.knowledgeAnalysisRunScene.findMany(
       {
@@ -510,31 +554,44 @@ export class EntityExtractionPipelineService {
         orderBy: { narrativePosition: 'asc' },
       },
     );
-    if (analyzedScenes.length > 0) {
-      const [project, reviewSettings] = await Promise.all([
-        this.prisma.project.findUnique({
-          where: { id: run.projectId },
-          select: { userId: true },
-        }),
-        this.prisma.projectKnowledgeReviewSettings.findUnique({
-          where: { projectId: run.projectId },
-          select: { crossChunkAuditMode: true },
-        }),
-      ]);
-      if (project) {
-        const scenesToAudit =
-          reviewSettings?.crossChunkAuditMode ===
-          CrossChunkAuditMode.PROJECT_SUMMARY
-            ? [analyzedScenes[0]!]
-            : analyzedScenes;
-        for (const scene of scenesToAudit) {
-          await this.crossChunkAudit?.auditScene({
+    if (analyzedScenes.length === 0) {
+      return;
+    }
+    await this.auditCompletedProjectScenes(projectId, analyzedScenes);
+  }
+
+  private async auditCompletedProjectScenes(
+    projectId: string,
+    analyzedScenes: Array<{ sceneId: string }>,
+  ): Promise<void> {
+    const [project, reviewSettings] = await Promise.all([
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { userId: true },
+      }),
+      this.prisma.projectKnowledgeReviewSettings.findUnique({
+        where: { projectId },
+        select: { crossChunkAuditMode: true },
+      }),
+    ]);
+    if (!project) {
+      return;
+    }
+    const scenesToAudit =
+      reviewSettings?.crossChunkAuditMode ===
+      CrossChunkAuditMode.PROJECT_SUMMARY
+        ? [analyzedScenes[0]!]
+        : analyzedScenes;
+    await forEachSequentially(
+      scenesToAudit,
+      (scene) =>
+        this.crossChunkAudit
+          ?.auditScene({
             sceneId: scene.sceneId,
             userId: project.userId,
-          });
-        }
-      }
-    }
+          })
+          .then(() => undefined) ?? Promise.resolve(),
+    );
   }
 
   async processTemporalAudit(sceneId: string): Promise<void> {
@@ -1207,115 +1264,143 @@ export class EntityExtractionPipelineService {
       string,
       Parameters<AuditService['createEntityContinuityAlert']>[0]
     >();
-
-    for (const inconsistency of input.inconsistencies ?? []) {
-      const entity = this.findConfirmedEntityByName(
-        inconsistency.entityName,
-        input.confirmedEntities,
-      );
-      const field = inconsistency.field?.trim();
-      const currentValue = inconsistency.currentValue?.trim();
-      const observedValue = inconsistency.observedValue?.trim();
-      const explanation = inconsistency.explanation?.trim();
-      const evidence = [...new Set(inconsistency.evidence ?? [])]
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-
-      const entityName =
-        entity?.canonicalName ??
-        inconsistency.entityName?.trim() ??
-        inconsistency.relationship?.sourceEntityName?.trim();
-      if (
-        !entityName ||
-        !field ||
-        !currentValue ||
-        !observedValue ||
-        !explanation ||
-        evidence.length === 0
-      ) {
-        continue;
-      }
-
-      const fingerprint = this.createInconsistencyFingerprint({
-        projectId: input.projectId,
-        sceneId: input.sceneId,
-        chunkHash: input.chunk.contentHash ?? '',
-        entityId:
-          entity?.id ?? `unresolved:${this.resolution.normalize(entityName)}`,
-        ruleCode: inconsistency.ruleCode,
-        field,
-        currentValue,
-        observedValue,
-      });
-      activeFingerprints.add(fingerprint);
-      const relation = inconsistency.relationship;
-      const sourceEntity = relation
-        ? this.findConfirmedEntityByName(
-            relation.sourceEntityName,
-            input.confirmedEntities,
-          )
-        : null;
-      const targetEntity = relation
-        ? this.findConfirmedEntityByName(
-            relation.targetEntityName,
-            input.confirmedEntities,
-          )
-        : null;
-      const relationship = relation
-        ? {
-            relationshipId:
-              sourceEntity && targetEntity
-                ? ((
-                    await this.prisma.relationship.findFirst({
-                      where: {
-                        projectId: input.projectId,
-                        sourceEntityId: sourceEntity.id,
-                        targetEntityId: targetEntity.id,
-                        relationType: toRelationType(relation.relationType),
-                      },
-                      select: { id: true },
-                    })
-                  )?.id ?? null)
-                : null,
-            sourceEntityId: sourceEntity?.id ?? null,
-            sourceEntityName: relation.sourceEntityName,
-            targetEntityId: targetEntity?.id ?? null,
-            targetEntityName: relation.targetEntityName,
-            relationType: relation.relationType,
-          }
-        : null;
-      alerts.set(fingerprint, {
-        projectId: input.projectId,
-        sceneId: input.sceneId,
-        sourceChunkId: input.chunk.id,
-        sourceChunkHash: input.chunk.contentHash,
-        fingerprint,
-        entityId: entity?.id ?? null,
-        entityName,
-        field,
-        currentValue,
-        observedValue,
-        explanation,
-        evidence,
-        confidence: this.normalizeConfidence(inconsistency.confidenceScore),
-        severity: this.toAuditSeverity(inconsistency.severity),
-        ruleCode: inconsistency.ruleCode,
-        category: this.toAuditCategory(inconsistency.ruleCode),
-        relationship,
-      });
-    }
-
+    await forEachSequentially(input.inconsistencies ?? [], (inconsistency) =>
+      this.processInconsistencyCandidate({
+        ...input,
+        inconsistency,
+        activeFingerprints,
+        alerts,
+      }),
+    );
     await Promise.all(
       [...alerts.values()].map((alert) =>
         this.auditService.createEntityContinuityAlert(alert),
       ),
     );
-
     await this.auditService.obsoleteAlertsForChunk({
       sceneId: input.sceneId,
       sourceChunkId: input.chunk.id,
       activeFingerprints,
     });
+  }
+
+  private async processInconsistencyCandidate(input: {
+    projectId: string;
+    sceneId: string;
+    chunk: ChunkRow;
+    confirmedEntities: ConfirmedEntityLike[];
+    inconsistency: ExtractedInconsistency;
+    activeFingerprints: Set<string>;
+    alerts: Map<
+      string,
+      Parameters<AuditService['createEntityContinuityAlert']>[0]
+    >;
+  }): Promise<void> {
+    const { inconsistency } = input;
+    const entity = this.findConfirmedEntityByName(
+      inconsistency.entityName,
+      input.confirmedEntities,
+    );
+    const field = inconsistency.field?.trim();
+    const currentValue = inconsistency.currentValue?.trim();
+    const observedValue = inconsistency.observedValue?.trim();
+    const explanation = inconsistency.explanation?.trim();
+    const evidence = [...new Set(inconsistency.evidence ?? [])]
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const entityName =
+      entity?.canonicalName ??
+      inconsistency.entityName?.trim() ??
+      inconsistency.relationship?.sourceEntityName?.trim();
+    if (!entityName || !field || !currentValue || !observedValue) {
+      return;
+    }
+    if (!explanation || evidence.length === 0) {
+      return;
+    }
+
+    const fingerprint = this.createInconsistencyFingerprint({
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      chunkHash: input.chunk.contentHash ?? '',
+      entityId:
+        entity?.id ?? `unresolved:${this.resolution.normalize(entityName)}`,
+      ruleCode: inconsistency.ruleCode,
+      field,
+      currentValue,
+      observedValue,
+    });
+    input.activeFingerprints.add(fingerprint);
+    const relationship = await this.resolveInconsistencyRelationship(
+      inconsistency.relationship,
+      input.projectId,
+      input.confirmedEntities,
+    );
+    input.alerts.set(fingerprint, {
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      sourceChunkId: input.chunk.id,
+      sourceChunkHash: input.chunk.contentHash,
+      fingerprint,
+      entityId: entity?.id ?? null,
+      entityName,
+      field,
+      currentValue,
+      observedValue,
+      explanation,
+      evidence,
+      confidence: this.normalizeConfidence(inconsistency.confidenceScore),
+      severity: this.toAuditSeverity(inconsistency.severity),
+      ruleCode: inconsistency.ruleCode,
+      category: this.toAuditCategory(inconsistency.ruleCode),
+      relationship,
+    });
+  }
+
+  private async resolveInconsistencyRelationship(
+    relation: ExtractedInconsistency['relationship'],
+    projectId: string,
+    entities: ConfirmedEntityLike[],
+  ): Promise<{
+    relationshipId: string | null;
+    sourceEntityId: string | null;
+    sourceEntityName: string;
+    targetEntityId: string | null;
+    targetEntityName: string;
+    relationType: string;
+  } | null> {
+    if (!relation) {
+      return null;
+    }
+    const sourceEntity = this.findConfirmedEntityByName(
+      relation.sourceEntityName,
+      entities,
+    );
+    const targetEntity = this.findConfirmedEntityByName(
+      relation.targetEntityName,
+      entities,
+    );
+    let relationshipId: string | null = null;
+    if (sourceEntity && targetEntity) {
+      const existing = await this.prisma.relationship.findFirst({
+        where: {
+          projectId,
+          sourceEntityId: sourceEntity.id,
+          targetEntityId: targetEntity.id,
+          relationType: toRelationType(relation.relationType),
+        },
+        select: { id: true },
+      });
+      relationshipId = existing?.id ?? null;
+    }
+    return {
+      relationshipId,
+      sourceEntityId: sourceEntity?.id ?? null,
+      sourceEntityName: relation.sourceEntityName,
+      targetEntityId: targetEntity?.id ?? null,
+      targetEntityName: relation.targetEntityName,
+      relationType: relation.relationType,
+    };
   }
 
   private async processStateChangeCandidates(input: {
@@ -1327,7 +1412,7 @@ export class EntityExtractionPipelineService {
     temporalSnapshot: TemporalKnowledgeSnapshot | null;
   }): Promise<void> {
     let changeIndex = 0;
-    for (const change of input.stateChanges ?? []) {
+    await forEachSequentially(input.stateChanges ?? [], async (change) => {
       const narrativeOrder =
         Math.max(0, input.chunk.chunkIndex) * 1000 + changeIndex;
       changeIndex += 1;
@@ -1341,7 +1426,7 @@ export class EntityExtractionPipelineService {
         .map((value) => value.trim())
         .filter(Boolean);
       if (!entity || !attributeKey || !toValue || evidence.length === 0) {
-        continue;
+        return;
       }
       const currentState = input.temporalSnapshot?.activeStates.find(
         (state) =>
@@ -1364,7 +1449,7 @@ export class EntityExtractionPipelineService {
         sequenceKind:
           change.sequenceKind ?? StateProposalSequenceKind.UNCERTAIN,
       });
-    }
+    });
   }
 
   private findConfirmedEntityByName(

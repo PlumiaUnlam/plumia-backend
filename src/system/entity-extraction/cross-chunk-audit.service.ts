@@ -7,6 +7,7 @@ import { TemporalStateService } from '../../knowledge/services/temporal-state.se
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntityExtractionClient } from './entity-extraction.client';
 import { EntityResolutionService } from './entity-resolution.service';
+import { forEachSequentially } from './for-each-sequentially';
 import type {
   ContinuityCheckpointClaim,
   ExtractedContinuityCheckpoint,
@@ -39,6 +40,11 @@ interface ContinuityScene {
     book: { sortKey: string };
   };
   chunks: AuditChunk[];
+}
+
+interface ContinuityResumePoint {
+  startIndex: number;
+  claims: ContinuityCheckpointClaim[];
 }
 
 const MAX_SCENE_GROUP_CHUNKS = 5;
@@ -87,6 +93,36 @@ export class CrossChunkAuditService {
       return;
     }
 
+    const projectId = scene.chapter.book.projectId;
+    const data = await this.loadSceneAuditData({
+      sceneId: input.sceneId,
+      projectId,
+    });
+    await this.auditSceneByMode({
+      sceneId: scene.id,
+      projectId,
+      userId: input.userId,
+      auditMode: data.auditMode,
+      chunks: data.chunks,
+      knownEntities: data.knownEntities,
+      snapshot: data.snapshot,
+      ...(input.onlyDirtyChunkIds
+        ? { onlyDirtyChunkIds: input.onlyDirtyChunkIds }
+        : {}),
+    });
+  }
+
+  private async loadSceneAuditData(input: {
+    sceneId: string;
+    projectId: string;
+  }): Promise<{
+    chunks: AuditChunk[];
+    knownEntities: KnownEntity[];
+    snapshot: Awaited<
+      ReturnType<TemporalKnowledgeSnapshotService['getSnapshot']>
+    >;
+    auditMode: CrossChunkAuditMode;
+  }> {
     const [chunks, entities, pendingEntityProposals, snapshot, settings] =
       await Promise.all([
         this.prisma.chunk.findMany({
@@ -100,12 +136,12 @@ export class CrossChunkAuditService {
           orderBy: { chunkIndex: 'asc' },
         }),
         this.prisma.entity.findMany({
-          where: { projectId: scene.chapter.book.projectId, deletedAt: null },
+          where: { projectId: input.projectId, deletedAt: null },
           select: entitySelect,
         }),
         this.prisma.entityProposal.findMany({
           where: {
-            projectId: scene.chapter.book.projectId,
+            projectId: input.projectId,
             sceneId: input.sceneId,
             status: 'PENDING',
           },
@@ -113,161 +149,248 @@ export class CrossChunkAuditService {
         }),
         this.temporalSnapshotService.getSnapshot(input.sceneId),
         this.prisma.projectKnowledgeReviewSettings?.findUnique?.({
-          where: { projectId: scene.chapter.book.projectId },
+          where: { projectId: input.projectId },
           select: { crossChunkAuditMode: true },
         }),
       ]);
+    return {
+      chunks,
+      knownEntities: this.combineKnownEntities(
+        entities,
+        pendingEntityProposals,
+      ),
+      snapshot,
+      auditMode:
+        settings?.crossChunkAuditMode ?? CrossChunkAuditMode.ADJACENT_CHUNKS,
+    };
+  }
 
-    const confirmedEntities: KnownEntity[] = entities.map((entity) => ({
+  private combineKnownEntities(
+    entities: Prisma.EntityGetPayload<{ select: typeof entitySelect }>[],
+    pendingProposals: Array<{
+      entityId: string | null;
+      proposedData: Prisma.JsonValue;
+    }>,
+  ): KnownEntity[] {
+    const knownEntities: KnownEntity[] = entities.map((entity) => ({
       ...entity,
       attributes: this.toAttributes(entity.attributes),
     }));
-    const allKnownEntities = [...confirmedEntities];
-    for (const proposal of pendingEntityProposals) {
+    for (const proposal of pendingProposals) {
       const candidate = this.toProposedEntity(
         proposal.proposedData,
         proposal.entityId,
       );
-      if (
-        candidate &&
-        !allKnownEntities.some(
-          (entity) =>
-            this.normalize(entity.canonicalName) ===
-            this.normalize(candidate.canonicalName),
-        )
-      ) {
-        allKnownEntities.push(candidate);
+      if (!candidate) {
+        continue;
+      }
+      const alreadyKnown = knownEntities.some(
+        (entity) =>
+          this.normalize(entity.canonicalName) ===
+          this.normalize(candidate.canonicalName),
+      );
+      if (!alreadyKnown) {
+        knownEntities.push(candidate);
       }
     }
-    const activeFingerprints = new Set<string>();
+    return knownEntities;
+  }
 
-    const auditMode =
-      settings?.crossChunkAuditMode ?? CrossChunkAuditMode.ADJACENT_CHUNKS;
-    if (auditMode === CrossChunkAuditMode.DISABLED) {
+  private async auditSceneByMode(input: {
+    sceneId: string;
+    projectId: string;
+    userId: string;
+    auditMode: CrossChunkAuditMode;
+    chunks: AuditChunk[];
+    knownEntities: KnownEntity[];
+    snapshot: Awaited<
+      ReturnType<TemporalKnowledgeSnapshotService['getSnapshot']>
+    >;
+    onlyDirtyChunkIds?: ReadonlySet<string>;
+  }): Promise<void> {
+    if (input.auditMode === CrossChunkAuditMode.DISABLED) {
       await this.auditService.obsoleteCrossChunkAlertsForProject({
-        projectId: scene.chapter.book.projectId,
+        projectId: input.projectId,
       });
       return;
     }
-    if (auditMode === CrossChunkAuditMode.PROJECT_SUMMARY) {
+    if (input.auditMode === CrossChunkAuditMode.PROJECT_SUMMARY) {
       await this.auditProjectContinuity({
-        projectId: scene.chapter.book.projectId,
-        startSceneId: scene.id,
+        projectId: input.projectId,
+        startSceneId: input.sceneId,
         userId: input.userId,
-        knownEntities: allKnownEntities,
+        knownEntities: input.knownEntities,
       });
       return;
     }
+
     await this.auditService.obsoleteCrossChunkAlertsForProject({
-      projectId: scene.chapter.book.projectId,
+      projectId: input.projectId,
       ruleCodes: ['CROSS_SCENE_CONTRADICTION'],
     });
-    if (auditMode === CrossChunkAuditMode.SCENE_GROUPED) {
+    if (input.auditMode === CrossChunkAuditMode.SCENE_GROUPED) {
+      const activeFingerprints = new Set<string>();
       await this.auditSceneGroups({
         sceneId: input.sceneId,
-        projectId: scene.chapter.book.projectId,
+        projectId: input.projectId,
         userId: input.userId,
-        chunks,
-        knownEntities: allKnownEntities,
-        snapshot,
+        chunks: input.chunks,
+        knownEntities: input.knownEntities,
+        snapshot: input.snapshot,
         ...(input.onlyDirtyChunkIds
           ? { onlyDirtyChunkIds: input.onlyDirtyChunkIds }
           : {}),
         activeFingerprints,
       });
-      if (input.onlyDirtyChunkIds) {
-        await this.auditService.obsoleteCrossChunkAlertsForChunks({
-          sceneId: input.sceneId,
-          sourceChunkIds: input.onlyDirtyChunkIds,
-          activeFingerprints,
-        });
-      } else {
-        await this.auditService.obsoleteRuleAlertsForScene({
-          sceneId: input.sceneId,
-          ruleCodes: ['INTRA_SCENE_CONTRADICTION'],
-          activeFingerprints,
-        });
-      }
+      await this.reconcileSceneAuditAlerts({
+        sceneId: input.sceneId,
+        activeFingerprints,
+        ...(input.onlyDirtyChunkIds
+          ? { onlyDirtyChunkIds: input.onlyDirtyChunkIds }
+          : {}),
+      });
       return;
     }
 
-    for (let index = 0; index < chunks.length - 1; index += 1) {
-      const first = chunks[index] as AuditChunk;
-      const second = chunks[index + 1] as AuditChunk;
-      if (
-        input.onlyDirtyChunkIds &&
-        !input.onlyDirtyChunkIds.has(first.id) &&
-        !input.onlyDirtyChunkIds.has(second.id)
-      ) {
-        continue;
-      }
+    const activeFingerprints = new Set<string>();
+    await this.auditAdjacentChunks({ ...input, activeFingerprints });
+    await this.reconcileSceneAuditAlerts({ ...input, activeFingerprints });
+  }
 
-      const sharedEntities = this.findSharedEntities(
-        first.content,
-        second.content,
-        allKnownEntities,
-      );
-      const contradictions = await this.extractionClient.auditAdjacentChunks({
-        userId: input.userId,
-        firstText: first.content.trim(),
-        secondText: second.content.trim(),
-        knownEntities: sharedEntities.map((entity) => ({
-          canonicalName: entity.canonicalName,
-          aliases: entity.aliases,
-          type: entity.type,
-          description: entity.description,
-          attributes: entity.attributes,
-        })),
-        ...(snapshot
-          ? {
-              temporalContext: this.temporalSnapshotService.toExtractionContext(
-                snapshot,
-                `${first.content}\n${second.content}`,
-              ),
-            }
-          : {}),
-      });
+  private async auditAdjacentChunks(input: {
+    sceneId: string;
+    projectId: string;
+    userId: string;
+    chunks: AuditChunk[];
+    knownEntities: KnownEntity[];
+    snapshot: Awaited<
+      ReturnType<TemporalKnowledgeSnapshotService['getSnapshot']>
+    >;
+    onlyDirtyChunkIds?: ReadonlySet<string>;
+    activeFingerprints: Set<string>;
+  }): Promise<void> {
+    const pairIndexes = Array.from(
+      { length: Math.max(0, input.chunks.length - 1) },
+      (_, index) => index,
+    );
+    await forEachSequentially(pairIndexes, (index) =>
+      this.auditAdjacentPair({
+        ...input,
+        first: input.chunks[index] as AuditChunk,
+        second: input.chunks[index + 1] as AuditChunk,
+      }),
+    );
+  }
 
-      for (const contradiction of contradictions) {
-        if (contradiction.kind === 'UNCERTAIN') {
-          continue;
-        }
-        if (contradiction.kind === 'TRANSITION') {
-          await this.persistTransition({
-            userId: input.userId,
-            projectId: scene.chapter.book.projectId,
-            sceneId: input.sceneId,
-            second,
-            transition: contradiction,
-            knownEntities: sharedEntities,
-          });
-          continue;
-        }
-        await this.persistContradiction({
-          projectId: scene.chapter.book.projectId,
-          sceneId: input.sceneId,
-          first,
-          second,
-          contradiction,
-          knownEntities: sharedEntities,
-          activeFingerprints,
-        });
-      }
+  private async auditAdjacentPair(input: {
+    sceneId: string;
+    projectId: string;
+    userId: string;
+    first: AuditChunk;
+    second: AuditChunk;
+    knownEntities: KnownEntity[];
+    snapshot: Awaited<
+      ReturnType<TemporalKnowledgeSnapshotService['getSnapshot']>
+    >;
+    onlyDirtyChunkIds?: ReadonlySet<string>;
+    activeFingerprints: Set<string>;
+  }): Promise<void> {
+    if (
+      input.onlyDirtyChunkIds &&
+      !input.onlyDirtyChunkIds.has(input.first.id) &&
+      !input.onlyDirtyChunkIds.has(input.second.id)
+    ) {
+      return;
     }
+    const sharedEntities = this.findSharedEntities(
+      input.first.content,
+      input.second.content,
+      input.knownEntities,
+    );
+    const contradictions = await this.extractionClient.auditAdjacentChunks({
+      userId: input.userId,
+      firstText: input.first.content.trim(),
+      secondText: input.second.content.trim(),
+      knownEntities: sharedEntities.map((entity) => ({
+        canonicalName: entity.canonicalName,
+        aliases: entity.aliases,
+        type: entity.type,
+        description: entity.description,
+        attributes: entity.attributes,
+      })),
+      ...(input.snapshot
+        ? {
+            temporalContext: this.temporalSnapshotService.toExtractionContext(
+              input.snapshot,
+              `${input.first.content}\n${input.second.content}`,
+            ),
+          }
+        : {}),
+    });
+    await forEachSequentially(contradictions, (contradiction) =>
+      this.persistAdjacentContradiction({
+        ...input,
+        sharedEntities,
+        contradiction,
+      }),
+    );
+  }
 
+  private async persistAdjacentContradiction(input: {
+    sceneId: string;
+    projectId: string;
+    userId: string;
+    first: AuditChunk;
+    second: AuditChunk;
+    sharedEntities: KnownEntity[];
+    activeFingerprints: Set<string>;
+    contradiction: Awaited<
+      ReturnType<EntityExtractionClient['auditAdjacentChunks']>
+    >[number];
+  }): Promise<void> {
+    if (input.contradiction.kind === 'UNCERTAIN') {
+      return;
+    }
+    if (input.contradiction.kind === 'TRANSITION') {
+      await this.persistTransition({
+        userId: input.userId,
+        projectId: input.projectId,
+        sceneId: input.sceneId,
+        second: input.second,
+        transition: input.contradiction,
+        knownEntities: input.sharedEntities,
+      });
+      return;
+    }
+    await this.persistContradiction({
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      first: input.first,
+      second: input.second,
+      contradiction: input.contradiction,
+      knownEntities: input.sharedEntities,
+      activeFingerprints: input.activeFingerprints,
+    });
+  }
+
+  private async reconcileSceneAuditAlerts(input: {
+    sceneId: string;
+    activeFingerprints: Set<string>;
+    onlyDirtyChunkIds?: ReadonlySet<string>;
+  }): Promise<void> {
     if (input.onlyDirtyChunkIds) {
       await this.auditService.obsoleteCrossChunkAlertsForChunks({
         sceneId: input.sceneId,
         sourceChunkIds: input.onlyDirtyChunkIds,
-        activeFingerprints,
+        activeFingerprints: input.activeFingerprints,
       });
-    } else {
-      await this.auditService.obsoleteRuleAlertsForScene({
-        sceneId: input.sceneId,
-        ruleCodes: ['INTRA_SCENE_CONTRADICTION'],
-        activeFingerprints,
-      });
+      return;
     }
+    await this.auditService.obsoleteRuleAlertsForScene({
+      sceneId: input.sceneId,
+      ruleCodes: ['INTRA_SCENE_CONTRADICTION'],
+      activeFingerprints: input.activeFingerprints,
+    });
   }
 
   private async auditSceneGroups(input: {
@@ -286,76 +409,130 @@ export class CrossChunkAuditService {
       (left, right) => left.chunkIndex - right.chunkIndex,
     );
     const stride = MAX_SCENE_GROUP_CHUNKS - 1;
-    for (let start = 0; start < chunks.length; start += stride) {
-      const group = chunks.slice(start, start + MAX_SCENE_GROUP_CHUNKS);
-      if (group.length < 2) {
-        break;
-      }
-      if (
-        input.onlyDirtyChunkIds &&
-        !group.some((chunk) => input.onlyDirtyChunkIds!.has(chunk.id))
-      ) {
-        continue;
-      }
-      const nonEmpty = group.filter((chunk) => chunk.content.trim().length > 0);
-      if (nonEmpty.length < 2) {
-        continue;
-      }
-      const groupText = nonEmpty.map((chunk) => chunk.content).join('\n');
-      const groupEntities = input.knownEntities.filter((entity) =>
-        [entity.canonicalName, ...entity.aliases].some((label) =>
-          this.normalize(groupText).includes(this.normalize(label)),
-        ),
-      );
-      const contradictions = await this.extractionClient.auditSceneChunkGroup({
-        userId: input.userId,
-        chunks: nonEmpty.map((chunk) => ({
-          chunkIndex: chunk.chunkIndex,
-          text: chunk.content.trim(),
-        })),
-        knownEntities: groupEntities.map((entity) => ({
-          canonicalName: entity.canonicalName,
-          aliases: entity.aliases,
-          type: entity.type,
-          description: entity.description,
-          attributes: entity.attributes,
-        })),
-        ...(input.snapshot
-          ? {
-              temporalContext: this.temporalSnapshotService.toExtractionContext(
-                input.snapshot,
-                groupText,
-              ),
-            }
-          : {}),
-      });
-      for (const contradiction of contradictions) {
-        if (contradiction.kind === 'UNCERTAIN') {
-          continue;
-        }
-        const first = nonEmpty.find(
-          (chunk) => chunk.chunkIndex === contradiction.firstChunkIndex,
-        );
-        const second = nonEmpty.find(
-          (chunk) => chunk.chunkIndex === contradiction.secondChunkIndex,
-        );
-        if (!first || !second || first.id === second.id) {
-          continue;
-        }
-        await this.persistContradiction({
-          projectId: input.projectId,
-          sceneId: input.sceneId,
-          first,
-          second,
-          contradiction,
-          knownEntities: input.knownEntities,
-          activeFingerprints: input.activeFingerprints,
-        });
-      }
-      if (start + MAX_SCENE_GROUP_CHUNKS >= chunks.length) {
-        break;
-      }
+    const groupStarts = Array.from(
+      { length: Math.ceil(Math.max(0, chunks.length - 1) / stride) },
+      (_, index) => index * stride,
+    );
+    await forEachSequentially(groupStarts, (start) =>
+      this.auditSceneGroup({ ...input, chunks }, start),
+    );
+  }
+
+  private async auditSceneGroup(
+    input: {
+      sceneId: string;
+      projectId: string;
+      userId: string;
+      chunks: AuditChunk[];
+      knownEntities: KnownEntity[];
+      snapshot: Awaited<
+        ReturnType<TemporalKnowledgeSnapshotService['getSnapshot']>
+      >;
+      onlyDirtyChunkIds?: ReadonlySet<string>;
+      activeFingerprints: Set<string>;
+    },
+    start: number,
+  ): Promise<void> {
+    const group = input.chunks.slice(start, start + MAX_SCENE_GROUP_CHUNKS);
+    if (!this.shouldAuditSceneGroup(group, input.onlyDirtyChunkIds)) {
+      return;
     }
+    const nonEmpty = group.filter((chunk) => chunk.content.trim().length > 0);
+    if (nonEmpty.length < 2) {
+      return;
+    }
+    const groupText = nonEmpty.map((chunk) => chunk.content).join('\n');
+    const groupEntities = this.findEntitiesInText(
+      groupText,
+      input.knownEntities,
+    );
+    const contradictions = await this.extractionClient.auditSceneChunkGroup({
+      userId: input.userId,
+      chunks: nonEmpty.map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        text: chunk.content.trim(),
+      })),
+      knownEntities: groupEntities.map((entity) => ({
+        canonicalName: entity.canonicalName,
+        aliases: entity.aliases,
+        type: entity.type,
+        description: entity.description,
+        attributes: entity.attributes,
+      })),
+      ...(input.snapshot
+        ? {
+            temporalContext: this.temporalSnapshotService.toExtractionContext(
+              input.snapshot,
+              groupText,
+            ),
+          }
+        : {}),
+    });
+    await forEachSequentially(contradictions, (contradiction) =>
+      this.persistSceneGroupContradiction({
+        ...input,
+        nonEmpty,
+        contradiction,
+      }),
+    );
+  }
+
+  private shouldAuditSceneGroup(
+    group: AuditChunk[],
+    onlyDirtyChunkIds?: ReadonlySet<string>,
+  ): boolean {
+    if (group.length < 2) {
+      return false;
+    }
+    return (
+      !onlyDirtyChunkIds ||
+      group.some((chunk) => onlyDirtyChunkIds.has(chunk.id))
+    );
+  }
+
+  private findEntitiesInText(
+    text: string,
+    entities: KnownEntity[],
+  ): KnownEntity[] {
+    const normalizedText = this.normalize(text);
+    return entities.filter((entity) =>
+      [entity.canonicalName, ...entity.aliases].some((label) =>
+        normalizedText.includes(this.normalize(label)),
+      ),
+    );
+  }
+
+  private async persistSceneGroupContradiction(input: {
+    sceneId: string;
+    projectId: string;
+    nonEmpty: AuditChunk[];
+    knownEntities: KnownEntity[];
+    activeFingerprints: Set<string>;
+    contradiction: Awaited<
+      ReturnType<EntityExtractionClient['auditSceneChunkGroup']>
+    >[number];
+  }): Promise<void> {
+    if (input.contradiction.kind === 'UNCERTAIN') {
+      return;
+    }
+    const first = input.nonEmpty.find(
+      (chunk) => chunk.chunkIndex === input.contradiction.firstChunkIndex,
+    );
+    const second = input.nonEmpty.find(
+      (chunk) => chunk.chunkIndex === input.contradiction.secondChunkIndex,
+    );
+    if (!first || !second || first.id === second.id) {
+      return;
+    }
+    await this.persistContradiction({
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      first,
+      second,
+      contradiction: input.contradiction,
+      knownEntities: input.knownEntities,
+      activeFingerprints: input.activeFingerprints,
+    });
   }
 
   private async auditProjectContinuity(input: {
@@ -428,197 +605,305 @@ export class CrossChunkAuditService {
         (scenePositions.get(right.sceneId) ?? -1) -
         (scenePositions.get(left.sceneId) ?? -1),
     );
-    let startIndex = 0;
-    let claims: ContinuityCheckpointClaim[] = [];
-    for (const checkpoint of checkpointCandidates) {
-      const checkpointScene = scenes.find(
-        (scene) => scene.id === checkpoint.sceneId,
-      );
-      if (!checkpointScene) {
-        continue;
-      }
-      const storedClaims = this.parseContinuityClaims(checkpoint.claims);
-      const currentClaims = await this.loadCurrentClaims(storedClaims);
-      const checkpointIsCurrent =
-        this.hashSceneChunks(checkpointScene.chunks) ===
-          checkpoint.sourceHash && currentClaims.length === storedClaims.length;
-      if (checkpointIsCurrent) {
-        claims = currentClaims;
-        startIndex = (scenePositions.get(checkpoint.sceneId) ?? -1) + 1;
-        break;
-      }
-      await this.prisma.projectContinuityCheckpoint.updateMany({
-        where: {
-          projectId: input.projectId,
-          sceneId: checkpoint.sceneId,
-          isValid: true,
-        },
-        data: { isValid: false },
-      });
-    }
+    const resumePoint = await this.resolveContinuityResumePoint({
+      projectId: input.projectId,
+      scenes,
+      scenePositions,
+      checkpointCandidates,
+    });
+    let startIndex = resumePoint.startIndex;
 
     if (startIndex > targetIndex) {
       startIndex = targetIndex;
     }
+    let claims = resumePoint.claims;
     const affectedScenes = scenes.slice(startIndex);
     const affectedChunkIds = new Set(
       affectedScenes.flatMap((scene) => scene.chunks.map((chunk) => chunk.id)),
     );
     const activeFingerprints = new Set<string>();
 
-    for (const scene of affectedScenes) {
-      const currentChunks = [...scene.chunks].sort(
-        (left, right) => left.chunkIndex - right.chunkIndex,
-      );
-      const nonEmpty = currentChunks.filter((chunk) => chunk.content.trim());
-      let result: ExtractedContinuityCheckpoint = {
-        claims: [],
-        contradictions: [],
-      };
-      if (nonEmpty.length > 0) {
-        const snapshot = await this.temporalSnapshotService.getSnapshot(
-          scene.id,
-        );
-        result = await this.extractionClient.auditSceneAgainstContinuityClaims({
-          userId: input.userId,
-          chunks: nonEmpty.map((chunk) => ({
-            chunkIndex: chunk.chunkIndex,
-            text: chunk.content.trim(),
-          })),
-          previousClaims: claims,
-          knownEntities: input.knownEntities.map((entity) => ({
-            canonicalName: entity.canonicalName,
-            aliases: entity.aliases,
-            type: entity.type,
-            description: entity.description,
-            attributes: entity.attributes,
-          })),
-          ...(snapshot
-            ? {
-                temporalContext:
-                  this.temporalSnapshotService.toExtractionContext(
-                    snapshot,
-                    nonEmpty.map((chunk) => chunk.content).join('\n'),
-                  ),
-              }
-            : {}),
-        });
+    let stopAfterCurrentScene = false;
+    await forEachSequentially(affectedScenes, async (scene) => {
+      if (stopAfterCurrentScene) {
+        return;
       }
-
-      const chunksByIndex = new Map(
-        currentChunks.map((chunk) => [chunk.chunkIndex, chunk] as const),
-      );
-      for (const contradiction of result.contradictions) {
-        const previous = claims[contradiction.previousClaimIndex];
-        const current = chunksByIndex.get(contradiction.currentChunkIndex);
-        const evidence = contradiction.currentEvidence.trim();
-        if (
-          !previous ||
-          !current ||
-          !evidence ||
-          !current.content.includes(evidence) ||
-          previous.value.trim() === contradiction.currentValue.trim()
-        ) {
-          continue;
-        }
-        const extracted: ExtractedCrossChunkInconsistency = {
-          entityName: contradiction.entityName,
-          field: contradiction.field,
-          firstValue: previous.value,
-          secondValue: contradiction.currentValue,
-          explanation: contradiction.explanation,
-          severity: contradiction.severity,
-          confidenceScore: contradiction.confidenceScore,
-          firstEvidence: [previous.evidence],
-          secondEvidence: [evidence],
-        };
-        await this.persistContradiction({
-          projectId: input.projectId,
-          sceneId: scene.id,
-          first: {
-            id: previous.chunkId,
-            chunkIndex: previous.chunkIndex,
-            content: await this.getChunkContent(previous.chunkId),
-            contentHash: previous.chunkHash,
-          },
-          second: current,
-          contradiction: extracted,
-          knownEntities: input.knownEntities,
-          activeFingerprints,
-          ruleCode: 'CROSS_SCENE_CONTRADICTION',
-          title: 'Posible contradicción con una escena anterior',
-          detectionLevel: AuditLevel.INTER_SCENE,
-          firstSceneId: previous.sceneId,
-          secondSceneId: scene.id,
-        });
-      }
-
-      const verifiedClaims = result.claims.flatMap((claim) => {
-        const source = chunksByIndex.get(claim.chunkIndex);
-        const evidence = claim.evidence.trim();
-        if (
-          !source ||
-          !source.contentHash ||
-          !claim.entityName.trim() ||
-          !claim.field.trim() ||
-          !claim.value.trim() ||
-          !evidence ||
-          !source.content.includes(evidence)
-        ) {
-          return [];
-        }
-        return [
-          {
-            entityName: claim.entityName.trim(),
-            field: claim.field.trim(),
-            value: claim.value.trim(),
-            sceneId: scene.id,
-            chunkId: source.id,
-            chunkHash: source.contentHash,
-            chunkIndex: source.chunkIndex,
-            evidence,
-          },
-        ];
+      const result = await this.processContinuityScene({
+        projectId: input.projectId,
+        userId: input.userId,
+        scene,
+        knownEntities: input.knownEntities,
+        claims,
+        activeFingerprints,
       });
-      claims = this.mergeContinuityClaims(claims, verifiedClaims);
-      const sourceHash = this.hashSceneChunks(currentChunks);
-      const latestChunks = await this.prisma.chunk.findMany({
-        where: { sceneId: scene.id },
-        select: {
-          id: true,
-          chunkIndex: true,
-          content: true,
-          contentHash: true,
-        },
-        orderBy: { chunkIndex: 'asc' },
-      });
-      if (this.hashSceneChunks(latestChunks) !== sourceHash) {
-        break;
-      }
-      await this.prisma.projectContinuityCheckpoint.upsert({
-        where: {
-          projectId_sceneId: { projectId: input.projectId, sceneId: scene.id },
-        },
-        create: {
-          projectId: input.projectId,
-          sceneId: scene.id,
-          sourceHash,
-          claims: claims as unknown as Prisma.InputJsonValue,
-          isValid: true,
-        },
-        update: {
-          sourceHash,
-          claims: claims as unknown as Prisma.InputJsonValue,
-          isValid: true,
-        },
-      });
-    }
+      claims = result.claims;
+      stopAfterCurrentScene = !result.isCurrent;
+    });
 
     await this.auditService.obsoleteCrossChunkAlertsForProject({
       projectId: input.projectId,
       affectedChunkIds,
       activeFingerprints,
     });
+  }
+
+  private async processContinuityScene(input: {
+    projectId: string;
+    userId: string;
+    scene: ContinuityScene;
+    knownEntities: KnownEntity[];
+    claims: ContinuityCheckpointClaim[];
+    activeFingerprints: Set<string>;
+  }): Promise<{ claims: ContinuityCheckpointClaim[]; isCurrent: boolean }> {
+    const chunks = [...input.scene.chunks].sort(
+      (left, right) => left.chunkIndex - right.chunkIndex,
+    );
+    const result = await this.extractContinuityScene(input, chunks);
+    const chunksByIndex = new Map(
+      chunks.map((chunk) => [chunk.chunkIndex, chunk] as const),
+    );
+    await forEachSequentially(result.contradictions, (contradiction) =>
+      this.persistContinuityContradiction({
+        ...input,
+        chunksByIndex,
+        contradiction,
+      }),
+    );
+    const verifiedClaims = this.toVerifiedContinuityClaims(
+      input.scene.id,
+      result.claims,
+      chunksByIndex,
+    );
+    const claims = this.mergeContinuityClaims(input.claims, verifiedClaims);
+    const isCurrent = await this.persistContinuityCheckpoint(
+      input.projectId,
+      input.scene,
+      chunks,
+      claims,
+    );
+    return { claims, isCurrent };
+  }
+
+  private async extractContinuityScene(
+    input: {
+      userId: string;
+      scene: ContinuityScene;
+      knownEntities: KnownEntity[];
+      claims: ContinuityCheckpointClaim[];
+    },
+    chunks: AuditChunk[],
+  ): Promise<ExtractedContinuityCheckpoint> {
+    const nonEmptyChunks = chunks.filter((chunk) => chunk.content.trim());
+    if (nonEmptyChunks.length === 0) {
+      return { claims: [], contradictions: [] };
+    }
+    const snapshot = await this.temporalSnapshotService.getSnapshot(
+      input.scene.id,
+    );
+    return this.extractionClient.auditSceneAgainstContinuityClaims({
+      userId: input.userId,
+      chunks: nonEmptyChunks.map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        text: chunk.content.trim(),
+      })),
+      previousClaims: input.claims,
+      knownEntities: input.knownEntities.map((entity) => ({
+        canonicalName: entity.canonicalName,
+        aliases: entity.aliases,
+        type: entity.type,
+        description: entity.description,
+        attributes: entity.attributes,
+      })),
+      ...(snapshot
+        ? {
+            temporalContext: this.temporalSnapshotService.toExtractionContext(
+              snapshot,
+              nonEmptyChunks.map((chunk) => chunk.content).join('\n'),
+            ),
+          }
+        : {}),
+    });
+  }
+
+  private async persistContinuityContradiction(input: {
+    projectId: string;
+    scene: ContinuityScene;
+    knownEntities: KnownEntity[];
+    activeFingerprints: Set<string>;
+    claims: ContinuityCheckpointClaim[];
+    chunksByIndex: Map<number, AuditChunk>;
+    contradiction: ExtractedContinuityCheckpoint['contradictions'][number];
+  }): Promise<void> {
+    const { contradiction } = input;
+    const previous = input.claims[contradiction.previousClaimIndex];
+    const current = input.chunksByIndex.get(contradiction.currentChunkIndex);
+    const evidence = contradiction.currentEvidence.trim();
+    if (!previous || !current || !evidence) {
+      return;
+    }
+    if (!current.content.includes(evidence)) {
+      return;
+    }
+    if (previous.value.trim() === contradiction.currentValue.trim()) {
+      return;
+    }
+
+    const extracted: ExtractedCrossChunkInconsistency = {
+      entityName: contradiction.entityName,
+      field: contradiction.field,
+      firstValue: previous.value,
+      secondValue: contradiction.currentValue,
+      explanation: contradiction.explanation,
+      severity: contradiction.severity,
+      confidenceScore: contradiction.confidenceScore,
+      firstEvidence: [previous.evidence],
+      secondEvidence: [evidence],
+    };
+    await this.persistContradiction({
+      projectId: input.projectId,
+      sceneId: input.scene.id,
+      first: {
+        id: previous.chunkId,
+        chunkIndex: previous.chunkIndex,
+        content: await this.getChunkContent(previous.chunkId),
+        contentHash: previous.chunkHash,
+      },
+      second: current,
+      contradiction: extracted,
+      knownEntities: input.knownEntities,
+      activeFingerprints: input.activeFingerprints,
+      ruleCode: 'CROSS_SCENE_CONTRADICTION',
+      title: 'Posible contradicción con una escena anterior',
+      detectionLevel: AuditLevel.INTER_SCENE,
+      firstSceneId: previous.sceneId,
+      secondSceneId: input.scene.id,
+    });
+  }
+
+  private toVerifiedContinuityClaims(
+    sceneId: string,
+    extractedClaims: ExtractedContinuityCheckpoint['claims'],
+    chunksByIndex: Map<number, AuditChunk>,
+  ): ContinuityCheckpointClaim[] {
+    return extractedClaims.flatMap((claim) => {
+      const source = chunksByIndex.get(claim.chunkIndex);
+      if (!source?.contentHash) {
+        return [];
+      }
+      const entityName = claim.entityName.trim();
+      const field = claim.field.trim();
+      const value = claim.value.trim();
+      const evidence = claim.evidence.trim();
+      if (
+        !entityName ||
+        !field ||
+        !value ||
+        !evidence ||
+        !source.content.includes(evidence)
+      ) {
+        return [];
+      }
+      return [
+        {
+          entityName,
+          field,
+          value,
+          sceneId,
+          chunkId: source.id,
+          chunkHash: source.contentHash,
+          chunkIndex: source.chunkIndex,
+          evidence,
+        },
+      ];
+    });
+  }
+
+  private async persistContinuityCheckpoint(
+    projectId: string,
+    scene: ContinuityScene,
+    chunks: AuditChunk[],
+    claims: ContinuityCheckpointClaim[],
+  ): Promise<boolean> {
+    const sourceHash = this.hashSceneChunks(chunks);
+    const latestChunks = await this.prisma.chunk.findMany({
+      where: { sceneId: scene.id },
+      select: {
+        id: true,
+        chunkIndex: true,
+        content: true,
+        contentHash: true,
+      },
+      orderBy: { chunkIndex: 'asc' },
+    });
+    if (this.hashSceneChunks(latestChunks) !== sourceHash) {
+      return false;
+    }
+    await this.prisma.projectContinuityCheckpoint.upsert({
+      where: { projectId_sceneId: { projectId, sceneId: scene.id } },
+      create: {
+        projectId,
+        sceneId: scene.id,
+        sourceHash,
+        claims: claims as unknown as Prisma.InputJsonValue,
+        isValid: true,
+      },
+      update: {
+        sourceHash,
+        claims: claims as unknown as Prisma.InputJsonValue,
+        isValid: true,
+      },
+    });
+    return true;
+  }
+
+  private async resolveContinuityResumePoint(input: {
+    projectId: string;
+    scenes: ContinuityScene[];
+    scenePositions: Map<string, number>;
+    checkpointCandidates: Array<{
+      sceneId: string;
+      sourceHash: string;
+      claims: Prisma.JsonValue;
+    }>;
+  }): Promise<ContinuityResumePoint> {
+    const resumePoint: ContinuityResumePoint = { startIndex: 0, claims: [] };
+    let checkpointFound = false;
+    await forEachSequentially(
+      input.checkpointCandidates,
+      async (checkpoint) => {
+        if (checkpointFound) {
+          return;
+        }
+        const checkpointScene = input.scenes.find(
+          (scene) => scene.id === checkpoint.sceneId,
+        );
+        if (!checkpointScene) {
+          return;
+        }
+        const storedClaims = this.parseContinuityClaims(checkpoint.claims);
+        const currentClaims = await this.loadCurrentClaims(storedClaims);
+        if (
+          this.hashSceneChunks(checkpointScene.chunks) ===
+            checkpoint.sourceHash &&
+          currentClaims.length === storedClaims.length
+        ) {
+          resumePoint.claims = currentClaims;
+          resumePoint.startIndex =
+            (input.scenePositions.get(checkpoint.sceneId) ?? -1) + 1;
+          checkpointFound = true;
+          return;
+        }
+        await this.prisma.projectContinuityCheckpoint.updateMany({
+          where: {
+            projectId: input.projectId,
+            sceneId: checkpoint.sceneId,
+            isValid: true,
+          },
+          data: { isValid: false },
+        });
+      },
+    );
+    return resumePoint;
   }
 
   private async getChunkContent(chunkId: string): Promise<string> {
@@ -667,9 +952,8 @@ export class CrossChunkAuditService {
     return claims.filter((claim) => {
       const source = chunksById.get(claim.chunkId);
       return Boolean(
-        source &&
-        source.contentHash === claim.chunkHash &&
-        source.content.includes(claim.evidence),
+        source?.contentHash === claim.chunkHash &&
+        source?.content.includes(claim.evidence) === true,
       );
     });
   }

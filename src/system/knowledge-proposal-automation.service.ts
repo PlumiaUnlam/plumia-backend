@@ -5,6 +5,7 @@ import {
   StateProposalSequenceKind,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { forEachSequentially } from './entity-extraction/for-each-sequentially';
 import { RelationshipProposalService } from '../knowledge/services/relationship-proposal.service';
 import { TemporalStateService } from '../knowledge/services/temporal-state.service';
 
@@ -189,12 +190,12 @@ export class KnowledgeProposalAutomationService {
     const eligible = [...groups.values()]
       .filter((group) => group.length === 1)
       .flat();
-    for (const proposal of eligible) {
+    await forEachSequentially(eligible, async (proposal) => {
       await this.relationshipProposals.acceptProposal(
         input.userId,
         proposal.id,
       );
-    }
+    });
   }
 
   private hasFreshEvidence(

@@ -45,6 +45,8 @@ export type InconsistencyRuleCode =
   | 'WORLDBUILDING_RULE'
   | 'INTRA_SCENE_CONTRADICTION';
 
+export type ExtractedCrossChunkSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
+
 export interface ExtractedCrossChunkInconsistency {
   kind?: 'TRANSITION' | 'CONTRADICTION' | 'UNCERTAIN';
   entityName: string;
@@ -52,7 +54,7 @@ export interface ExtractedCrossChunkInconsistency {
   firstValue: string;
   secondValue: string;
   explanation: string;
-  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  severity: ExtractedCrossChunkSeverity;
   confidenceScore: number;
   firstChunkIndex?: number;
   secondChunkIndex?: number;
