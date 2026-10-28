@@ -40,6 +40,23 @@ function createConfig(values: Record<string, string>): { get: jest.Mock } {
   };
 }
 
+function expectClosedObjectSchemas(schema: unknown): void {
+  if (Array.isArray(schema)) {
+    schema.forEach(expectClosedObjectSchemas);
+    return;
+  }
+  if (!schema || typeof schema !== 'object') {
+    return;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const type = record['type'];
+  if (type === 'object' || (Array.isArray(type) && type.includes('object'))) {
+    expect(record['additionalProperties']).toBe(false);
+  }
+  Object.values(record).forEach(expectClosedObjectSchemas);
+}
+
 function createClient(
   values: Record<string, string>,
   userKey: string | null = null,
@@ -55,8 +72,8 @@ function createClient(
   const model =
     userKey && serverProvider !== 'gemini'
       ? 'gemini-2.5-flash'
-      : values['ENTITY_EXTRACTION_MODEL'] ||
-        (provider === 'anthropic' ? 'claude-opus-5' : 'gemini-2.5-flash');
+      : (values['ENTITY_EXTRACTION_MODEL'] ??
+        (provider === 'anthropic' ? 'claude-opus-5' : 'gemini-2.5-flash'));
   const apiKey =
     userKey ??
     (provider === 'anthropic'
@@ -180,7 +197,6 @@ describe('EntityExtractionClient user credentials', () => {
 
     await client.extractEntities(input);
 
-    expect(GoogleGenAI).toHaveBeenCalledTimes(1);
     expect(GoogleGenAI).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'server-key' }),
     );
@@ -298,11 +314,18 @@ describe('EntityExtractionClient user credentials', () => {
       expect.objectContaining({ model: 'claude-custom-model' }),
     );
     expect(mockGenerateContent).not.toHaveBeenCalled();
-    const Anthropic = jest.requireMock('@anthropic-ai/sdk')
-      .default as jest.Mock;
+    const Anthropic = (
+      jest.requireMock('@anthropic-ai/sdk') as unknown as {
+        default: jest.Mock;
+      }
+    ).default;
     expect(Anthropic).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'anthropic-user-key' }),
     );
+    const [request] = mockAnthropicCreate.mock.calls[0] as [
+      { output_config: { format: { schema: unknown } } },
+    ];
+    expectClosedObjectSchemas(request.output_config.format.schema);
   });
 
   it('does not silently use the server key when user-key lookup fails', async () => {

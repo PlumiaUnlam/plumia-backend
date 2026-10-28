@@ -245,7 +245,8 @@ function toAnthropicSchema(node: unknown): unknown {
       },
     };
   }
-  if (result['type'] === 'object') {
+  const type = result['type'];
+  if (type === 'object' || (Array.isArray(type) && type.includes('object'))) {
     result['additionalProperties'] = false;
   }
   return result;

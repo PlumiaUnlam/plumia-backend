@@ -640,6 +640,7 @@ export class EntityExtractionPipelineService {
       await this.temporalRules.auditSnapshot(snapshot);
     }
     await this.auditService.obsoleteAlertsWithoutCurrentChunkSupport({
+      projectId,
       sceneId,
       chunks: new Map(chunks.map((chunk) => [chunk.id, chunk] as const)),
     });
@@ -651,10 +652,9 @@ export class EntityExtractionPipelineService {
     await forEachSequentially(chunks, async (chunk) => {
       const text = chunk.content.trim();
       if (!text) {
-        await this.auditService.obsoleteAlertsForChunk({
-          sceneId,
+        await this.auditService.obsoleteAlertsForEmptyChunk({
+          projectId,
           sourceChunkId: chunk.id,
-          activeFingerprints: new Set<string>(),
         });
         return;
       }
@@ -752,6 +752,7 @@ export class EntityExtractionPipelineService {
 
     if (chunks.length === 0) {
       await this.auditService.obsoleteAlertsWithoutCurrentChunkSupport({
+        projectId,
         sceneId: scene.id,
         chunks: new Map<string, ChunkRow>(),
       });
@@ -810,6 +811,7 @@ export class EntityExtractionPipelineService {
       chunks.map((chunk) => [chunk.id, chunk] as const),
     );
     await this.auditService.obsoleteAlertsWithoutCurrentChunkSupport({
+      projectId,
       sceneId: scene.id,
       chunks: chunksById,
     });
@@ -962,6 +964,10 @@ export class EntityExtractionPipelineService {
   private async processDirtyChunk(input: DirtyChunkInput): Promise<void> {
     const chunkText = input.chunk.content.trim();
     if (!chunkText) {
+      await this.auditService.obsoleteAlertsForEmptyChunk({
+        projectId: input.projectId,
+        sourceChunkId: input.chunk.id,
+      });
       await this.clearChunkDirtyFlag(input.chunk.id);
       return;
     }
@@ -1259,7 +1265,6 @@ export class EntityExtractionPipelineService {
     inconsistencies: ExtractedInconsistency[];
     confirmedEntities: ConfirmedEntityLike[];
   }): Promise<void> {
-    const activeFingerprints = new Set<string>();
     const alerts = new Map<
       string,
       Parameters<AuditService['createEntityContinuityAlert']>[0]
@@ -1268,7 +1273,6 @@ export class EntityExtractionPipelineService {
       this.processInconsistencyCandidate({
         ...input,
         inconsistency,
-        activeFingerprints,
         alerts,
       }),
     );
@@ -1277,11 +1281,6 @@ export class EntityExtractionPipelineService {
         this.auditService.createEntityContinuityAlert(alert),
       ),
     );
-    await this.auditService.obsoleteAlertsForChunk({
-      sceneId: input.sceneId,
-      sourceChunkId: input.chunk.id,
-      activeFingerprints,
-    });
   }
 
   private async processInconsistencyCandidate(input: {
@@ -1290,7 +1289,6 @@ export class EntityExtractionPipelineService {
     chunk: ChunkRow;
     confirmedEntities: ConfirmedEntityLike[];
     inconsistency: ExtractedInconsistency;
-    activeFingerprints: Set<string>;
     alerts: Map<
       string,
       Parameters<AuditService['createEntityContinuityAlert']>[0]
@@ -1330,13 +1328,12 @@ export class EntityExtractionPipelineService {
       currentValue,
       observedValue,
     });
-    input.activeFingerprints.add(fingerprint);
     const relationship = await this.resolveInconsistencyRelationship(
       inconsistency.relationship,
       input.projectId,
       input.confirmedEntities,
     );
-    input.alerts.set(fingerprint, {
+    const alert: Parameters<AuditService['createEntityContinuityAlert']>[0] = {
       projectId: input.projectId,
       sceneId: input.sceneId,
       sourceChunkId: input.chunk.id,
@@ -1354,6 +1351,25 @@ export class EntityExtractionPipelineService {
       ruleCode: inconsistency.ruleCode,
       category: this.toAuditCategory(inconsistency.ruleCode),
       relationship,
+    };
+    const previous = input.alerts.get(fingerprint);
+    input.alerts.set(fingerprint, {
+      ...previous,
+      ...alert,
+      ...(previous
+        ? {
+            evidence: [...new Set([...previous.evidence, ...alert.evidence])],
+            confidence: Math.max(previous.confidence, alert.confidence),
+            severity:
+              previous.severity === AuditSeverity.HIGH ||
+              alert.severity === AuditSeverity.HIGH
+                ? AuditSeverity.HIGH
+                : previous.severity === AuditSeverity.MEDIUM ||
+                    alert.severity === AuditSeverity.MEDIUM
+                  ? AuditSeverity.MEDIUM
+                  : AuditSeverity.LOW,
+          }
+        : {}),
     });
   }
 

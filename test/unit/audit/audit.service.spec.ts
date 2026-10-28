@@ -27,6 +27,9 @@ interface MockPrismaService {
     create: jest.Mock;
     deleteMany: jest.Mock;
   };
+  chunk: {
+    findMany: jest.Mock;
+  };
 }
 
 const alertInput: EntityContinuityAlertInput = {
@@ -74,6 +77,7 @@ describe('AuditService', () => {
               create: jest.fn(),
               deleteMany: jest.fn(),
             },
+            chunk: { findMany: jest.fn().mockResolvedValue([]) },
           },
         },
       ],
@@ -100,6 +104,39 @@ describe('AuditService', () => {
 
     expect(prisma.auditAlert.create).not.toHaveBeenCalled();
     expect(prisma.auditAlert.update).not.toHaveBeenCalled();
+  });
+
+  it('merges new citations when the same conflict is detected again', async () => {
+    prisma.auditAlert.findUnique.mockResolvedValue({
+      id: 'alert-1',
+      status: AuditStatus.ACTIVE,
+      sourceConflict: {
+        entityId: 'entity-1',
+        entityName: 'Elena',
+        field: 'estado',
+        currentValue: 'Elena esta muerta.',
+        observedValue: 'Elena corre hacia la torre.',
+        evidence: ['Cita anterior.'],
+      },
+    });
+
+    await service.createEntityContinuityAlert({
+      ...alertInput,
+      evidence: ['Cita nueva.'],
+    });
+
+    const updateCalls = prisma.auditAlert.update.mock.calls as unknown as Array<
+      [
+        {
+          data: { sourceConflict: { evidence: string[] } };
+        },
+      ]
+    >;
+    const updateArgs = updateCalls[0]?.[0];
+    expect(updateArgs?.data.sourceConflict.evidence).toEqual([
+      'Cita anterior.',
+      'Cita nueva.',
+    ]);
   });
 
   it('persists rejection suppression independently of evidence hash and quote', async () => {
@@ -206,7 +243,7 @@ describe('AuditService', () => {
     expect(prisma.auditAlert.create).toHaveBeenCalledTimes(1);
   });
 
-  it('marks unmatched active alerts from an analyzed chunk as obsolete', async () => {
+  it('marks alerts obsolete when their chunk has no remaining text', async () => {
     prisma.auditAlert.findMany.mockResolvedValue([
       {
         id: 'alert-stale',
@@ -223,10 +260,9 @@ describe('AuditService', () => {
       },
     ]);
 
-    await service.obsoleteAlertsForChunk({
-      sceneId: 'scene-1',
+    await service.obsoleteAlertsForEmptyChunk({
+      projectId: 'project-1',
       sourceChunkId: 'chunk-1',
-      activeFingerprints: new Set(),
     });
 
     expect(prisma.auditAlert.updateMany).toHaveBeenCalledWith({
@@ -239,13 +275,18 @@ describe('AuditService', () => {
     prisma.auditAlert.findMany.mockResolvedValue([
       {
         id: 'alert-stale-hash',
+        sceneId: 'scene-1',
         sourceChunkId: 'chunk-1',
         sourceChunkHash: 'old-hash',
         sourceConflict: {},
       },
     ]);
+    prisma.chunk.findMany.mockResolvedValue([
+      { id: 'chunk-1', sceneId: 'scene-1' },
+    ]);
 
     await service.obsoleteAlertsWithoutCurrentChunkSupport({
+      projectId: 'project-1',
       sceneId: 'scene-1',
       chunks: new Map([['chunk-1', { contentHash: 'new-hash' }]]),
     });
@@ -254,6 +295,29 @@ describe('AuditService', () => {
       where: { id: { in: ['alert-stale-hash'] } },
       data: { status: AuditStatus.OBSOLETE },
     });
+  });
+
+  it('keeps an alert when another analysis omits it and its citation is unchanged', async () => {
+    prisma.auditAlert.findMany.mockResolvedValue([
+      {
+        id: 'alert-current',
+        sceneId: 'scene-1',
+        sourceChunkId: 'chunk-1',
+        sourceChunkHash: 'same-hash',
+        sourceConflict: {},
+      },
+    ]);
+    prisma.chunk.findMany.mockResolvedValue([
+      { id: 'chunk-1', sceneId: 'scene-1' },
+    ]);
+
+    await service.obsoleteAlertsWithoutCurrentChunkSupport({
+      projectId: 'project-1',
+      sceneId: 'scene-1',
+      chunks: new Map([['chunk-1', { contentHash: 'same-hash' }]]),
+    });
+
+    expect(prisma.auditAlert.updateMany).not.toHaveBeenCalled();
   });
 
   it('resolves an authorized alert without changing its conflict data', async () => {

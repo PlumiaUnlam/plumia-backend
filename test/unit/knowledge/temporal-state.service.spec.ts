@@ -433,6 +433,33 @@ describe('TemporalStateService', () => {
     });
   });
 
+  it('accumulates evidence when the same state proposal is detected again', async () => {
+    prisma.entity.findFirst.mockResolvedValue({ userLockedFields: [] });
+    prisma.entityStateProposal.findFirst.mockResolvedValue({
+      id: 'existing-proposal',
+      status: ProposalStatus.PENDING,
+      evidence: ['Cita anterior.'],
+      confidenceScore: 0.95,
+    });
+
+    await service.createProposal(
+      proposalInput({
+        evidence: ['Cita nueva.'],
+        confidenceScore: 0.8,
+      }),
+    );
+
+    expect(prisma.entityStateProposal.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'existing-proposal' },
+        data: expect.objectContaining({
+          evidence: ['Cita anterior.', 'Cita nueva.'],
+          confidenceScore: 0.95,
+        }) as unknown,
+      }),
+    );
+  });
+
   it('accepts a state sequence in narrative order and validates current evidence', async () => {
     const tx = stateTransaction([]);
     setupTransaction(prisma, tx);

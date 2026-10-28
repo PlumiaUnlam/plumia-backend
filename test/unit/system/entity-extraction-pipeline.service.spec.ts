@@ -148,13 +148,7 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
         evidence: ['Elena cruza el puente.'],
       }),
     );
-    expect(auditService.obsoleteAlertsForChunk).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sceneId: 'scene-1',
-        sourceChunkId: 'chunk-1',
-        activeFingerprints: expect.any(Set) as unknown,
-      }),
-    );
+    expect(auditService.obsoleteAlertsForChunk).not.toHaveBeenCalled();
   });
 
   it('ignores an inconsistency without an entity name', async () => {
@@ -185,6 +179,53 @@ describe('EntityExtractionPipelineService inconsistencies', () => {
     });
 
     expect(auditService.createEntityContinuityAlert).not.toHaveBeenCalled();
+  });
+
+  it('merges duplicate findings and their citations from one model response', async () => {
+    const inconsistency = {
+      entityName: 'Elena',
+      ruleCode: 'DEAD_CHARACTER_ACTION' as const,
+      field: 'estado',
+      currentValue: 'Esta muerta.',
+      observedValue: 'Cruza el puente.',
+      explanation: 'La acción contradice el estado establecido.',
+      severity: 'HIGH' as const,
+      confidenceScore: 0.9,
+      evidence: ['Elena cruza el puente.'],
+    };
+
+    await service.processInconsistencyCandidates({
+      projectId: 'project-1',
+      sceneId: 'scene-1',
+      chunk: {
+        id: 'chunk-1',
+        chunkIndex: 0,
+        content: 'Elena cruza el puente.',
+        contentHash: 'chunk-hash',
+        isDirty: true,
+      },
+      inconsistencies: [
+        inconsistency,
+        { ...inconsistency, evidence: ['La guerrera llegó al puente.'] },
+      ],
+      confirmedEntities: [
+        {
+          id: 'entity-1',
+          canonicalName: 'Elena',
+          aliases: [],
+          type: 'CHARACTER',
+          description: 'Esta muerta.',
+          attributes: {},
+        },
+      ],
+    });
+
+    expect(auditService.createEntityContinuityAlert).toHaveBeenCalledTimes(1);
+    expect(auditService.createEntityContinuityAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        evidence: ['Elena cruza el puente.', 'La guerrera llegó al puente.'],
+      }),
+    );
   });
 
   it('keeps an explicit inconsistency when the entity is not confirmed yet', async () => {
@@ -248,7 +289,7 @@ describe('EntityExtractionPipelineService outbox processing', () => {
   let resolution: PipelineResolutionMock;
   let audit: {
     createEntityContinuityAlert: jest.Mock;
-    obsoleteAlertsForChunk: jest.Mock;
+    obsoleteAlertsForEmptyChunk: jest.Mock;
     obsoleteAlertsWithoutCurrentChunkSupport: jest.Mock;
   };
 
@@ -297,7 +338,7 @@ describe('EntityExtractionPipelineService outbox processing', () => {
     };
     audit = {
       createEntityContinuityAlert: jest.fn(),
-      obsoleteAlertsForChunk: jest.fn(),
+      obsoleteAlertsForEmptyChunk: jest.fn(),
       obsoleteAlertsWithoutCurrentChunkSupport: jest.fn(),
     };
     service = new EntityExtractionPipelineService(
@@ -659,8 +700,9 @@ describe('EntityExtractionPipelineService outbox processing', () => {
       data: { isDirty: false },
     });
     expect(prisma.scene.update).not.toHaveBeenCalled();
-    expect(audit.obsoleteAlertsForChunk).toHaveBeenCalledWith(
-      expect.objectContaining({ sceneId: 'scene-1', sourceChunkId: 'chunk-1' }),
+    expect(audit.obsoleteAlertsForEmptyChunk).not.toHaveBeenCalled();
+    expect(audit.obsoleteAlertsWithoutCurrentChunkSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'project-1', sceneId: 'scene-1' }),
     );
   });
 
