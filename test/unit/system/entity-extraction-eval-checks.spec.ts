@@ -161,6 +161,7 @@ describe('entity extraction eval checks', () => {
       relationType: 'MENTOR' as never,
       description: null,
       intensity: 0.7,
+      confidenceScore: 0.9,
       evidence: ['Ingrid'],
     };
     const output = emptyOutput({ relationships: [relationship] });
