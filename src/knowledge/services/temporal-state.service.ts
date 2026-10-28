@@ -689,7 +689,12 @@ export class TemporalStateService {
     };
     const existing = await this.prisma.entityStateProposal.findFirst({
       where: matching,
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        evidence: true,
+        confidenceScore: true,
+      },
     });
     if (existing?.status === ProposalStatus.REJECTED) {
       return;
@@ -702,8 +707,16 @@ export class TemporalStateService {
         where: { id: existing.id },
         data: {
           fromValue: input.fromValue,
-          evidence,
-          confidenceScore: input.confidenceScore,
+          evidence: [
+            ...new Set([
+              ...this.normalizeEvidence(existing.evidence),
+              ...evidence,
+            ]),
+          ],
+          confidenceScore: Math.max(
+            Number(existing.confidenceScore ?? 0),
+            input.confidenceScore,
+          ),
           ...(input.narrativeOrder === undefined
             ? {}
             : { narrativeOrder: input.narrativeOrder }),

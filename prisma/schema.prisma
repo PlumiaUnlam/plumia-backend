@@ -216,6 +216,7 @@ model User {
   autoAnalyzeOnAutosave Boolean   @default(true) @map("auto_analyze_on_autosave")
 
   apiKeys                       UserApiKey[]
+  aiProviderSettings             UserAiProviderSettings?
   entityRecognitionSettings     UserEntityRecognitionSettings?
   tokenLedgers                  TokenLedger[]
   subscription                  Subscription?
@@ -255,6 +256,20 @@ model UserApiKey {
   @@index([userId], map: "idx_apikey_user")
   @@index([provider], map: "idx_apikey_provider")
   @@map("user_api_key")
+}
+
+model UserAiProviderSettings {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @unique @map("user_id")
+  provider         String   @db.VarChar(20)
+  model            String   @db.VarChar(120)
+  credentialSource String   @map("credential_source") @db.VarChar(20)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_ai_provider_settings")
 }
 
 model UserEntityRecognitionSettings {

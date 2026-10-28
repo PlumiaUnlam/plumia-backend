@@ -145,7 +145,8 @@ export class AuditService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return alerts.map((alert) => this.toResponse(alert));
+    const chunkSceneIds = await this.getSupportingChunkSceneIds(alerts);
+    return alerts.map((alert) => this.toResponse(alert, chunkSceneIds));
   }
 
   async updateStatus(
@@ -548,7 +549,10 @@ export class AuditService {
           description: this.buildDescription(input),
           explanation: input.explanation,
           confidence: input.confidence,
-          sourceConflict: sourceConflict as unknown as Prisma.InputJsonValue,
+          sourceConflict: this.mergeSourceConflict(
+            existing.sourceConflict,
+            sourceConflict,
+          ),
           ...(existing.status === AuditStatus.OBSOLETE ||
           existing.status === AuditStatus.RESOLVED
             ? {
@@ -623,36 +627,30 @@ export class AuditService {
     });
   }
 
-  async obsoleteAlertsForChunk(input: {
-    sceneId: string;
+  async obsoleteAlertsForEmptyChunk(input: {
+    projectId: string;
     sourceChunkId: string;
-    activeFingerprints: ReadonlySet<string>;
   }): Promise<void> {
     const alerts = await this.prisma.auditAlert.findMany({
       where: {
-        sceneId: input.sceneId,
+        projectId: input.projectId,
         status: AuditStatus.ACTIVE,
       },
       select: {
         id: true,
-        fingerprint: true,
-        ruleCode: true,
         sourceChunkId: true,
+        sourceChunkHash: true,
+        sceneId: true,
         sourceConflict: true,
       },
     });
 
     const staleIds = alerts
-      .filter((alert) => {
-        const conflict = this.toStoredConflict(alert.sourceConflict);
-        return (
-          alert.ruleCode !== 'INTRA_SCENE_CONTRADICTION' &&
-          (alert.sourceChunkId ?? conflict?.sourceChunkId) ===
-            input.sourceChunkId &&
-          (!alert.fingerprint ||
-            !input.activeFingerprints.has(alert.fingerprint))
-        );
-      })
+      .filter((alert) =>
+        this.getAlertEvidenceSources(alert).some(
+          (source) => source.chunkId === input.sourceChunkId,
+        ),
+      )
       .map((alert) => alert.id);
 
     if (staleIds.length > 0) {
@@ -664,39 +662,54 @@ export class AuditService {
   }
 
   async obsoleteAlertsWithoutCurrentChunkSupport(input: {
+    projectId: string;
     sceneId: string;
     chunks: ReadonlyMap<string, { contentHash: string | null }>;
   }): Promise<void> {
     const alerts = await this.prisma.auditAlert.findMany({
       where: {
-        sceneId: input.sceneId,
+        projectId: input.projectId,
         status: AuditStatus.ACTIVE,
       },
       select: {
         id: true,
+        sceneId: true,
+        ruleCode: true,
         sourceChunkId: true,
         sourceChunkHash: true,
         sourceConflict: true,
       },
     });
+    const sourceChunkIds = [
+      ...new Set(
+        alerts.flatMap((alert) =>
+          this.getAlertEvidenceSources(alert).map((source) => source.chunkId),
+        ),
+      ),
+    ];
+    const referencedChunks = sourceChunkIds.length
+      ? await this.prisma.chunk.findMany({
+          where: { id: { in: sourceChunkIds } },
+          select: { id: true, sceneId: true },
+        })
+      : [];
+    const sceneByChunkId = new Map(
+      referencedChunks.map((chunk) => [chunk.id, chunk.sceneId]),
+    );
     const staleIds = alerts
       .filter((alert) => {
-        const conflict = this.toStoredConflict(alert.sourceConflict);
-        const sources = [
-          {
-            chunkId: alert.sourceChunkId ?? conflict?.sourceChunkId ?? null,
-            chunkHash:
-              alert.sourceChunkHash ?? conflict?.sourceChunkHash ?? null,
-          },
-          ...(conflict?.supportingChunks ?? []).map((source) => ({
-            chunkId: source.chunkId,
-            chunkHash: source.chunkHash,
-          })),
-        ].filter(
-          (source): source is { chunkId: string; chunkHash: string | null } =>
-            Boolean(source.chunkId),
-        );
-        return sources.some((source) => {
+        return this.getAlertEvidenceSources(alert).some((source) => {
+          const sourceSceneId =
+            source.sceneId ??
+            sceneByChunkId.get(source.chunkId) ??
+            (source.chunkId === alert.sourceChunkId ||
+            (alert.ruleCode === 'INTRA_SCENE_CONTRADICTION' &&
+              alert.sceneId === input.sceneId)
+              ? alert.sceneId
+              : null);
+          if (sourceSceneId !== input.sceneId) {
+            return false;
+          }
           const chunk = input.chunks.get(source.chunkId);
           return (
             !chunk ||
@@ -726,13 +739,21 @@ export class AuditService {
         status: AuditStatus.ACTIVE,
         ruleCode: { in: [...input.ruleCodes] },
       },
-      select: { id: true, fingerprint: true },
+      select: {
+        id: true,
+        fingerprint: true,
+        sceneId: true,
+        sourceChunkId: true,
+        sourceChunkHash: true,
+        sourceConflict: true,
+      },
     });
     const staleIds = alerts
       .filter(
         (alert) =>
-          !alert.fingerprint ||
-          !input.activeFingerprints.has(alert.fingerprint),
+          !this.getAlertEvidenceSources(alert).length &&
+          (!alert.fingerprint ||
+            !input.activeFingerprints.has(alert.fingerprint)),
       )
       .map((alert) => alert.id);
     if (staleIds.length > 0) {
@@ -756,25 +777,41 @@ export class AuditService {
       },
       select: {
         id: true,
-        fingerprint: true,
         sourceChunkId: true,
+        sourceChunkHash: true,
+        sceneId: true,
         sourceConflict: true,
       },
     });
+    const referencedIds = new Set<string>();
+    for (const alert of alerts) {
+      for (const source of this.getAlertEvidenceSources(alert)) {
+        if (input.sourceChunkIds.has(source.chunkId)) {
+          referencedIds.add(source.chunkId);
+        }
+      }
+    }
+    const currentChunks = referencedIds.size
+      ? await this.prisma.chunk.findMany({
+          where: { id: { in: [...referencedIds] } },
+          select: { id: true, contentHash: true },
+        })
+      : [];
+    const currentHashById = new Map(
+      currentChunks.map((chunk) => [chunk.id, chunk.contentHash]),
+    );
     const staleIds = alerts
       .filter((alert) => {
-        const conflict = this.toStoredConflict(alert.sourceConflict);
-        const supportsChangedChunk =
-          (alert.sourceChunkId !== null &&
-            input.sourceChunkIds.has(alert.sourceChunkId)) ||
-          (conflict?.supportingChunks ?? []).some((source) =>
-            input.sourceChunkIds.has(source.chunkId),
+        return this.getAlertEvidenceSources(alert).some((source) => {
+          if (!input.sourceChunkIds.has(source.chunkId)) {
+            return false;
+          }
+          const currentHash = currentHashById.get(source.chunkId);
+          return (
+            currentHash === undefined ||
+            (source.chunkHash !== null && currentHash !== source.chunkHash)
           );
-        return (
-          supportsChangedChunk &&
-          (!alert.fingerprint ||
-            !input.activeFingerprints.has(alert.fingerprint))
-        );
+        });
       })
       .map((alert) => alert.id);
 
@@ -792,6 +829,9 @@ export class AuditService {
     activeFingerprints?: ReadonlySet<string>;
     ruleCodes?: string[];
   }): Promise<void> {
+    if (!input.affectedChunkIds?.size) {
+      return;
+    }
     const alerts = await this.prisma.auditAlert.findMany({
       where: {
         projectId: input.projectId,
@@ -805,29 +845,42 @@ export class AuditService {
       },
       select: {
         id: true,
-        fingerprint: true,
         sourceChunkId: true,
+        sourceChunkHash: true,
+        sceneId: true,
         sourceConflict: true,
       },
     });
-    const staleIds = alerts
-      .filter((alert) => {
-        if (!input.affectedChunkIds) {
-          return true;
+    const affectedSourceHashes = new Map<string, string | null>();
+    for (const alert of alerts) {
+      for (const source of this.getAlertEvidenceSources(alert)) {
+        if (input.affectedChunkIds.has(source.chunkId)) {
+          affectedSourceHashes.set(source.chunkId, source.chunkHash);
         }
-        const conflict = this.toStoredConflict(alert.sourceConflict);
-        const isAffected =
-          (alert.sourceChunkId !== null &&
-            input.affectedChunkIds.has(alert.sourceChunkId)) ||
-          (conflict?.supportingChunks ?? []).some((source) =>
-            input.affectedChunkIds!.has(source.chunkId),
+      }
+    }
+    const currentChunks = affectedSourceHashes.size
+      ? await this.prisma.chunk.findMany({
+          where: { id: { in: [...affectedSourceHashes.keys()] } },
+          select: { id: true, contentHash: true },
+        })
+      : [];
+    const currentHashById = new Map(
+      currentChunks.map((chunk) => [chunk.id, chunk.contentHash]),
+    );
+    const staleIds = alerts
+      .filter((alert) =>
+        this.getAlertEvidenceSources(alert).some((source) => {
+          if (!input.affectedChunkIds?.has(source.chunkId)) {
+            return false;
+          }
+          const currentHash = currentHashById.get(source.chunkId);
+          return (
+            currentHash === undefined ||
+            (source.chunkHash !== null && currentHash !== source.chunkHash)
           );
-        return (
-          isAffected &&
-          (!alert.fingerprint ||
-            !input.activeFingerprints?.has(alert.fingerprint))
-        );
-      })
+        }),
+      )
       .map((alert) => alert.id);
     if (staleIds.length > 0) {
       await this.prisma.auditAlert.updateMany({
@@ -900,7 +953,89 @@ export class AuditService {
     );
   }
 
-  private toResponse(alert: AlertRow): AuditAlertResponseDto {
+  private getAlertEvidenceSources(alert: {
+    sceneId: string;
+    sourceChunkId: string | null;
+    sourceChunkHash: string | null;
+    sourceConflict: Prisma.JsonValue;
+  }): Array<{
+    chunkId: string;
+    chunkHash: string | null;
+    sceneId?: string;
+  }> {
+    const conflict = this.toStoredConflict(alert.sourceConflict);
+    if (conflict?.supportingChunks?.length) {
+      return conflict.supportingChunks;
+    }
+    const chunkId = alert.sourceChunkId ?? conflict?.sourceChunkId;
+    if (!chunkId) {
+      return [];
+    }
+    return [
+      {
+        chunkId,
+        chunkHash: alert.sourceChunkHash ?? conflict?.sourceChunkHash ?? null,
+        sceneId: alert.sceneId,
+      },
+    ];
+  }
+
+  private mergeSourceConflict(
+    existingValue: Prisma.JsonValue,
+    incomingValue: Record<string, unknown>,
+  ): Prisma.InputJsonValue {
+    const existing = this.toStoredConflict(existingValue);
+    if (!existing) {
+      return incomingValue as Prisma.InputJsonValue;
+    }
+
+    const incomingSupporting = Array.isArray(incomingValue['supportingChunks'])
+      ? (incomingValue['supportingChunks'] as SupportingChunkEvidence[])
+      : [];
+    const supportingBySource = new Map<string, SupportingChunkEvidence>();
+    for (const source of [
+      ...(existing.supportingChunks ?? []),
+      ...incomingSupporting,
+    ]) {
+      const key = `${source.chunkId}:${source.side}`;
+      const previous = supportingBySource.get(key);
+      supportingBySource.set(key, {
+        ...previous,
+        ...source,
+        evidence: [
+          ...new Set([...(previous?.evidence ?? []), ...source.evidence]),
+        ],
+        ...(previous?.evidencePositions || source.evidencePositions
+          ? {
+              evidencePositions: [
+                ...new Set([
+                  ...(previous?.evidencePositions ?? []),
+                  ...(source.evidencePositions ?? []),
+                ]),
+              ],
+            }
+          : {}),
+      });
+    }
+
+    return {
+      ...incomingValue,
+      evidence: [
+        ...new Set([
+          ...existing.evidence,
+          ...((incomingValue['evidence'] as string[]) ?? []),
+        ]),
+      ],
+      ...(supportingBySource.size
+        ? { supportingChunks: [...supportingBySource.values()] }
+        : {}),
+    } as unknown as Prisma.InputJsonValue;
+  }
+
+  private toResponse(
+    alert: AlertRow,
+    chunkSceneIds: ReadonlyMap<string, string> = new Map(),
+  ): AuditAlertResponseDto {
     return {
       id: alert.id,
       projectId: alert.projectId,
@@ -918,7 +1053,7 @@ export class AuditService {
       status: alert.status,
       createdAt: alert.createdAt,
       resolvedAt: alert.resolvedAt,
-      conflict: this.toConflict(alert.sourceConflict),
+      conflict: this.toConflict(alert.sourceConflict, chunkSceneIds),
     };
   }
 
@@ -1013,7 +1148,10 @@ export class AuditService {
     };
   }
 
-  private toConflict(value: Prisma.JsonValue): EntityConflictDetailsDto | null {
+  private toConflict(
+    value: Prisma.JsonValue,
+    chunkSceneIds: ReadonlyMap<string, string> = new Map(),
+  ): EntityConflictDetailsDto | null {
     const conflict = this.toStoredConflict(value);
     if (!conflict) {
       return null;
@@ -1029,15 +1167,43 @@ export class AuditService {
       ...(conflict.supportingChunks
         ? {
             supportingEvidence: conflict.supportingChunks.flatMap((source) =>
-              source.evidence.map((quote) => ({
-                side: source.side,
-                quote,
-                ...(source.sceneId ? { sceneId: source.sceneId } : {}),
-              })),
+              source.evidence.map((quote) => {
+                const sceneId =
+                  source.sceneId ?? chunkSceneIds.get(source.chunkId);
+                return {
+                  side: source.side,
+                  quote,
+                  ...(sceneId ? { sceneId } : {}),
+                };
+              }),
             ),
           }
         : {}),
     };
+  }
+
+  private async getSupportingChunkSceneIds(
+    alerts: AlertRow[],
+  ): Promise<Map<string, string>> {
+    const chunkIds = [
+      ...new Set(
+        alerts.flatMap(
+          (alert) =>
+            this.toStoredConflict(alert.sourceConflict)?.supportingChunks?.map(
+              (source) => source.chunkId,
+            ) ?? [],
+        ),
+      ),
+    ];
+    if (chunkIds.length === 0) {
+      return new Map();
+    }
+
+    const chunks = await this.prisma.chunk.findMany({
+      where: { id: { in: chunkIds } },
+      select: { id: true, sceneId: true },
+    });
+    return new Map(chunks.map((chunk) => [chunk.id, chunk.sceneId]));
   }
 
   private toRelationshipConflict(

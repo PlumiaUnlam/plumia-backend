@@ -1,3 +1,5 @@
+import { TEMPORAL_RELATIONSHIP_GUIDANCE } from './temporal-relationship-guidance';
+
 export const ENTITY_EXTRACTION_PROMPT = `
 Sos un asistente de extracción de entidades para una novela.
 
@@ -112,6 +114,7 @@ Reglas:
 - Revisar tambien contradicciones directas entre entidades conocidas y lo narrado en la escena.
 - El request puede incluir temporalContext. Usalo como el unico estado conocido de la obra
   para esta escena: no supongas estados, hechos ni relaciones futuros que no aparezcan alli.
+${TEMPORAL_RELATIONSHIP_GUIDANCE}
 - Si temporalContext.deceasedEntityNames incluye una entidad, devolver DEAD_CHARACTER_ACTION
   solo cuando el chunk le atribuya una accion presente, explicita y respaldada por evidencia.
 - Si temporalContext.worldRules contradice una accion o hecho del chunk, devolver
