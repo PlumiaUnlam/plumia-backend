@@ -1,0 +1,27 @@
+{
+  "id": "inc-worldbuilding-sin-regla-01",
+  "description": "Uso de magia sin ninguna regla aplicable en worldRules: no debe generarse WORLDBUILDING_RULE.",
+  "tags": ["inconsistencies", "worldbuilding", "temporal", "negativo"],
+  "input": {
+    "sceneText": "Ya dentro de los muros de Ardenia, Selva extendió la mano y conjuró una llamarada que iluminó todo el patio de armas. Los guardias retrocedieron, aterrados.",
+    "knownEntities": [
+      { "canonicalName": "Selva", "aliases": [], "type": "CHARACTER" },
+      { "canonicalName": "Ardenia", "aliases": [], "type": "LOCATION" }
+    ],
+    "temporalContext": {
+      "worldRules": {
+        "tone": "Fantasía oscura",
+        "audience": "Adulto"
+      },
+      "entities": [
+        { "canonicalName": "Selva", "states": [], "facts": [] },
+        { "canonicalName": "Ardenia", "states": [], "facts": [] }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": []
+    }
+  },
+  "expect": {
+    "inconsistencies": { "exhaustive": true }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "ent-conocida-sin-novedad-01",
+  "description": "Entidad conocida que aparece sin aportar nada nuevo a su ficha: no debe devolverse.",
+  "tags": ["entities", "known-entities", "negativo"],
+  "input": {
+    "sceneText": "Elena bajó a desayunar temprano. Se sirvió café, abrió el diario y leyó en silencio mientras afuera empezaba a llover.",
+    "knownEntities": [
+      {
+        "canonicalName": "Elena Duarte",
+        "aliases": ["Elena"],
+        "type": "CHARACTER",
+        "description": "Periodista de cuarenta años, vive sola en una casa frente al puerto.",
+        "attributes": { "profesion": "periodista" }
+      }
+    ]
+  },
+  "expect": {
+    "entities": { "exhaustive": true },
+    "stateChanges": { "exhaustive": true },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

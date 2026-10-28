@@ -1,0 +1,24 @@
+{
+  "id": "ent-objetos-genericos-01",
+  "description": "Utilería común (mesa, vaso, cuchillo, puerta) que no debe extraerse como entidad.",
+  "tags": ["entities", "objects", "negativo"],
+  "input": {
+    "sceneText": "Ramiro dejó el vaso sobre la mesa y tomó el cuchillo para cortar el pan. La puerta de la cocina chirrió con el viento. Se sentó en la silla de siempre, junto a la ventana, y esperó a que su hermana bajara a cenar.",
+    "knownEntities": []
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [{ "name": "Ramiro", "type": "CHARACTER" }],
+      "mustNotInclude": [
+        { "name": "vaso" },
+        { "name": "mesa" },
+        { "name": "cuchillo" },
+        { "name": "puerta" },
+        { "name": "silla" },
+        { "name": "ventana" },
+        { "name": "pan" },
+        { "name": "cocina" }
+      ]
+    }
+  }
+}

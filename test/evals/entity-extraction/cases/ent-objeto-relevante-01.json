@@ -1,0 +1,22 @@
+{
+  "id": "ent-objeto-relevante-01",
+  "description": "Objeto con nombre propio, repetido y central para el conflicto: sí debe extraerse como OBJECT.",
+  "tags": ["entities", "objects", "positivo"],
+  "input": {
+    "sceneText": "Nadie había vuelto a ver la Espada de Ceniza desde la caída del rey. Sin embargo, Orlen la reconoció apenas el mercader abrió el cofre: la hoja gris, el pomo con forma de cuervo. —Si el Consejo se entera de que la Espada de Ceniza apareció, nos van a cazar a todos —susurró. Orlen la envolvió en un trapo y la escondió bajo la capa.",
+    "knownEntities": []
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [
+        { "name": "Espada de Ceniza", "type": "OBJECT" },
+        { "name": "Orlen", "type": "CHARACTER" }
+      ],
+      "mustNotInclude": [
+        { "name": "cofre" },
+        { "name": "trapo" },
+        { "name": "capa" }
+      ]
+    }
+  }
+}

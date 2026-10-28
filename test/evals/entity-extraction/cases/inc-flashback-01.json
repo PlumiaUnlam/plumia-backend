@@ -1,0 +1,29 @@
+{
+  "id": "inc-flashback-01",
+  "description": "Personaje fallecido que aparece en un recuerdo: no es DEAD_CHARACTER_ACTION.",
+  "tags": ["inconsistencies", "dead-character", "temporal", "negativo"],
+  "input": {
+    "sceneText": "Marta recordó la tarde en que Iván, todavía vivo, le regaló el reloj de bolsillo. Él se había reído de su cara de sorpresa y le había dicho que el tiempo, al final, era lo único que importaba. Marta apretó el reloj en el puño y cerró los ojos.",
+    "knownEntities": [
+      { "canonicalName": "Iván", "aliases": [], "type": "CHARACTER" },
+      { "canonicalName": "Marta", "aliases": [], "type": "CHARACTER" }
+    ],
+    "temporalContext": {
+      "worldRules": null,
+      "entities": [
+        {
+          "canonicalName": "Iván",
+          "states": [{ "key": "status", "value": "dead" }],
+          "facts": ["Murió en el accidente de la ruta 3."]
+        },
+        { "canonicalName": "Marta", "states": [], "facts": [] }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": ["Iván"]
+    }
+  },
+  "expect": {
+    "stateChanges": { "exhaustive": true },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

@@ -96,9 +96,14 @@ Reglas:
   sequenceKind debe ser TRANSITION si el texto explicita una evolucion secuencial compatible,
   CONTRADICTION si dos valores incompatibles se afirman simultaneamente, y UNCERTAIN si no se
   puede determinar con seguridad. Nunca tratar una contradiccion o un caso incierto como transicion.
+- stateChanges solo aplica a entidades de knownEntities. Para una entidad nueva no devolver
+  stateChanges: su situacion actual (ubicacion, salud, etc.) va en su description o attributes.
 - fromValue solo debe informarse si esta expresado en el texto o en temporalContext; no inventarlo.
 - Usar nombres canonicos de las entidades conocidas y nombres extraidos para entidades nuevas.
 - Una relacion puede involucrar dos entidades nuevas, una nueva y una conocida, o dos conocidas.
+- sourceEntity y targetEntity deben ser el canonicalName de una entidad de knownEntities o de
+  una entidad devuelta en "entities" de esta misma respuesta. No crear relaciones con referencias
+  sin nombre propio (por ejemplo "su hermana" o "un guardia").
 - Usar solo los tipos de relacion permitidos en el formato.
 - La intensidad debe ser un numero entre 0 y 1 basado en la evidencia de la escena.
 - confidenceScore mide la seguridad de que la relacion extraida esta respaldada por el texto,

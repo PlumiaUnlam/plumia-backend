@@ -1,0 +1,54 @@
+{
+  "id": "rel-posesion-end-01",
+  "description": "Posesión vigente que se pierde: debe devolverse END sobre OWNS (source = dueño).",
+  "tags": ["relationships", "end", "temporal", "positivo"],
+  "input": {
+    "sceneText": "La corriente le arrancó el Amuleto de Kor de entre los dedos. Darío alcanzó a ver el destello dorado hundiéndose en el río antes de que el agua lo arrastrara contra las rocas. Cuando logró salir a la orilla, supo que lo había perdido para siempre.",
+    "knownEntities": [
+      { "canonicalName": "Darío", "aliases": [], "type": "CHARACTER" },
+      {
+        "canonicalName": "Amuleto de Kor",
+        "aliases": ["el amuleto"],
+        "type": "OBJECT",
+        "description": "Amuleto dorado que protege a su portador de la magia de los Kor."
+      }
+    ],
+    "temporalContext": {
+      "worldRules": null,
+      "entities": [
+        { "canonicalName": "Darío", "states": [], "facts": [] },
+        { "canonicalName": "Amuleto de Kor", "states": [], "facts": [] }
+      ],
+      "relationships": [
+        {
+          "sourceEntity": "Darío",
+          "targetEntity": "Amuleto de Kor",
+          "relationType": "OWNS",
+          "description": "Darío lleva el amuleto desde la muerte de su madre."
+        }
+      ],
+      "deceasedEntityNames": []
+    }
+  },
+  "expect": {
+    "relationships": {
+      "mustInclude": [
+        {
+          "source": "Darío",
+          "target": "Amuleto de Kor",
+          "type": "OWNS",
+          "kind": "END"
+        }
+      ],
+      "mustNotInclude": [
+        {
+          "source": "Darío",
+          "target": "Amuleto de Kor",
+          "type": "OWNS",
+          "kind": "CREATE"
+        }
+      ]
+    },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

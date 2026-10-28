@@ -1,0 +1,31 @@
+{
+  "id": "rel-sin-vinculo-01",
+  "description": "Dos personajes coinciden en un lugar sin interactuar ni conocerse: no hay relación respaldada.",
+  "tags": ["relationships", "negativo"],
+  "input": {
+    "sceneText": "En el andén de la estación Retiro, Julia esperaba el tren de las ocho con la vista fija en el reloj. Al otro extremo, un hombre de sombrero gris al que los guardas llamaban Ferro leía el diario. Ninguno de los dos levantó la mirada cuando el tren entró rugiendo.",
+    "knownEntities": []
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [{ "name": "Julia", "type": "CHARACTER" }]
+    },
+    "relationships": {
+      "exhaustive": true,
+      "allow": [
+        {
+          "source": "Julia",
+          "target": "estación Retiro",
+          "type": "LOCATED_IN"
+        },
+        { "source": "Julia", "target": "Retiro", "type": "LOCATED_IN" },
+        {
+          "source": "Ferro",
+          "target": "estación Retiro",
+          "type": "LOCATED_IN"
+        },
+        { "source": "Ferro", "target": "Retiro", "type": "LOCATED_IN" }
+      ]
+    }
+  }
+}

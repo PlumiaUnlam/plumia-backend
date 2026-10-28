@@ -1,0 +1,33 @@
+{
+  "id": "state-ubicacion-01",
+  "description": "Cambio de ubicación actual y explícito de una entidad conocida, con fromValue en temporalContext.",
+  "tags": ["stateChanges", "temporal", "positivo"],
+  "input": {
+    "sceneText": "Al amanecer, Marcos desembarcó en Puerto Hondo. El olor a sal y a pescado podrido lo golpeó apenas pisó el muelle. Tres semanas de viaje desde Villa Serena, y por fin estaba ahí.",
+    "knownEntities": [
+      { "canonicalName": "Marcos", "aliases": [], "type": "CHARACTER" },
+      { "canonicalName": "Villa Serena", "aliases": [], "type": "LOCATION" }
+    ],
+    "temporalContext": {
+      "worldRules": null,
+      "entities": [
+        {
+          "canonicalName": "Marcos",
+          "states": [{ "key": "location", "value": "Villa Serena" }],
+          "facts": []
+        },
+        { "canonicalName": "Villa Serena", "states": [], "facts": [] }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": []
+    }
+  },
+  "expect": {
+    "stateChanges": {
+      "mustInclude": [
+        { "entity": "Marcos", "key": "location", "toValue": ["puerto hondo"] }
+      ]
+    },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

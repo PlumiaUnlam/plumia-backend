@@ -1,0 +1,23 @@
+{
+  "id": "inc-metafora-01",
+  "description": "Metáfora ('era un león') sobre un personaje conocido: ni contradicción ni entidad nueva.",
+  "tags": ["inconsistencies", "entities", "negativo"],
+  "input": {
+    "sceneText": "En el campo de batalla, Gonzalo era un león: avanzaba entre las lanzas sin retroceder un paso. Sus hombres, que lo habían visto temblar la noche anterior, no podían creerlo.",
+    "knownEntities": [
+      {
+        "canonicalName": "Gonzalo",
+        "aliases": [],
+        "type": "CHARACTER",
+        "description": "Capitán de la guardia, tímido y de carácter reservado.",
+        "attributes": {}
+      }
+    ]
+  },
+  "expect": {
+    "entities": {
+      "mustNotInclude": [{ "name": "león" }, { "name": "leon" }]
+    },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

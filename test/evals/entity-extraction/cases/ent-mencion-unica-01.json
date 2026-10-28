@@ -1,0 +1,18 @@
+{
+  "id": "ent-mencion-unica-01",
+  "description": "Personaje clave nombrado una sola vez en el chunk. Riesgo de recall por la regla de 'preferir entidades repetidas'.",
+  "tags": ["entities", "recall", "positivo"],
+  "input": {
+    "sceneText": "Mara desplegó la carta sobre el escritorio. El sello estaba roto, pero la firma era inconfundible: Aurelio Vance, el hombre que había ordenado la purga del barrio norte. Mara sintió que le temblaban las manos.",
+    "knownEntities": []
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [
+        { "name": "Mara", "type": "CHARACTER" },
+        { "name": "Aurelio Vance", "type": "CHARACTER" }
+      ],
+      "mustNotInclude": [{ "name": "escritorio" }, { "name": "sello" }]
+    }
+  }
+}

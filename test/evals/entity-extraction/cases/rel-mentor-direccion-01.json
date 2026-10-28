@@ -1,0 +1,22 @@
+{
+  "id": "rel-mentor-direccion-01",
+  "description": "Relación MENTOR con dirección. Convención asumida: source = mentor, target = discípulo (el prompt hoy no la define).",
+  "tags": ["relationships", "direction", "positivo"],
+  "input": {
+    "sceneText": "Ingrid entrenaba a Pablo en el arte de la esgrima desde que él tenía diez años. Esa mañana, como siempre, corrigió su guardia con un golpe seco de la vara. —Otra vez —ordenó Ingrid. Pablo obedeció sin protestar.",
+    "knownEntities": [
+      { "canonicalName": "Ingrid", "aliases": [], "type": "CHARACTER" },
+      { "canonicalName": "Pablo", "aliases": [], "type": "CHARACTER" }
+    ]
+  },
+  "expect": {
+    "relationships": {
+      "mustInclude": [
+        { "source": "Ingrid", "target": "Pablo", "type": "MENTOR" }
+      ],
+      "mustNotInclude": [
+        { "source": "Pablo", "target": "Ingrid", "type": "MENTOR" }
+      ]
+    }
+  }
+}

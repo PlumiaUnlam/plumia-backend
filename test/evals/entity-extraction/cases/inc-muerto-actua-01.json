@@ -1,0 +1,33 @@
+{
+  "id": "inc-muerto-actua-01",
+  "description": "Personaje fallecido según temporalContext que realiza una acción presente: DEAD_CHARACTER_ACTION.",
+  "tags": ["inconsistencies", "dead-character", "temporal", "positivo"],
+  "input": {
+    "sceneText": "Iván entró a la cocina, dejó las llaves sobre la mesada y besó a Marta en la frente. —Perdón por la demora —dijo, mientras se sacaba el abrigo.",
+    "knownEntities": [
+      { "canonicalName": "Iván", "aliases": [], "type": "CHARACTER" },
+      { "canonicalName": "Marta", "aliases": [], "type": "CHARACTER" }
+    ],
+    "temporalContext": {
+      "worldRules": null,
+      "entities": [
+        {
+          "canonicalName": "Iván",
+          "states": [{ "key": "status", "value": "dead" }],
+          "facts": ["Murió en el accidente de la ruta 3."]
+        },
+        { "canonicalName": "Marta", "states": [], "facts": [] }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": ["Iván"]
+    }
+  },
+  "expect": {
+    "inconsistencies": {
+      "mustInclude": [
+        { "entity": "Iván", "ruleCode": "DEAD_CHARACTER_ACTION" }
+      ],
+      "exhaustive": true
+    }
+  }
+}

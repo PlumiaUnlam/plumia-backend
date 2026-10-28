@@ -1,0 +1,51 @@
+{
+  "id": "inc-worldbuilding-01",
+  "description": "Acción que viola una regla concreta de worldRules: WORLDBUILDING_RULE atribuida a quien realiza la acción (Selva), no al lugar.",
+  "tags": ["inconsistencies", "worldbuilding", "temporal", "positivo"],
+  "input": {
+    "sceneText": "Ya dentro de los muros de Ardenia, Selva extendió la mano y conjuró una llamarada que iluminó todo el patio de armas. Los guardias retrocedieron, aterrados.",
+    "knownEntities": [
+      {
+        "canonicalName": "Selva",
+        "aliases": [],
+        "type": "CHARACTER"
+      },
+      {
+        "canonicalName": "Ardenia",
+        "aliases": [],
+        "type": "LOCATION"
+      }
+    ],
+    "temporalContext": {
+      "worldRules": {
+        "tone": "Fantasía oscura",
+        "magia": "La magia no funciona dentro de los muros de Ardenia: ningún hechizo puede lanzarse allí."
+      },
+      "entities": [
+        {
+          "canonicalName": "Selva",
+          "states": [],
+          "facts": []
+        },
+        {
+          "canonicalName": "Ardenia",
+          "states": [],
+          "facts": []
+        }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": []
+    }
+  },
+  "expect": {
+    "inconsistencies": {
+      "mustInclude": [
+        {
+          "entity": "Selva",
+          "ruleCode": "WORLDBUILDING_RULE"
+        }
+      ],
+      "exhaustive": true
+    }
+  }
+}
