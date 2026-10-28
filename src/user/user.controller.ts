@@ -5,12 +5,15 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Patch,
   Put,
   Request,
 } from '@nestjs/common';
 import { AiSettingsResponseDto } from './dto/ai-settings-response.dto';
 import { UpdateGeminiApiKeyDto } from './dto/update-gemini-api-key.dto';
+import { UpdateAiProviderSettingsDto } from './dto/update-ai-provider-settings.dto';
+import { UpdateProviderApiKeyDto } from './dto/update-provider-api-key.dto';
 import { UpdateAutoAnalysisDto } from './dto/update-auto-analysis.dto';
 import { UpdateEntityRecognitionDto } from './dto/update-entity-recognition.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -49,7 +52,33 @@ export class UserController {
   getAiSettings(
     @Request() req: { user: { id: string } },
   ): Promise<AiSettingsResponseDto> {
-    return this.userApiKeys.getGeminiSettings(req.user.id);
+    return this.userApiKeys.getAiSettings(req.user.id);
+  }
+
+  @Put('me/ai-settings/provider')
+  updateAiProviderSettings(
+    @Request() req: { user: { id: string } },
+    @Body() dto: UpdateAiProviderSettingsDto,
+  ): Promise<AiSettingsResponseDto> {
+    return this.userApiKeys.updateAiProviderSettings(req.user.id, dto);
+  }
+
+  @Put('me/ai-settings/providers/:provider/api-key')
+  saveProviderApiKey(
+    @Request() req: { user: { id: string } },
+    @Param('provider') provider: string,
+    @Body() dto: UpdateProviderApiKeyDto,
+  ): Promise<AiSettingsResponseDto> {
+    return this.userApiKeys.saveProviderKey(req.user.id, provider, dto.apiKey);
+  }
+
+  @Delete('me/ai-settings/providers/:provider/api-key')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async removeProviderApiKey(
+    @Request() req: { user: { id: string } },
+    @Param('provider') provider: string,
+  ): Promise<void> {
+    await this.userApiKeys.removeProviderKey(req.user.id, provider);
   }
 
   @Put('me/ai-settings/gemini')

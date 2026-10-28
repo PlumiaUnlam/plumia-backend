@@ -7,6 +7,10 @@ describe('UserController', () => {
   let userController: UserController;
   const userService = { updateProfile: jest.fn(), deleteAccount: jest.fn() };
   const userApiKeys = {
+    getAiSettings: jest.fn(),
+    updateAiProviderSettings: jest.fn(),
+    saveProviderKey: jest.fn(),
+    removeProviderKey: jest.fn(),
     getGeminiSettings: jest.fn(),
     saveGeminiKey: jest.fn(),
     removeGeminiKey: jest.fn(),
@@ -77,12 +81,62 @@ describe('UserController', () => {
         updatedAt: new Date(),
         autoAnalyzeOnAutosave: true,
       };
-      userApiKeys.getGeminiSettings.mockResolvedValue(settings);
+      userApiKeys.getAiSettings.mockResolvedValue(settings);
 
       await expect(
         userController.getAiSettings({ user: { id: 'uuid-1' } }),
       ).resolves.toBe(settings);
-      expect(userApiKeys.getGeminiSettings).toHaveBeenCalledWith('uuid-1');
+      expect(userApiKeys.getAiSettings).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('saves the active provider, model and credential source for the user', async () => {
+      const settings = { provider: 'anthropic', model: 'claude-sonnet-5' };
+      userApiKeys.updateAiProviderSettings.mockResolvedValue(settings);
+
+      await expect(
+        userController.updateAiProviderSettings(
+          { user: { id: 'uuid-1' } },
+          {
+            provider: 'anthropic',
+            model: 'claude-sonnet-5',
+            credentialSource: 'USER',
+          },
+        ),
+      ).resolves.toBe(settings);
+      expect(userApiKeys.updateAiProviderSettings).toHaveBeenCalledWith(
+        'uuid-1',
+        expect.objectContaining({ provider: 'anthropic' }),
+      );
+    });
+
+    it('stores provider keys for the authenticated user', async () => {
+      userApiKeys.saveProviderKey.mockResolvedValue({ configured: true });
+
+      await userController.saveProviderApiKey(
+        { user: { id: 'uuid-1' } },
+        'anthropic',
+        { apiKey: 'anthropic-secret' },
+      );
+
+      expect(userApiKeys.saveProviderKey).toHaveBeenCalledWith(
+        'uuid-1',
+        'anthropic',
+        'anthropic-secret',
+      );
+    });
+
+    it('removes only the requested provider key for the authenticated user', async () => {
+      userApiKeys.removeProviderKey.mockResolvedValue(undefined);
+
+      await userController.removeProviderApiKey(
+        { user: { id: 'uuid-1' } },
+        'anthropic',
+      );
+
+      expect(userApiKeys.removeProviderKey).toHaveBeenCalledWith(
+        'uuid-1',
+        'anthropic',
+      );
     });
 
     it('trims and stores the submitted Gemini key for the authenticated user', async () => {

@@ -19,18 +19,15 @@ import type {
 } from './entity-extraction.types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_CHAT_MODEL = 'gemini-2.5-flash';
-const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
 const DEFAULT_ANTHROPIC_EFFORT = 'medium';
 const ANTHROPIC_MAX_TOKENS = 16_000;
 // Models that accept server-side refusal fallbacks (`fallbacks: "default"`).
 const ANTHROPIC_FALLBACK_MODELS = new Set([
-  'claude-opus-5-5',
-  'claude-sonnet-5-5',
-  'claude-haiku-5-5',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-haiku-4-5-20251001',
 ]);
 
-type ExtractionProvider = 'gemini' | 'anthropic';
 type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 const EXTRACTION_RESPONSE_SCHEMA = {
@@ -270,41 +267,25 @@ const ANTHROPIC_CONTINUITY_CHECKPOINT_SCHEMA = toAnthropicSchema(
 /** Where a generation call goes: a Gemini client (server or user key) or Claude. */
 type GenerationTarget =
   | { provider: 'gemini'; ai: GoogleGenAI; model: string }
-  | { provider: 'anthropic'; model: string };
+  | { provider: 'anthropic'; ai: Anthropic; model: string };
 
 @Injectable()
 export class EntityExtractionClient {
   private readonly logger = new Logger(EntityExtractionClient.name);
   private readonly ai: GoogleGenAI;
-  private readonly anthropic: Anthropic;
-  private readonly provider: ExtractionProvider;
-  private readonly apiKey: string;
-  private readonly anthropicApiKey: string;
   private readonly anthropicEffort: AnthropicEffort;
-  private readonly model: string;
   private readonly embeddingModel: string;
   private readonly timeoutMs: number;
   constructor(
     private readonly config: ConfigService,
     private readonly userApiKeys: UserApiKeyService,
   ) {
-    this.provider =
-      this.config
-        .get<string>('ENTITY_EXTRACTION_PROVIDER', 'gemini')
-        .trim()
-        .toLowerCase() === 'anthropic'
-        ? 'anthropic'
-        : 'gemini';
-    this.anthropicApiKey = this.config
-      .get<string>('ANTHROPIC_API_KEY', '')
-      .trim();
     this.anthropicEffort = this.config
       .get<string>('ENTITY_EXTRACTION_EFFORT', DEFAULT_ANTHROPIC_EFFORT)
       .trim() as AnthropicEffort;
-    this.apiKey = this.config
+    const apiKey = this.config
       .get<string>('ENTITY_EXTRACTION_API_KEY', '')
       .trim();
-    this.model = this.config.get<string>('ENTITY_EXTRACTION_MODEL', '').trim();
     this.embeddingModel = this.config
       .get<string>('ENTITY_EXTRACTION_EMBEDDING_MODEL', '')
       .trim();
@@ -316,21 +297,14 @@ export class EntityExtractionClient {
     );
 
     this.ai = new GoogleGenAI({
-      apiKey: this.apiKey,
+      apiKey,
       httpOptions: { timeout: this.timeoutMs },
-    });
-    this.anthropic = new Anthropic({
-      apiKey: this.anthropicApiKey || null,
-      timeout: this.timeoutMs,
     });
   }
 
-  /**
-   * True when some extraction path may be available. Credentials (user Gemini
-   * key, ANTHROPIC_API_KEY or ENTITY_EXTRACTION_API_KEY) are resolved per call.
-   */
+  /** User-specific models and keys are resolved for each queued scene. */
   hasExtractionModel(): boolean {
-    return this.provider === 'anthropic' || Boolean(this.model);
+    return true;
   }
 
   hasEmbeddingModel(): boolean {
@@ -486,47 +460,30 @@ export class EntityExtractionClient {
     };
   }
 
-  /**
-   * The user's own Gemini key wins; otherwise the server provider
-   * (ENTITY_EXTRACTION_PROVIDER) is used with the server credentials.
-   */
   private async getGenerationTarget(
     userId?: string,
   ): Promise<GenerationTarget> {
-    const userApiKey = userId
-      ? await this.userApiKeys.getActiveGeminiKey(userId)
-      : null;
-    if (userApiKey) {
-      return {
-        provider: 'gemini',
-        ai: new GoogleGenAI({
-          apiKey: userApiKey,
-          httpOptions: { timeout: this.timeoutMs },
-        }),
-        // With provider=anthropic, ENTITY_EXTRACTION_MODEL names a Claude model.
-        model:
-          this.provider === 'gemini'
-            ? this.model || DEFAULT_CHAT_MODEL
-            : DEFAULT_CHAT_MODEL,
-      };
-    }
-    if (this.provider === 'anthropic') {
-      if (!this.anthropicApiKey) {
-        throw new Error(
-          'No extraction API key is configured for this user and ANTHROPIC_API_KEY is not configured',
-        );
-      }
+    const configuration =
+      await this.userApiKeys.getExtractionProviderConfiguration(userId);
+    if (configuration.provider === 'anthropic') {
       return {
         provider: 'anthropic',
-        model: this.model || DEFAULT_ANTHROPIC_MODEL,
+        ai: new Anthropic({
+          apiKey: configuration.apiKey,
+          timeout: this.timeoutMs,
+        }),
+        model: configuration.model,
       };
     }
-    if (!this.apiKey || !this.model) {
-      throw new Error(
-        'No extraction API key is configured for this user or the server',
-      );
-    }
-    return { provider: 'gemini', ai: this.ai, model: this.model };
+
+    return {
+      provider: 'gemini',
+      ai: new GoogleGenAI({
+        apiKey: configuration.apiKey,
+        httpOptions: { timeout: this.timeoutMs },
+      }),
+      model: configuration.model,
+    };
   }
 
   private async generateJson<T>(
@@ -541,7 +498,7 @@ export class EntityExtractionClient {
   ): Promise<T> {
     const content =
       target.provider === 'anthropic'
-        ? await this.generateWithAnthropic(target.model, request)
+        ? await this.generateWithAnthropic(target.ai, target.model, request)
         : await this.generateWithGemini(target.ai, target.model, request);
     this.logger.debug(`${request.label} response: ${content}`);
     return this.safeParseJson<T>(content || '{}');
@@ -566,6 +523,7 @@ export class EntityExtractionClient {
   }
 
   private async generateWithAnthropic(
+    ai: Anthropic,
     model: string,
     request: {
       systemPrompt: string;
@@ -574,7 +532,7 @@ export class EntityExtractionClient {
       label: string;
     },
   ): Promise<string> {
-    const response = await this.anthropic.beta.messages.create({
+    const response = await ai.beta.messages.create({
       model,
       max_tokens: ANTHROPIC_MAX_TOKENS,
       system: request.systemPrompt,

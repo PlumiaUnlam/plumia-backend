@@ -45,10 +45,30 @@ function createClient(
   userKey: string | null = null,
 ): {
   client: EntityExtractionClient;
-  userApiKeys: { getActiveGeminiKey: jest.Mock };
+  userApiKeys: { getExtractionProviderConfiguration: jest.Mock };
 } {
+  const serverProvider =
+    values['ENTITY_EXTRACTION_PROVIDER'] === 'anthropic'
+      ? 'anthropic'
+      : 'gemini';
+  const provider = userKey ? 'gemini' : serverProvider;
+  const model =
+    userKey && serverProvider !== 'gemini'
+      ? 'gemini-2.5-flash'
+      : values['ENTITY_EXTRACTION_MODEL'] ||
+        (provider === 'anthropic' ? 'claude-opus-5' : 'gemini-2.5-flash');
+  const apiKey =
+    userKey ??
+    (provider === 'anthropic'
+      ? (values['ANTHROPIC_API_KEY'] ?? '')
+      : (values['ENTITY_EXTRACTION_API_KEY'] ?? ''));
   const userApiKeys = {
-    getActiveGeminiKey: jest.fn().mockResolvedValue(userKey),
+    getExtractionProviderConfiguration: jest.fn().mockResolvedValue({
+      provider,
+      model,
+      credentialSource: userKey ? 'USER' : 'SERVER',
+      apiKey,
+    }),
   };
   const client = new EntityExtractionClient(
     createConfig(values) as never,
@@ -83,7 +103,9 @@ describe('EntityExtractionClient user credentials', () => {
 
     await client.extractEntities(input);
 
-    expect(userApiKeys.getActiveGeminiKey).toHaveBeenCalledWith('user-id');
+    expect(userApiKeys.getExtractionProviderConfiguration).toHaveBeenCalledWith(
+      'user-id',
+    );
     expect(GoogleGenAI).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'user-key' }),
     );
@@ -194,7 +216,9 @@ describe('EntityExtractionClient user credentials', () => {
 
     await client.createEmbedding('texto');
 
-    expect(userApiKeys.getActiveGeminiKey).not.toHaveBeenCalled();
+    expect(
+      userApiKeys.getExtractionProviderConfiguration,
+    ).not.toHaveBeenCalled();
     expect(mockEmbedContent).toHaveBeenCalledWith({
       model: 'embedding-test',
       contents: 'texto',
@@ -206,7 +230,7 @@ describe('EntityExtractionClient user credentials', () => {
       {
         ENTITY_EXTRACTION_PROVIDER: 'anthropic',
         ANTHROPIC_API_KEY: 'anthropic-key',
-        ENTITY_EXTRACTION_MODEL: 'claude-opus-5-5',
+        ENTITY_EXTRACTION_MODEL: 'claude-opus-5',
       },
       'user-key',
     );
@@ -224,7 +248,7 @@ describe('EntityExtractionClient user credentials', () => {
 
   it('runs audits through Claude with closed schemas when the user has no key', async () => {
     mockAnthropicCreate.mockResolvedValue({
-      model: 'claude-opus-5-5',
+      model: 'claude-opus-5',
       stop_reason: 'end_turn',
       content: [{ type: 'text', text: '{"contradictions":[]}' }],
     });
@@ -245,10 +269,40 @@ describe('EntityExtractionClient user credentials', () => {
     const [request] = mockAnthropicCreate.mock.calls[0] as [
       { model: string; output_config: { format: { schema: unknown } } },
     ];
-    expect(request.model).toBe('claude-opus-5-5');
+    expect(request.model).toBe('claude-opus-5');
     const schema = JSON.stringify(request.output_config.format.schema);
     expect(schema).toContain('"additionalProperties":false');
     expect(schema).not.toContain('minimum');
+  });
+
+  it('uses the selected Anthropic model and the user key for extraction', async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      model: 'claude-custom-model',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: emptyResponse }],
+    });
+    const { client, userApiKeys } = createClient({
+      ENTITY_EXTRACTION_API_KEY: 'gemini-server-key',
+      ENTITY_EXTRACTION_MODEL: 'gemini-3.6-flash',
+    });
+    userApiKeys.getExtractionProviderConfiguration.mockResolvedValueOnce({
+      provider: 'anthropic',
+      model: 'claude-custom-model',
+      credentialSource: 'USER',
+      apiKey: 'anthropic-user-key',
+    });
+
+    await client.extractEntities(input);
+
+    expect(mockAnthropicCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-custom-model' }),
+    );
+    expect(mockGenerateContent).not.toHaveBeenCalled();
+    const Anthropic = jest.requireMock('@anthropic-ai/sdk')
+      .default as jest.Mock;
+    expect(Anthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'anthropic-user-key' }),
+    );
   });
 
   it('does not silently use the server key when user-key lookup fails', async () => {
@@ -259,7 +313,7 @@ describe('EntityExtractionClient user credentials', () => {
       },
       null,
     );
-    userApiKeys.getActiveGeminiKey.mockRejectedValueOnce(
+    userApiKeys.getExtractionProviderConfiguration.mockRejectedValueOnce(
       new Error('stored key could not be decrypted'),
     );
 
