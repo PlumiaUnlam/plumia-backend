@@ -1,0 +1,33 @@
+{
+  "id": "state-hipotetico-01",
+  "description": "Hipótesis y rumores sobre ubicación y muerte: no son cambios de estado ni contradicciones.",
+  "tags": ["stateChanges", "inconsistencies", "negativo"],
+  "input": {
+    "sceneText": "Si Marcos hubiera tomado el barco a Puerto Hondo, ahora estaría a salvo. Pero se quedó. En el mercado corría el rumor de que Clara había muerto en el incendio del molino; Marcos no quiso creerlo. Tal vez ella estuviera escondida en las colinas, pensó.",
+    "knownEntities": [
+      { "canonicalName": "Marcos", "aliases": [], "type": "CHARACTER" },
+      { "canonicalName": "Clara", "aliases": [], "type": "CHARACTER" }
+    ],
+    "temporalContext": {
+      "worldRules": null,
+      "entities": [
+        {
+          "canonicalName": "Marcos",
+          "states": [{ "key": "location", "value": "Villa Serena" }],
+          "facts": []
+        },
+        {
+          "canonicalName": "Clara",
+          "states": [{ "key": "status", "value": "alive" }],
+          "facts": []
+        }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": []
+    }
+  },
+  "expect": {
+    "stateChanges": { "exhaustive": true },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

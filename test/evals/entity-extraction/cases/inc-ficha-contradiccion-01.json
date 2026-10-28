@@ -1,0 +1,25 @@
+{
+  "id": "inc-ficha-contradiccion-01",
+  "description": "El texto contradice explícitamente un atributo de la ficha (color de ojos): ENTITY_CONTRADICTION.",
+  "tags": ["inconsistencies", "contradiction", "positivo"],
+  "input": {
+    "sceneText": "Elena se acercó al espejo del baño. Los ojos azules de Elena, enrojecidos por el insomnio, le devolvieron una mirada que no reconoció.",
+    "knownEntities": [
+      {
+        "canonicalName": "Elena Duarte",
+        "aliases": ["Elena"],
+        "type": "CHARACTER",
+        "description": "Periodista de cuarenta años, de ojos verdes y pelo corto.",
+        "attributes": { "color_ojos": "verdes" }
+      }
+    ]
+  },
+  "expect": {
+    "inconsistencies": {
+      "mustInclude": [
+        { "entity": "Elena Duarte", "ruleCode": "ENTITY_CONTRADICTION" }
+      ],
+      "exhaustive": true
+    }
+  }
+}

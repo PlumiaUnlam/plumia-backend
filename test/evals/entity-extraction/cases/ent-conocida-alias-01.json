@@ -1,0 +1,32 @@
+{
+  "id": "ent-conocida-alias-01",
+  "description": "Entidad conocida que recibe un alias nuevo: se devuelve con su nombre canónico y el alias.",
+  "tags": ["entities", "known-entities", "aliases", "positivo"],
+  "input": {
+    "sceneText": "En el puerto ya nadie lo llamaba Bartolomé. Desde la pelea en la taberna, cuando perdió el ojo izquierdo, todos le decían el Tuerto. El Tuerto escupió al suelo y siguió cargando las cajas sin mirar a nadie.",
+    "knownEntities": [
+      {
+        "canonicalName": "Bartolomé Ríos",
+        "aliases": ["Bartolomé"],
+        "type": "CHARACTER",
+        "description": "Estibador del puerto, ex contrabandista.",
+        "attributes": {}
+      }
+    ]
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [
+        {
+          "name": "Bartolomé Ríos",
+          "type": "CHARACTER",
+          "aliasesInclude": ["el Tuerto"]
+        }
+      ],
+      "mustNotInclude": [
+        { "name": "el Tuerto", "canonicalOnly": true },
+        { "name": "Tuerto", "canonicalOnly": true }
+      ]
+    }
+  }
+}

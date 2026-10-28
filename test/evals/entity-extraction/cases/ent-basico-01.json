@@ -1,0 +1,19 @@
+{
+  "id": "ent-basico-01",
+  "description": "Personajes y lugar nuevos, nombrados de forma explícita.",
+  "tags": ["entities", "positivo"],
+  "input": {
+    "sceneText": "Lucía Ferrán cruzó el puente de Valdemora cuando ya caía la noche. Del otro lado la esperaba Tomás, apoyado en la baranda, con el abrigo empapado. —Llegás tarde —dijo él. Lucía no contestó; miró hacia las torres de Valdemora, donde todavía ardían las antorchas de la guardia.",
+    "knownEntities": []
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [
+        { "name": "Lucía Ferrán", "type": "CHARACTER" },
+        { "name": "Tomás", "type": "CHARACTER" },
+        { "name": "Valdemora", "type": "LOCATION" }
+      ],
+      "mustNotInclude": [{ "name": "baranda" }, { "name": "abrigo" }]
+    }
+  }
+}

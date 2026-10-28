@@ -1,0 +1,34 @@
+{
+  "id": "state-atributo-clave-01",
+  "description": "Cambio de salud explícito: debe usar la clave normalizada health_status, no una clave inventada.",
+  "tags": ["stateChanges", "keys", "positivo"],
+  "input": {
+    "sceneText": "La flecha atravesó el hombro de Bruno. Cayó de rodillas, con la camisa empapada de sangre, y ya no pudo levantar el brazo derecho. —Está herido, hay que sacarlo de acá —gritó alguien.",
+    "knownEntities": [
+      { "canonicalName": "Bruno", "aliases": [], "type": "CHARACTER" }
+    ],
+    "temporalContext": {
+      "worldRules": null,
+      "entities": [
+        {
+          "canonicalName": "Bruno",
+          "states": [{ "key": "health_status", "value": "sano" }],
+          "facts": []
+        }
+      ],
+      "relationships": [],
+      "deceasedEntityNames": []
+    }
+  },
+  "expect": {
+    "stateChanges": {
+      "mustInclude": [
+        { "entity": "Bruno", "key": "health_status", "toValue": ["herid"] }
+      ],
+      "mustNotInclude": [
+        { "entity": "Bruno", "key": "status", "toValue": ["muert", "dead"] }
+      ]
+    },
+    "inconsistencies": { "exhaustive": true }
+  }
+}

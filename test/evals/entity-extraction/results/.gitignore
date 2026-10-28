@@ -1,0 +1,4 @@
+# Corridas locales; solo se versiona el baseline de referencia.
+*
+!.gitignore
+!baseline.json

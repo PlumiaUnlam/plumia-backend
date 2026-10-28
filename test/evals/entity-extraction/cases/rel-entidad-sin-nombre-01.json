@@ -1,0 +1,41 @@
+{
+  "id": "rel-entidad-sin-nombre-01",
+  "description": "Pariente sin nombre ('su hermana'): no es entidad, así que no puede ser extremo de una relación.",
+  "tags": ["relationships", "entities", "negativo"],
+  "input": {
+    "sceneText": "Ramiro puso dos platos en la mesa y esperó a que su hermana bajara a cenar. Afuera, el viento sacudía los postigos de la casa de los Ibarra.",
+    "knownEntities": []
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [{ "name": "Ramiro", "type": "CHARACTER" }],
+      "mustNotInclude": [
+        { "name": "hermana" },
+        { "name": "su hermana" },
+        { "name": "hermana de Ramiro" }
+      ]
+    },
+    "relationships": {
+      "exhaustive": true,
+      "allow": [
+        {
+          "source": "Ramiro",
+          "target": "Ibarra",
+          "type": "FAMILY",
+          "anyDirection": true
+        },
+        {
+          "source": "Ramiro",
+          "target": "los Ibarra",
+          "type": "FAMILY",
+          "anyDirection": true
+        },
+        {
+          "source": "Ramiro",
+          "target": "casa de los Ibarra",
+          "type": "LOCATED_IN"
+        }
+      ]
+    }
+  }
+}

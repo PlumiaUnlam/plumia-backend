@@ -35,6 +35,8 @@
     "test:e2e": "node ./scripts/test-e2e.js",
     "pretest:e2e:jest": "pnpm prisma:generate",
     "test:e2e:jest": "jest --config ./test/jest-e2e.config.js",
+    "eval:extraction": "ts-node --transpile-only test/evals/entity-extraction/run.ts",
+    "eval:extraction:compare": "ts-node --transpile-only test/evals/entity-extraction/compare.ts",
     "seed:demo": "node ./scripts/seed-timeline-demo.js",
     "seed:timeline-demo": "node ./scripts/seed-timeline-demo.js",
     "application-help:sync": "node ./scripts/sync-application-help.js"

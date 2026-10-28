@@ -1,0 +1,17 @@
+{
+  "id": "state-entidad-nueva-01",
+  "description": "Personaje nuevo que cambia de ubicación: no debe ir a stateChanges (el pipeline solo los acepta sobre entidades conocidas).",
+  "tags": ["stateChanges", "new-entities", "negativo"],
+  "input": {
+    "sceneText": "Después de tres días de marcha, Ezequiel Montes llegó por fin a Puerto Hondo. Dejó la mochila en la posada del muelle y pidió una habitación con vista al mar.",
+    "knownEntities": [
+      { "canonicalName": "Puerto Hondo", "aliases": [], "type": "LOCATION" }
+    ]
+  },
+  "expect": {
+    "entities": {
+      "mustInclude": [{ "name": "Ezequiel Montes", "type": "CHARACTER" }]
+    },
+    "stateChanges": { "exhaustive": true }
+  }
+}
