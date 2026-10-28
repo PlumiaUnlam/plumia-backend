@@ -37,6 +37,11 @@ export interface TemporalRelationship {
   validToSceneId: string | null;
 }
 
+export interface HistoricalTemporalRelationship extends TemporalRelationship {
+  validFromScene: string | null;
+  validToScene: string;
+}
+
 export interface TemporalKnowledgeSnapshot {
   projectId: string;
   sceneId: string;
@@ -46,6 +51,7 @@ export interface TemporalKnowledgeSnapshot {
   activeStateRows?: TemporalEntityState[];
   activeFacts: Array<{ entityId: string; content: string }>;
   activeRelationships: TemporalRelationship[];
+  historicalRelationships?: HistoricalTemporalRelationship[];
 }
 
 interface OrderedScene {
@@ -100,12 +106,14 @@ export class TemporalKnowledgeSnapshotService {
       },
       select: {
         id: true,
+        title: true,
         order: true,
         sortKey: true,
         chapter: {
           select: {
+            title: true,
             sortKey: true,
-            book: { select: { sortKey: true } },
+            book: { select: { title: true, sortKey: true } },
           },
         },
       },
@@ -193,6 +201,31 @@ export class TemporalKnowledgeSnapshotService {
       ),
     );
     const activeStates = this.selectActiveStates(activeStateRows, positions);
+    const sceneLabels = new Map(
+      scenes.map((scene) => {
+        const sceneTitle = scene.title?.trim();
+        return [
+          scene.id,
+          [
+            scene.chapter.book.title,
+            scene.chapter.title,
+            sceneTitle?.length ? sceneTitle : `Escena ${scene.order + 1}`,
+          ].join(' / '),
+        ];
+      }),
+    );
+    const mapRelationship = (
+      relationship: (typeof relationships)[number],
+    ): TemporalRelationship => ({
+      id: relationship.id,
+      sourceEntityId: relationship.sourceEntityId,
+      targetEntityId: relationship.targetEntityId,
+      relationType: relationship.relationType,
+      description: relationship.description,
+      intensity: Number(relationship.confidenceScore),
+      validFromSceneId: relationship.validFromSceneId,
+      validToSceneId: relationship.validToSceneId,
+    });
 
     return {
       projectId,
@@ -219,10 +252,32 @@ export class TemporalKnowledgeSnapshotService {
             currentPosition,
           ),
         )
-        .map((relationship) => ({
-          ...relationship,
-          intensity: Number(relationship.confidenceScore),
-        })),
+        .map(mapRelationship),
+      historicalRelationships: relationships
+        .filter((relationship) =>
+          this.hasEndedAtOrBefore(
+            relationship.validFromSceneId,
+            relationship.validToSceneId,
+            positions,
+            currentPosition,
+          ),
+        )
+        .flatMap((relationship) => {
+          const validToSceneId = relationship.validToSceneId;
+          if (!validToSceneId) {
+            return [];
+          }
+          return [
+            {
+              ...mapRelationship(relationship),
+              validFromScene: relationship.validFromSceneId
+                ? (sceneLabels.get(relationship.validFromSceneId) ?? null)
+                : null,
+              validToScene:
+                sceneLabels.get(validToSceneId) ?? `Escena ${validToSceneId}`,
+            },
+          ];
+        }),
     };
   }
 
@@ -282,6 +337,30 @@ export class TemporalKnowledgeSnapshotService {
         ];
       });
 
+    const relationshipHistory = (snapshot.historicalRelationships ?? [])
+      .filter(
+        (relationship) =>
+          relevantIds.has(relationship.sourceEntityId) ||
+          relevantIds.has(relationship.targetEntityId),
+      )
+      .flatMap((relationship) => {
+        const source = entitiesById.get(relationship.sourceEntityId);
+        const target = entitiesById.get(relationship.targetEntityId);
+        if (!source || !target) {
+          return [];
+        }
+        return [
+          {
+            sourceEntity: source.canonicalName,
+            targetEntity: target.canonicalName,
+            relationType: relationship.relationType,
+            description: relationship.description,
+            validFromScene: relationship.validFromScene,
+            validToScene: relationship.validToScene,
+          },
+        ];
+      });
+
     return {
       worldRules: snapshot.worldRules,
       entities: relevantEntities.map((entity) => ({
@@ -290,6 +369,7 @@ export class TemporalKnowledgeSnapshotService {
         facts: factsByEntity.get(entity.id) ?? [],
       })),
       relationships,
+      relationshipHistory,
       deceasedEntityNames: relevantEntities
         .filter((entity) =>
           (statesByEntity.get(entity.id) ?? []).some(
@@ -365,6 +445,27 @@ export class TemporalKnowledgeSnapshotService {
       (!validFromSceneId ||
         (validFrom !== undefined && validFrom <= currentPosition)) &&
       (!validToSceneId || (validTo !== undefined && currentPosition < validTo))
+    );
+  }
+
+  private hasEndedAtOrBefore(
+    validFromSceneId: string | null,
+    validToSceneId: string | null,
+    positions: ReadonlyMap<string, number>,
+    currentPosition: number,
+  ): boolean {
+    if (!validToSceneId) {
+      return false;
+    }
+    const validFrom = validFromSceneId
+      ? positions.get(validFromSceneId)
+      : undefined;
+    const validTo = positions.get(validToSceneId);
+    return (
+      (!validFromSceneId ||
+        (validFrom !== undefined && validFrom <= currentPosition)) &&
+      validTo !== undefined &&
+      validTo <= currentPosition
     );
   }
 

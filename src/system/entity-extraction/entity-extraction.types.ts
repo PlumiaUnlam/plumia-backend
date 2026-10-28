@@ -113,6 +113,14 @@ export interface TemporalAuditContext {
     relationType: string;
     description: string | null;
   }>;
+  relationshipHistory?: Array<{
+    sourceEntity: string;
+    targetEntity: string;
+    relationType: string;
+    description: string | null;
+    validFromScene: string | null;
+    validToScene: string;
+  }>;
   deceasedEntityNames: string[];
 }
 
