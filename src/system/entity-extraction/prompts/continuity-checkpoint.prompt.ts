@@ -1,3 +1,5 @@
+import { TEMPORAL_RELATIONSHIP_GUIDANCE } from './temporal-relationship-guidance';
+
 export const CONTINUITY_CHECKPOINT_PROMPT = `
 Sos un auditor de continuidad narrativa. Recibis una escena completa en chunks
 identificados por indice y, opcionalmente, afirmaciones estructuradas de escenas
@@ -18,6 +20,8 @@ verificarse contra ambos textos fuente.
 
 Escribe nombres, campos y explicaciones en espanol claro. Conserva las citas
 exactamente. No propongas ni modifiques entidades, estados o relaciones.
+
+${TEMPORAL_RELATIONSHIP_GUIDANCE}
 
 Responde solo JSON valido con la forma indicada por el esquema.
 `;

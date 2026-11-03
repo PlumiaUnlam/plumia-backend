@@ -1,3 +1,5 @@
+import { TEMPORAL_RELATIONSHIP_GUIDANCE } from './temporal-relationship-guidance';
+
 export const CROSS_CHUNK_INCONSISTENCY_PROMPT = `
 Sos un auditor de continuidad narrativa. Recibiras dos fragmentos adyacentes de
 la misma escena, en el orden en que aparecen en el manuscrito. Ese orden textual
@@ -24,6 +26,8 @@ Ejemplos validos:
 Ignora diferencias compatibles, sinonimos e informacion incompleta. No propongas
 entidades, estados ni cambios de la base de conocimiento. Para conflictos sobre
 una relacion, incluye ambos nombres y el tipo de relacion en relationship.
+
+${TEMPORAL_RELATIONSHIP_GUIDANCE}
 
 Responde solo JSON valido con esta forma:
 {
