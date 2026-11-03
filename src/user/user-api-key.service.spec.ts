@@ -5,12 +5,22 @@ import {
 import { UserApiKeyService } from './user-api-key.service';
 import { DEFAULT_ENTITY_RECOGNITION_THRESHOLDS } from '../system/entity-extraction/entity-recognition-settings';
 
+interface ApiKeyCreateData {
+  encryptedKey: unknown;
+  iv: unknown;
+  tag: unknown;
+  keyPrefix: string;
+  isActive: boolean;
+  provider: string;
+  userId: string;
+}
+
 describe('UserApiKeyService', () => {
   const encryptionKey = 'a'.repeat(64);
   const config = {
-    get: jest.fn((key: string, fallback = '') =>
-      key === 'ENCRYPTION_KEY' ? encryptionKey : fallback,
-    ),
+    get: jest.fn((key: string, fallback: string = ''): string => {
+      return key === 'ENCRYPTION_KEY' ? encryptionKey : fallback;
+    }),
   };
 
   it('encrypts a Gemini key and replaces the active key', async () => {
@@ -61,17 +71,8 @@ describe('UserApiKeyService', () => {
       where: { userId: 'user-id', provider: 'gemini', isActive: true },
       data: { isActive: false },
     });
-    interface CreateData {
-      encryptedKey: unknown;
-      iv: unknown;
-      tag: unknown;
-      keyPrefix: string;
-      isActive: boolean;
-      provider: string;
-      userId: string;
-    }
     const createCalls = tx.userApiKey.create.mock.calls as unknown as Array<
-      [{ data: CreateData }]
+      [{ data: ApiKeyCreateData }]
     >;
     const createData = createCalls[0]?.[0]?.data;
     expect(createData).toBeDefined();
@@ -173,16 +174,26 @@ describe('UserApiKeyService', () => {
       where: { userId: 'user-id', provider: 'anthropic', isActive: true },
       data: { isActive: false },
     });
-    const createData = tx.userApiKey.create.mock.calls[0]?.[0]?.data;
+    const createCalls = tx.userApiKey.create.mock.calls as unknown as Array<
+      [{ data: ApiKeyCreateData }]
+    >;
+    const createData = createCalls[0]?.[0]?.data;
+    if (!createData) {
+      throw new Error('Expected encrypted provider key data');
+    }
     expect(createData.provider).toBe('anthropic');
     expect(createData.encryptedKey).not.toBe('sk-ant-secret-value');
   });
 
   it('requires the selected user key and does not fall back to a server key', async () => {
     const serverConfig = {
-      get: jest.fn((key: string, fallback = '') => {
-        if (key === 'ANTHROPIC_API_KEY') return 'server-anthropic-key';
-        if (key === 'ENCRYPTION_KEY') return encryptionKey;
+      get: jest.fn((key: string, fallback: string = ''): string => {
+        if (key === 'ANTHROPIC_API_KEY') {
+          return 'server-anthropic-key';
+        }
+        if (key === 'ENCRYPTION_KEY') {
+          return encryptionKey;
+        }
         return fallback;
       }),
     };
@@ -216,9 +227,13 @@ describe('UserApiKeyService', () => {
 
   it('uses the selected server provider and model for extraction', async () => {
     const serverConfig = {
-      get: jest.fn((key: string, fallback = '') => {
-        if (key === 'ANTHROPIC_API_KEY') return 'server-anthropic-key';
-        if (key === 'ENCRYPTION_KEY') return encryptionKey;
+      get: jest.fn((key: string, fallback: string = ''): string => {
+        if (key === 'ANTHROPIC_API_KEY') {
+          return 'server-anthropic-key';
+        }
+        if (key === 'ENCRYPTION_KEY') {
+          return encryptionKey;
+        }
         return fallback;
       }),
     };

@@ -1353,23 +1353,30 @@ export class EntityExtractionPipelineService {
       relationship,
     };
     const previous = input.alerts.get(fingerprint);
+    if (!previous) {
+      input.alerts.set(fingerprint, alert);
+      return;
+    }
+
+    let severity: AuditSeverity = AuditSeverity.LOW;
+    if (
+      previous.severity === AuditSeverity.HIGH ||
+      alert.severity === AuditSeverity.HIGH
+    ) {
+      severity = AuditSeverity.HIGH;
+    } else if (
+      previous.severity === AuditSeverity.MEDIUM ||
+      alert.severity === AuditSeverity.MEDIUM
+    ) {
+      severity = AuditSeverity.MEDIUM;
+    }
+
     input.alerts.set(fingerprint, {
       ...previous,
       ...alert,
-      ...(previous
-        ? {
-            evidence: [...new Set([...previous.evidence, ...alert.evidence])],
-            confidence: Math.max(previous.confidence, alert.confidence),
-            severity:
-              previous.severity === AuditSeverity.HIGH ||
-              alert.severity === AuditSeverity.HIGH
-                ? AuditSeverity.HIGH
-                : previous.severity === AuditSeverity.MEDIUM ||
-                    alert.severity === AuditSeverity.MEDIUM
-                  ? AuditSeverity.MEDIUM
-                  : AuditSeverity.LOW,
-          }
-        : {}),
+      evidence: [...new Set([...previous.evidence, ...alert.evidence])],
+      confidence: Math.max(previous.confidence, alert.confidence),
+      severity,
     });
   }
 

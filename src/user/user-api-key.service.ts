@@ -75,21 +75,24 @@ export class UserApiKeyService {
     );
     const geminiKey = keyByProvider.get('gemini');
     const serverProvider = this.getServerProvider();
-    const activeProvider = savedProviderSettings
-      ? this.normalizeProvider(savedProviderSettings.provider)
-      : geminiKey
-        ? 'gemini'
-        : serverProvider;
+    let activeProvider: AiProvider | null = null;
+    if (savedProviderSettings) {
+      activeProvider = this.normalizeProvider(savedProviderSettings.provider);
+    } else if (geminiKey) {
+      activeProvider = 'gemini';
+    }
     const provider = activeProvider ?? serverProvider;
     const credentialSource =
       (savedProviderSettings
         ? this.normalizeCredentialSource(savedProviderSettings.credentialSource)
         : null) ?? (geminiKey ? 'USER' : 'SERVER');
     const selectedModel = savedProviderSettings?.model.trim();
+    const serverModel =
+      provider === serverProvider ? this.getServerModel(provider) : undefined;
     const model =
-      selectedModel ||
-      (provider === serverProvider ? this.getServerModel(provider) : '') ||
-      this.getDefaultModel(provider);
+      [selectedModel, serverModel, this.getDefaultModel(provider)].find(
+        (candidate) => candidate !== undefined && candidate.length > 0,
+      ) ?? '';
     const providers = AI_PROVIDERS.map((providerOption) => {
       const key = keyByProvider.get(providerOption);
       const catalog = AI_PROVIDER_CATALOG[providerOption];
@@ -272,7 +275,10 @@ export class UserApiKeyService {
     await this.prisma.userApiKey.deleteMany({ where: { userId, provider } });
   }
 
-  private async findActiveKey(userId: string, provider: AiProvider) {
+  private findActiveKey(
+    userId: string,
+    provider: AiProvider,
+  ): Promise<(StoredApiKey & { keyPrefix: string; updatedAt: Date }) | null> {
     return this.prisma.userApiKey.findFirst({
       where: { userId, provider, isActive: true },
       select: {
@@ -317,7 +323,9 @@ export class UserApiKeyService {
     const configured = this.config
       .get<string>('ENTITY_EXTRACTION_MODEL', '')
       .trim();
-    if (configured) return configured;
+    if (configured) {
+      return configured;
+    }
     return provider === 'anthropic' ? DEFAULT_ANTHROPIC_MODEL : '';
   }
 
