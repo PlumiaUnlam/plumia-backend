@@ -1,8 +1,20 @@
+interface TestServiceContext {
+  service: KnowledgeProposalAutomationService;
+  prisma: {
+    scene: { findFirst: jest.Mock };
+    projectKnowledgeReviewSettings: { findUnique: jest.Mock };
+    entityStateProposal: { findMany: jest.Mock };
+    relationshipProposal: { findMany: jest.Mock };
+  };
+  temporalStates: { acceptProposalSequence: jest.Mock };
+  relationshipProposals: { acceptProposal: jest.Mock };
+}
+
 import { Prisma } from '@prisma/client';
 import { KnowledgeProposalAutomationService } from '../../../src/system/knowledge-proposal-automation.service';
 
 describe('KnowledgeProposalAutomationService', () => {
-  const createService = () => {
+  const createService = (): TestServiceContext => {
     const prisma = {
       scene: {
         findFirst: jest.fn().mockResolvedValue({

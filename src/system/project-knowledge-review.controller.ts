@@ -20,7 +20,7 @@ export class ProjectKnowledgeReviewController {
   getSettings(
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
-  ) {
+  ): ReturnType<ProjectKnowledgeReviewService['getSettings']> {
     return this.service.getSettings(req.user.id, projectId);
   }
 
@@ -29,7 +29,7 @@ export class ProjectKnowledgeReviewController {
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() dto: UpdateKnowledgeReviewSettingsDto,
-  ) {
+  ): ReturnType<ProjectKnowledgeReviewService['updateSettings']> {
     return this.service.updateSettings(req.user.id, projectId, dto);
   }
 
@@ -37,7 +37,7 @@ export class ProjectKnowledgeReviewController {
   previewAnalysis(
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
-  ) {
+  ): ReturnType<ProjectKnowledgeReviewService['previewAnalysis']> {
     return this.service.previewAnalysis(req.user.id, projectId);
   }
 
@@ -45,7 +45,7 @@ export class ProjectKnowledgeReviewController {
   startAnalysis(
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
-  ) {
+  ): ReturnType<ProjectKnowledgeReviewService['startAnalysis']> {
     return this.service.startAnalysis(req.user.id, projectId);
   }
 
@@ -54,7 +54,7 @@ export class ProjectKnowledgeReviewController {
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('runId', ParseUUIDPipe) runId: string,
-  ) {
+  ): ReturnType<ProjectKnowledgeReviewService['getRun']> {
     return this.service.getRun(req.user.id, projectId, runId);
   }
 
@@ -63,7 +63,7 @@ export class ProjectKnowledgeReviewController {
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('runId', ParseUUIDPipe) runId: string,
-  ) {
+  ): ReturnType<ProjectKnowledgeReviewService['retryFailed']> {
     return this.service.retryFailed(req.user.id, projectId, runId);
   }
 }
