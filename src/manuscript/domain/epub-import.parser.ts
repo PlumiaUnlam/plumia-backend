@@ -1037,16 +1037,14 @@ function directNavigationEntry(
   const children = node.children.filter(
     (child): child is XmlElement => child.kind === 'element',
   );
-  const target = children.find(
-    (child) => child.name === (node.name === 'li' ? 'a' : 'content'),
-  );
-  const label =
-    node.name === 'li'
-      ? target
-      : children.find((child) => child.name === 'navlabel');
-  const href = target
-    ? attribute(target, node.name === 'li' ? 'href' : 'src')
-    : undefined;
+  const isListItem = node.name === 'li';
+  const targetName = isListItem ? 'a' : 'content';
+  const target = children.find((child) => child.name === targetName);
+  const label = isListItem
+    ? target
+    : children.find((child) => child.name === 'navlabel');
+  const hrefAttribute = isListItem ? 'href' : 'src';
+  const href = target ? attribute(target, hrefAttribute) : undefined;
   if (label && href) {
     addNavigationTitle(entries, path, href, textContent(label));
   }
@@ -1374,20 +1372,20 @@ function isGenericNavigationTitle(value: string | undefined): boolean {
   );
 }
 
-/** Excludes identified editorial documents before importing their content. */
 /** Quita los dígitos finales sin regex con retroceso (evita backtracking cuadrático). */
 function stripTrailingDigits(value: string): string {
   let end = value.length;
-  while (
-    end > 0 &&
-    value.charCodeAt(end - 1) >= 48 &&
-    value.charCodeAt(end - 1) <= 57
-  ) {
+  while (end > 0) {
+    const codePoint = value.codePointAt(end - 1) ?? -1;
+    if (codePoint < 48 || codePoint > 57) {
+      break;
+    }
     end -= 1;
   }
   return value.slice(0, end);
 }
 
+/** Excludes identified editorial documents before importing their content. */
 function isFrontMatterDocument(
   path: string,
   navigationTitle: string | undefined,

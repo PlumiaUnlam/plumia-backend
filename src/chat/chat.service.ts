@@ -423,7 +423,7 @@ export class ChatService {
       orderBy: { createdAt: 'desc' },
       take: MAX_HISTORY_MESSAGES,
     });
-    const history = historyRows.reverse().map((message) => ({
+    const history = historyRows.toReversed().map((message) => ({
       role: message.role as ChatHistoryEntry['role'],
       content: message.content,
     }));

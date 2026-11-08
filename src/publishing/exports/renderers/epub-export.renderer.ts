@@ -178,7 +178,7 @@ function endnotesHtml(endnotes: Endnote[]): string {
   }> = [];
   for (const note of endnotes) {
     const last = groups.at(-1);
-    if (last && last.chapterIndex === note.chapterIndex) {
+    if (last?.chapterIndex === note.chapterIndex) {
       last.notes.push(note);
     } else {
       groups.push({
@@ -304,12 +304,14 @@ export class EpubExportRenderer {
 
     const tocHtml = buildExportToc(document)
       .map((entry) => {
-        const target =
-          entry.kind === 'book'
-            ? COVER_FILENAME
-            : entry.kind === 'chapter'
-              ? chapterFilenames.get(entry.id)
-              : sceneFilenames.get(entry.id);
+        let target: string | undefined;
+        if (entry.kind === 'book') {
+          target = COVER_FILENAME;
+        } else if (entry.kind === 'chapter') {
+          target = chapterFilenames.get(entry.id);
+        } else {
+          target = sceneFilenames.get(entry.id);
+        }
         return `<p class="toc-level-${entry.level}"><a href="${escapeXml(
           `${target ?? COVER_FILENAME}#${entry.anchor}`,
         )}">${escapeXml(entry.title)}</a></p>`;
@@ -408,8 +410,8 @@ export class EpubExportRenderer {
               return noteRefHtml(`${id}-ref`, `#${id}`, footnoteCount);
             },
           }),
+          ...footnotes,
         );
-        parts.push(...footnotes);
 
         spine.push({
           id: `chapter-${chapterIndex}-scene-${sceneIndex}`,
