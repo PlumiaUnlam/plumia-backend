@@ -1,5 +1,6 @@
 import type { ChatAction, ChatSection, ChatSource } from './chat.types';
 
+/** Accepts only same-origin relative routes, so a shortcut can never leave the app. */
 export function isSafeChatRoute(route: string): boolean {
   if (
     !route.startsWith('/') ||
@@ -89,23 +90,36 @@ export function resolveHelpSection(chunk: {
   return undefined;
 }
 
-/** Selects the most relevant cited help destination, then the most specific route. */
+/**
+ * Selects the destination the answer leans on most: the route cited by more sources wins,
+ * then the more specific route, then the one cited first. Having a `section` is not a
+ * reason to prefer a destination, so an answer about Worldbuilding leads to Worldbuilding
+ * even if it also cites an editor proposal.
+ */
 export function buildNavigationAction(
   citedSources: readonly ChatSource[],
 ): ChatAction | null {
-  const source = citedSources
-    .filter(
-      (item) =>
-        item.kind === 'application_help' &&
-        item.route &&
-        isSafeChatRoute(item.route),
-    )
+  const candidates = citedSources.filter(
+    (item) =>
+      item.kind === 'application_help' &&
+      item.route &&
+      isSafeChatRoute(item.route),
+  );
+  const citations = new Map<string, number>();
+  for (const item of candidates) {
+    const route = item.route ?? '';
+    citations.set(route, (citations.get(route) ?? 0) + 1);
+  }
+  const source = candidates
+    .map((item, index) => ({ item, index }))
     .sort(
       (left, right) =>
-        Number(Boolean(right.section)) - Number(Boolean(left.section)) ||
-        routeSpecificity(right.route ?? '') -
-          routeSpecificity(left.route ?? ''),
-    )[0];
+        (citations.get(right.item.route ?? '') ?? 0) -
+          (citations.get(left.item.route ?? '') ?? 0) ||
+        routeSpecificity(right.item.route ?? '') -
+          routeSpecificity(left.item.route ?? '') ||
+        left.index - right.index,
+    )[0]?.item;
   if (!source?.route) {
     return null;
   }
@@ -119,6 +133,7 @@ export function buildNavigationAction(
   };
 }
 
+/** Scores a route by its path depth and query parameters; deeper routes are more specific. */
 function routeSpecificity(route: string): number {
   const url = new URL(route, 'https://plumia.invalid');
   return (

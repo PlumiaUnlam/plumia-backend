@@ -100,29 +100,36 @@ export async function tocTitles(
   const ncxItem = manifest.find(
     (item) => attribute(item, 'media-type') === 'application/x-dtbncx+xml',
   );
-  const item = navItem ?? ncxItem;
-  const href = item ? attribute(item, 'href') : undefined;
-  if (!item || !href) {
-    return { titles: new Map(), promotionalTargets: new Set() };
-  }
-
-  try {
-    const navPath = archivePath(opfPath, href);
-    const root = parseXml(await readArchiveText(zip, navPath, budget));
-    const titles =
-      item === navItem
-        ? navigationTitles(root, navPath)
-        : ncxTitles(root, navPath);
-    return {
-      titles,
-      promotionalTargets: promotionalNavigationTargets(root, navPath, titles),
-    };
-  } catch (error) {
-    if (error instanceof EpubArchiveLimitError) {
-      throw error;
+  // EPUB 3 declares a nav document and may also ship an NCX. If the nav document cannot be
+  // used (missing or invalid href, unreadable or malformed), the NCX keeps the chapter
+  // fragments and titles so chapters distinguished only by them are not merged.
+  const candidates = [navItem, ncxItem].filter(
+    (candidate, index, all): candidate is XmlElement =>
+      candidate !== undefined && all.indexOf(candidate) === index,
+  );
+  for (const item of candidates) {
+    const href = attribute(item, 'href');
+    if (!href) {
+      continue;
     }
-    return { titles: new Map(), promotionalTargets: new Set() };
+    try {
+      const navPath = archivePath(opfPath, href);
+      const root = parseXml(await readArchiveText(zip, navPath, budget));
+      const titles =
+        item === navItem
+          ? navigationTitles(root, navPath)
+          : ncxTitles(root, navPath);
+      return {
+        titles,
+        promotionalTargets: promotionalNavigationTargets(root, navPath, titles),
+      };
+    } catch (error) {
+      if (error instanceof EpubArchiveLimitError) {
+        throw error;
+      }
+    }
   }
+  return { titles: new Map(), promotionalTargets: new Set() };
 }
 
 const PROMOTIONAL_LABELS = new Set([

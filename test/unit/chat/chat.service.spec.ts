@@ -758,6 +758,35 @@ describe('ChatService', () => {
     expect(generator.generate).toHaveBeenCalledTimes(1);
   });
 
+  it('carries the section of the cited help source into the navigation action', async () => {
+    const source = applicationHelpSource(
+      'help.stats-panel',
+      'Las estadísticas están en la pestaña Stats del panel derecho del editor.',
+      '/projects/project-1/editor',
+      'editor-right-stats',
+    );
+    applicationHelpIndex.search.mockResolvedValue([source]);
+    generator.generate.mockResolvedValue(
+      applicationHelpAnswer(
+        source,
+        'Las estadísticas están en la pestaña Stats del panel derecho.',
+        'Las estadísticas están en la pestaña Stats del panel derecho del editor',
+      ),
+    );
+
+    const result = await service.sendMessage('user-1', thread.id, {
+      content: '¿Cómo uso el panel de estadísticas del editor?',
+    });
+
+    expect(result.assistantMessage.actions).toEqual([
+      expect.objectContaining({
+        kind: 'navigation',
+        route: '/projects/project-1/editor',
+        section: 'editor-right-stats',
+      }),
+    ]);
+  });
+
   it.each([
     ['Hola, ¿cómo andás?', '¡Hola!'],
     ['Muchas gracias', '¡De nada!'],
@@ -1494,6 +1523,7 @@ function applicationHelpSource(
   id: string,
   excerpt: string,
   route: string,
+  section?: ChatSource['section'],
 ): ChatSource {
   return {
     id: `application_help:${id}`,
@@ -1501,6 +1531,7 @@ function applicationHelpSource(
     label: 'PlumIA › Ayuda de uso',
     excerpt,
     route,
+    ...(section ? { section } : {}),
   };
 }
 

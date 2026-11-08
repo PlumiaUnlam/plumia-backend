@@ -119,6 +119,7 @@ const books = [
             [
               'Mara Voss alcanzó a Eliana y Adrián junto al puente helado. Al principio se acusaron mutuamente de trabajar para quienes habían roto el sello, pero la luz azul apareció de nuevo sobre las montañas.',
               'Frente a la señal, aceptaron colaborar hasta llegar a la fuente. La alianza era frágil, pero todos sabían que el valle no podía permitirse otra noche sin guardianes.',
+              'Una voz respondió desde el faro apagado. Nora del Faro, la guardiana del norte, bajó los escalones con un mensaje y les ofreció guiarlos hacia la segunda atalaya.',
             ],
           ],
         ],
@@ -522,6 +523,7 @@ function assertLocalDatabase() {
   }
 }
 
+/** Creates or refreshes the demo books, chapters and scenes and returns their ids by seed key. */
 async function seedManuscript(projectId) {
   const bookIds = new Map(),
     chapterIds = new Map(),
@@ -592,6 +594,7 @@ async function seedManuscript(projectId) {
   return { bookIds, chapterIds, sceneIds };
 }
 
+/** Seeds the demo Wiki: entities, temporal states, facts and relationships between them. */
 async function seedKnowledge(projectId, sceneIds) {
   const ids = new Map();
   for (const [
@@ -716,6 +719,7 @@ async function seedKnowledge(projectId, sceneIds) {
   return ids;
 }
 
+/** Seeds the narrative timeline events, the storyboard arcs and their notes. */
 async function seedPlot(projectId, entityIds, sceneIds, chapterIds) {
   const arcIds = new Map();
   const arcs = [
@@ -874,6 +878,7 @@ const upsertSummary = (
     },
   });
 
+/** Seeds the demo summaries for the books, chapters and scenes. */
 async function seedSummaries(projectId, bookIds, chapterIds, sceneIds) {
   const parents = new Map();
   for (const [key, title, content] of [
@@ -916,6 +921,7 @@ async function seedSummaries(projectId, bookIds, chapterIds, sceneIds) {
     }
 }
 
+/** Seeds writing goals and sessions so the statistics panel has data to show. */
 async function seedActivity(project, sceneIds) {
   for (const [goalType, targetWords] of [
     ['DAILY', 650],
@@ -982,6 +988,35 @@ async function seedActivity(project, sceneIds) {
   }
 }
 
+/**
+ * Las alertas de ejemplo se identificaban solo por su clave (por ejemplo 'demo:linterna'),
+ * compartida entre proyectos. Ahora el fingerprint incluye el proyecto. Si este proyecto
+ * todavía tiene la alerta con la clave antigua, se conserva (con su historial y estado)
+ * pasándola al fingerprint nuevo; si ya existe una nueva, la antigua es una copia de
+ * ejemplo repetida y se elimina para que el listado no muestre el mismo problema dos veces.
+ */
+async function migrateLegacyDemoAlert(projectId, seedKey, fingerprint) {
+  if (seedKey === fingerprint) return;
+  const legacy = await prisma.auditAlert.findFirst({
+    where: { fingerprint: seedKey, projectId },
+    select: { id: true },
+  });
+  if (!legacy) return;
+  const current = await prisma.auditAlert.findUnique({
+    where: { fingerprint },
+    select: { id: true },
+  });
+  if (current) {
+    await prisma.auditAlert.delete({ where: { id: legacy.id } });
+    return;
+  }
+  await prisma.auditAlert.update({
+    where: { id: legacy.id },
+    data: { fingerprint },
+  });
+}
+
+/** Seeds continuity alerts for the project and a sample chat thread. */
 async function seedAuditAndChat(projectId, entityIds, sceneIds) {
   const alerts = [
     [
@@ -1022,6 +1057,7 @@ async function seedAuditAndChat(projectId, entityIds, sceneIds) {
     entity,
   ] of alerts) {
     const fingerprint = `demo:${projectId}:${seedKey.replace(/^demo:/, '')}`;
+    await migrateLegacyDemoAlert(projectId, seedKey, fingerprint);
     await prisma.auditAlert.upsert({
       where: { fingerprint },
       create: {
@@ -1080,13 +1116,67 @@ async function seedAuditAndChat(projectId, entityIds, sceneIds) {
     });
 }
 
-/** Creates or refreshes a demo proposal while preserving reviewed proposals. */
-async function upsertPendingSeedProposal(model, key, projectId, data) {
-  const sourceChunkHash = demoMarker(key);
-  const existing = await model.findFirst({
-    where: { projectId, sourceChunkHash },
+/** Returns the paragraphs of a demo scene by its seed key. */
+function sceneParagraphs(sceneKey) {
+  const scene = books
+    .flatMap((book) => book[2])
+    .flatMap((chapter) => chapter[2])
+    .find((item) => item[0] === sceneKey);
+  if (!scene) throw new Error(`No existe la escena demo “${sceneKey}”.`);
+  return scene[4];
+}
+
+/**
+ * Converts a selection to ProseMirror positions. Each paragraph node adds one position
+ * before and after its text, so the text of paragraph N starts after N + 1 opening tokens
+ * and N closing ones.
+ */
+function proseMirrorRange(paragraphs, selectedText) {
+  let before = 0;
+  for (const paragraph of paragraphs) {
+    const offset = paragraph.indexOf(selectedText);
+    if (offset >= 0) {
+      const from = before + 1 + offset;
+      return { from, to: from + selectedText.length };
+    }
+    before += paragraph.length + 2;
+  }
+  throw new Error(`No se encontró el texto anclado “${selectedText}”.`);
+}
+
+/**
+ * Makes sure the scene has a current, clean chunk and returns the reference proposals need
+ * to be considered up to date (their source chunk and the hash it had when they were made).
+ */
+async function ensureSceneChunk(projectId, sceneId, sceneKey) {
+  const content = sceneParagraphs(sceneKey).join('\n\n');
+  const contentHash = sha256(content);
+  const data = {
+    content,
+    tokenCount: Math.ceil(content.length / 4),
+    contentHash,
+    isDirty: false,
+  };
+  const chunk = await prisma.chunk.upsert({
+    where: { sceneId_chunkIndex: { sceneId, chunkIndex: 0 } },
+    create: { projectId, sceneId, chunkIndex: 0, ...data },
+    update: data,
   });
-  const proposalData = { projectId, sourceChunkHash, ...data };
+  return { sourceChunkId: chunk.id, sourceChunkHash: contentHash };
+}
+
+/** Creates or refreshes a demo proposal while preserving reviewed proposals. */
+async function upsertPendingSeedProposal(model, key, projectId, data, identity) {
+  const marker = demoMarker(key);
+  // Las propuestas que apuntan a un chunk real usan su hash verdadero: la identidad del
+  // seed se busca por `identity`, y las creadas antes con la marca se reconocen y migran.
+  const existing = identity
+    ? ((await model.findFirst({ where: { projectId, ...identity } })) ??
+      (await model.findFirst({ where: { projectId, sourceChunkHash: marker } })))
+    : await model.findFirst({ where: { projectId, sourceChunkHash: marker } });
+  const proposalData = identity
+    ? { projectId, ...data }
+    : { projectId, sourceChunkHash: marker, ...data };
   if (!existing) return model.create({ data: proposalData });
   if (existing.status === 'PENDING')
     return model.update({
@@ -1220,6 +1310,7 @@ async function seedReviewProposals(projectId, entityIds, sceneIds) {
   const stateProposals = [
     {
       key: 'state:eliana-location',
+      sceneKey: 'alianza',
       sceneId: sceneIds.get('alianza'),
       entityId: entityIds.get('eliana'),
       attributeKey: 'ubicacion',
@@ -1232,6 +1323,7 @@ async function seedReviewProposals(projectId, entityIds, sceneIds) {
     },
     {
       key: 'state:adrian-loyalty-uncertain',
+      sceneKey: 'ruta',
       sceneId: sceneIds.get('ruta'),
       entityId: entityIds.get('adrian'),
       attributeKey: 'lealtad',
@@ -1243,8 +1335,21 @@ async function seedReviewProposals(projectId, entityIds, sceneIds) {
       evidence: ['Adrián habla de su pasado, pero evita explicar por qué se fue.'],
     },
   ];
-  for (const { key, ...data } of stateProposals)
-    await upsertPendingSeedProposal(prisma.entityStateProposal, key, projectId, data);
+  for (const { key, sceneKey, ...data } of stateProposals) {
+    const chunk = await ensureSceneChunk(projectId, data.sceneId, sceneKey);
+    await upsertPendingSeedProposal(
+      prisma.entityStateProposal,
+      key,
+      projectId,
+      { ...data, ...chunk },
+      {
+        sceneId: data.sceneId,
+        entityId: data.entityId,
+        attributeKey: data.attributeKey,
+        toValue: data.toValue,
+      },
+    );
+  }
 
   const endRelationship = await prisma.relationship.findFirst({
     where: {
@@ -1501,27 +1606,31 @@ async function seedVersionsSharingAndComments(project, bookIds, chapterIds, scen
       reply: 'Sí, voy a sembrar la conexión en la escena de la linterna.',
     },
     {
-      sceneKey: 'nombres',
-      chapterKey: '002:002',
-      selectedText: 'el apellido de la madre de Eliana',
-      prefix: 'Adrián descubrió entre las marcas ',
-      suffix: '.',
+      sceneKey: 'biblioteca',
+      chapterKey: '001:002',
+      selectedText: 'nombres tachados una y otra vez',
+      prefix: 'En las paredes había ',
+      suffix: ', como si alguien',
       displayName: 'Diego · Lector beta',
-      body: 'La revelación funciona; quizá convenga anticipar el apellido una escena antes.',
+      body: 'La imagen de los nombres tachados funciona; quizá convenga anticiparla con una pista antes de bajar a la sala.',
+      legacyBodies: [
+        'La revelación funciona; quizá convenga anticipar el apellido una escena antes.',
+      ],
       status: 'RESOLVED',
-      reply: 'Agregué una pista en la estación abandonada. Gracias por marcarlo.',
+      reply: 'Agregué una pista antes de bajar a la sala. Gracias por marcarlo.',
     },
   ];
   for (const seed of commentSeeds) {
     const sceneId = sceneIds.get(seed.sceneKey);
-    const paragraphText = books
-      .flatMap((book) => book[2])
-      .flatMap((chapter) => chapter[2])
-      .find((scene) => scene[0] === seed.sceneKey)[4]
-      .join('\n\n');
-    const selectionStart = paragraphText.indexOf(seed.selectedText);
-    if (selectionStart < 0)
-      throw new Error(`No se encontró el texto anclado para “${seed.displayName}”.`);
+    const { from: anchorFrom, to: anchorTo } = proseMirrorRange(
+      sceneParagraphs(seed.sceneKey),
+      seed.selectedText,
+    );
+    // Si el ejemplo se cargó antes con otro texto, se retira esa versión antigua.
+    for (const legacyBody of seed.legacyBodies ?? [])
+      await prisma.readerComment.deleteMany({
+        where: { shareLinkId: share.id, displayName: seed.displayName, body: legacyBody },
+      });
     const isResolved = seed.status === 'RESOLVED';
     const commentData = {
       shareLinkId: share.id,
@@ -1531,8 +1640,8 @@ async function seedVersionsSharingAndComments(project, bookIds, chapterIds, scen
       snapshotSceneId: sceneId,
       displayName: seed.displayName,
       body: seed.body,
-      anchorFrom: selectionStart,
-      anchorTo: selectionStart + seed.selectedText.length,
+      anchorFrom,
+      anchorTo,
       selectedText: seed.selectedText,
       prefix: seed.prefix,
       suffix: seed.suffix,

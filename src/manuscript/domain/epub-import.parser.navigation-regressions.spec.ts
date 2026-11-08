@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { parseEpubArchive } from './epub-import.parser';
 import {
   createEpub,
@@ -209,5 +210,93 @@ describe('EPUB navigation regressions', () => {
       'La llegada',
     ]);
     expect(textFrom(parsed.chapters)).toEqual(['La historia sigue.']);
+  });
+
+  it('ends a paragraph-started editorial range at a linked narrative heading when nothing later would end it', async () => {
+    const parsed = await parseEpubArchive(
+      await createEpub(
+        [
+          {
+            id: 'story',
+            body: '<p id="credits">Credits</p><p>Editorial names.</p><h2 id="arrival">The arrival</h2><p>The story begins.</p>',
+          },
+        ],
+        {},
+        {
+          href: 'nav.xhtml',
+          body: '<html><nav epub:type="toc"><a href="Text/story.xhtml#credits">Credits</a><a href="Text/story.xhtml#arrival">The arrival</a></nav></html>',
+        },
+      ),
+    );
+
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'The arrival',
+    ]);
+    expect(textFrom(parsed.chapters)).toEqual(['The story begins.']);
+  });
+
+  it('keeps the outer editorial section when a nested heading is also labeled editorial', async () => {
+    const parsed = await parseEpubArchive(
+      await createEpub(
+        [
+          {
+            id: 'story',
+            body: '<h1 id="credits">Credits</h1><p>Staff.</p><h3 id="thanks">Acknowledgments</h3><p>Thanks.</p><h2>More staff</h2><p>Additional names.</p><h1 id="chapter-one">Chapter 1</h1><p>The story begins.</p>',
+          },
+        ],
+        {},
+        {
+          href: 'nav.xhtml',
+          body: '<html><nav epub:type="toc"><a href="Text/story.xhtml#credits">Credits</a><a href="Text/story.xhtml#thanks">Acknowledgments</a><a href="Text/story.xhtml#chapter-one">Chapter 1</a></nav></html>',
+        },
+      ),
+    );
+
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'Chapter 1',
+    ]);
+    expect(textFrom(parsed.chapters)).toEqual(['The story begins.']);
+  });
+
+  it('falls back to the NCX when the EPUB 3 navigation document cannot be read', async () => {
+    const build = async (
+      withNcx: boolean,
+    ): ReturnType<typeof parseEpubArchive> => {
+      const buffer = await createEpub(
+        [{ id: 'story', body: '<p id="one">Uno.</p><p id="two">Dos.</p>' }],
+        {},
+        { href: 'nav.xhtml', body: '<html><nav></nav></html>' },
+      );
+      const zip = await JSZip.loadAsync(buffer);
+      const opf = await zip.file('OEBPS/book.opf')!.async('string');
+      zip.file(
+        'OEBPS/book.opf',
+        opf
+          .replace('href="nav.xhtml"', 'href="../../../nav.xhtml"')
+          .replace(
+            '</manifest>',
+            withNcx
+              ? '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" /></manifest>'
+              : '</manifest>',
+          ),
+      );
+      if (withNcx) {
+        zip.file(
+          'OEBPS/toc.ncx',
+          '<ncx><navMap><navPoint><navLabel><text>El comienzo</text></navLabel><content src="Text/story.xhtml#one" /></navPoint><navPoint><navLabel><text>El final</text></navLabel><content src="Text/story.xhtml#two" /></navPoint></navMap></ncx>',
+        );
+      }
+      return parseEpubArchive(await zip.generateAsync({ type: 'nodebuffer' }));
+    };
+
+    const withoutNcx = await build(false);
+    const withNcx = await build(true);
+
+    expect(withNcx.chapters.length).toBeGreaterThan(withoutNcx.chapters.length);
+    expect(withNcx.chapters.map((chapter) => chapter.title)).toEqual([
+      'El comienzo',
+      'El final',
+    ]);
+    expect(textFrom(withNcx.chapters).join('')).toBe('Uno.Dos.');
   });
 });

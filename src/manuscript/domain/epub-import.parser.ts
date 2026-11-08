@@ -133,6 +133,7 @@ async function readEpubPackage(
   };
 }
 
+/** Resolves the archive path of a spine item, or null when it is not a readable document. */
 function spineItemPath(
   itemref: XmlElement,
   packageData: EpubPackage,
@@ -227,6 +228,57 @@ function isReliableNarrativeBoundary(
   );
 }
 
+/** First TOC entry (if any) that points at this block. */
+function linkedNavigationKey(
+  block: XmlElement,
+  path: string,
+  book: EpubPackage,
+): string | undefined {
+  return blockIds(block)
+    .map((id) => `${path}#${id}`)
+    .find((id) => book.navigationTitles.has(id));
+}
+
+/** True when the block starts a narrative chapter, by its TOC label or its own text. */
+function startsNarrativeChapter(
+  block: XmlElement,
+  path: string,
+  book: EpubPackage,
+): boolean {
+  const key = linkedNavigationKey(block, path, book);
+  if (!key) {
+    return isReliableNarrativeBoundary(block, textContent(block));
+  }
+  const title = book.navigationTitles.get(key)!;
+  return (
+    !isExcludedMatterLabel(title) && isReliableNarrativeBoundary(block, title)
+  );
+}
+
+/**
+ * Decides whether a TOC-linked block with a non-editorial label ends the excluded range.
+ * A range that started at a heading ends at any such link. A range that started at a
+ * paragraph (level 7) ends at a paragraph or heading that reliably starts a narrative
+ * chapter. It also ends at a linked heading when nothing later in the document would end
+ * it: then that heading is the narrative destination (for example `<h2>The arrival</h2>`
+ * after a "Credits" paragraph) and not an editorial subtitle, whose range a later chapter
+ * boundary closes anyway.
+ */
+function endsEditorialRange(
+  editorialLevel: number | null,
+  block: XmlElement,
+  title: string,
+  level: number,
+  boundaryFollows: boolean,
+): boolean {
+  if (editorialLevel !== 7) {
+    return true;
+  }
+  return (
+    isReliableNarrativeBoundary(block, title) || (level < 7 && !boundaryFollows)
+  );
+}
+
 /** Filters TOC-labeled editorial ranges while allowing explicit narrative destinations to resume. */
 function filterNavigationSections(
   blocks: XmlElement[],
@@ -234,11 +286,16 @@ function filterNavigationSections(
   book: EpubPackage,
   promotion: PromotionState,
 ): XmlElement[] {
+  // boundaryAfter[i]: some block after index i starts a narrative chapter.
+  const boundaryAfter = new Array<boolean>(blocks.length + 1).fill(false);
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    boundaryAfter[index] =
+      boundaryAfter[index + 1]! ||
+      startsNarrativeChapter(blocks[index]!, path, book);
+  }
   let editorialLevel: number | null = null;
-  return blocks.filter((block) => {
-    const key = blockIds(block)
-      .map((id) => `${path}#${id}`)
-      .find((id) => book.navigationTitles.has(id));
+  return blocks.filter((block, index) => {
+    const key = linkedNavigationKey(block, path, book);
     const level = /^h[1-6]$/u.test(block.name)
       ? Number(block.name.slice(1))
       : 7;
@@ -246,10 +303,18 @@ function filterNavigationSections(
       promotion.excluded = book.promotionalTargets.has(key);
       const title = book.navigationTitles.get(key)!;
       if (isExcludedMatterLabel(title)) {
-        editorialLevel = level;
+        // A nested editorial heading must not replace the outer section: the exclusion
+        // lasts until the outermost editorial section ends.
+        editorialLevel =
+          editorialLevel === null ? level : Math.min(editorialLevel, level);
       } else if (
-        editorialLevel !== 7 ||
-        isReliableNarrativeBoundary(block, title)
+        endsEditorialRange(
+          editorialLevel,
+          block,
+          title,
+          level,
+          boundaryAfter[index + 1]!,
+        )
       ) {
         editorialLevel = null;
       }
@@ -270,6 +335,7 @@ function filterNavigationSections(
   });
 }
 
+/** Appends a leading «Introducción» fragment to the previous numbered chapter when it belongs to it. */
 function mergeLeadingIntroduction(
   chapters: EpubImportChapter[],
   documentChapters: EpubImportChapter[],
@@ -374,6 +440,7 @@ function prependLeadingIllustrations(
   pending.length = 0;
 }
 
+/** Parses an EPUB archive into chapters, scenes and images ready to import. */
 export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
   const budget: DecompressionBudget = { decompressedBytes: 0 };
   const zip = await loadEpubArchive(buffer, budget);
@@ -402,6 +469,7 @@ export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
   };
 }
 
+/** Reads the imported asset id stored on an image node, if any. */
 export function imageIdFromNode(node: Record<string, unknown>): string | null {
   const attrs = asRecord(node['attrs']);
   return typeof attrs?.['epubAssetId'] === 'string'

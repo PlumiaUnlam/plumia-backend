@@ -41,30 +41,47 @@ describe('chat navigation', () => {
     });
   });
 
-  it('prioritizes a relevant editor section over a more specific route', () => {
+  it('leads to the destination the answer cites most, not to a source only because it has a section', () => {
+    const wiki = (id: string): ChatSource => ({
+      id,
+      kind: 'application_help',
+      label: 'PlumIA › Worldbuilding › Wiki del Universo › Editar una ficha',
+      excerpt: 'Wiki',
+      route: '/projects/one/worldbuilding?tab=wiki',
+    });
     const sources: ChatSource[] = [
-      {
-        id: 'application_help:wiki',
-        kind: 'application_help',
-        label: 'PlumIA › Worldbuilding',
-        excerpt: 'Wiki',
-        route: '/projects/one/worldbuilding?tab=wiki',
-      },
       {
         id: 'application_help:review',
         kind: 'application_help',
-        label: 'PlumIA › Editor › Modo Revisión',
+        label: 'PlumIA › IA › Propuestas de entidades',
         excerpt: 'Revisión',
         route: '/projects/one/editor',
         section: 'editor-right-review',
       },
+      wiki('application_help:wiki-a'),
+      wiki('application_help:wiki-b'),
     ];
 
     expect(buildNavigationAction(sources)).toMatchObject({
-      label: 'Modo Revisión',
-      route: '/projects/one/editor',
-      section: 'editor-right-review',
+      route: '/projects/one/worldbuilding?tab=wiki',
     });
+    expect(buildNavigationAction(sources)).not.toHaveProperty('section');
+  });
+
+  it('keeps the first cited destination when citations and specificity tie', () => {
+    const make = (id: string, route: string): ChatSource => ({
+      id,
+      kind: 'application_help',
+      label: `PlumIA › ${id}`,
+      excerpt: id,
+      route,
+    });
+    expect(
+      buildNavigationAction([
+        make('primera', '/projects/one/editor'),
+        make('segunda', '/projects/one/storyboard'),
+      ]),
+    ).toMatchObject({ route: '/projects/one/editor' });
   });
 
   it('never creates a navigation action from a work source or external route', () => {

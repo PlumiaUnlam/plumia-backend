@@ -147,9 +147,14 @@ Instalá y ejecutá Docker. Si usás Windows, Docker Desktop debe estar iniciado
 
 ### 2. Levantar backend y servicios
 
-Si el volumen `pgdata` ya contiene una base creada con `prisma db push` y sin historial de migraciones, preparala antes de iniciar Compose. Definí `SHADOW_DATABASE_URL` para una base shadow separada y descartable; compará la base con el estado final de `prisma/migrations`:
+Si el volumen `pgdata` ya contiene una base creada con `prisma db push` y sin historial de migraciones, preparala antes de iniciar toda la pila. Primero levantá solo PostgreSQL y esperá a que esté saludable, instalá las dependencias del backend y definí en el shell las variables que Prisma necesita (`DATABASE_URL` con el mismo valor que tiene `.env` para acceder desde tu máquina, y `SHADOW_DATABASE_URL` apuntando a una base shadow separada y descartable). Después compará la base con el estado final de `prisma/migrations`:
 
 ```bash
+cd ~/proyectos/plumia/plumia-backend
+docker compose up -d --wait postgres
+pnpm install --frozen-lockfile
+export DATABASE_URL="<el valor de DATABASE_URL de tu .env, con host 127.0.0.1>"
+export SHADOW_DATABASE_URL="<una base descartable distinta de la anterior>"
 pnpm exec prisma migrate diff --from-migrations ./prisma/migrations --to-url "$DATABASE_URL" --shadow-database-url "$SHADOW_DATABASE_URL"
 ```
 
@@ -157,10 +162,10 @@ Reconciliá cualquier diferencia sin borrar los datos. Cuando el esquema existen
 
 ```bash
 cd ~/proyectos/plumia/plumia-backend
-docker compose up -d --build
+docker compose up -d --build --wait
 ```
 
-La primera ejecución construye las imágenes y descarga PostgreSQL, Redis y Whisper. La primera transcripción puede descargar el modelo de Whisper y demorar más. El Compose espera a que PostgreSQL, Redis y Whisper estén saludables; después aplica las migraciones Prisma pendientes y arranca la API.
+La primera ejecución construye las imágenes y descarga PostgreSQL, Redis y Whisper. La primera transcripción puede descargar el modelo de Whisper y demorar más. El Compose espera a que PostgreSQL, Redis y Whisper estén saludables; después aplica las migraciones Prisma pendientes y arranca la API. Con `--wait` el comando termina recién cuando la API pasó su healthcheck, así que lo que sigue puede comprobarse sin esperas.
 
 Comprobá el estado y la API:
 
@@ -233,11 +238,13 @@ En esta modalidad el backend corre en Ubuntu/WSL, así que las direcciones del `
 cd ~/proyectos/plumia/plumia-backend
 pnpm install --frozen-lockfile
 pnpm exec prisma generate
+# Si la base se creó con `prisma db push` y no tiene historial de migraciones,
+# hacé antes el procedimiento de baseline de la sección «Levantar backend y servicios».
 pnpm exec prisma migrate deploy
 pnpm start:dev
 ```
 
-Esperá a que `pnpm exec prisma migrate deploy` finalice correctamente antes de iniciar la API. La API queda en **[http://localhost:3000](http://localhost:3000)**. `migrate deploy` aplica las migraciones pendientes sin reiniciar ni vaciar la base de datos.
+Si tu base ya existía y se creó con `prisma db push` (sin historial de migraciones), `migrate deploy` falla hasta que hagas el baseline descrito en la opción A: compará con `prisma migrate diff`, reconciliá las diferencias y registrá las migraciones ya reflejadas con `prisma migrate resolve --applied`. Esperá a que `pnpm exec prisma migrate deploy` finalice correctamente antes de iniciar la API. La API queda en **[http://localhost:3000](http://localhost:3000)**. `migrate deploy` aplica las migraciones pendientes sin reiniciar ni vaciar la base de datos.
 
 ### 3. Ejecutar el frontend
 
@@ -286,13 +293,13 @@ No hace falta clonar repositorios ni configurar servicios locales. Abrí **[http
 Después de iniciar sesión al menos una vez para que exista el usuario, podés cargar un proyecto local de prueba con manuscrito, Wiki, relaciones, estados temporales, eventos, tablero, resúmenes, análisis, chat, actividad, propuestas pendientes, versiones alternativas, anotaciones privadas, exportación y lectura compartida con comentarios:
 
 ```bash
-cd /home/pc-luis/Organizacion-PlumIA/plumia-backend
+cd ~/proyectos/plumia/plumia-backend
 pnpm install --frozen-lockfile
 pnpm exec prisma generate
 pnpm seed:demo
 ```
 
-Sin filtros, el seed crea o actualiza un proyecto `PlumIA Demo Integral` para cada cuenta activa de la base local, y los proyectos quedan asociados a sus dueños. `SEED_USER_ID` o `SEED_USER_EMAIL` limitan la carga a una sola cuenta; `SEED_PROJECT_ID` selecciona un proyecto. El seed solo se ejecuta si `DATABASE_URL` y `DIRECT_URL` usan `localhost`, `127.0.0.1` o `::1`, y rechaza `NODE_ENV=production`. Se puede reejecutar para restaurar los ejemplos iniciales; no elimina datos del proyecto ni permite apuntar a una base remota.
+Sin filtros, el seed crea o actualiza un proyecto `PlumIA Demo Integral` para cada cuenta activa de la base local, y los proyectos quedan asociados a sus dueños. `SEED_USER_ID` o `SEED_USER_EMAIL` limitan la carga a una sola cuenta; `SEED_PROJECT_ID` selecciona un proyecto. El seed solo se ejecuta si `DATABASE_URL` y `DIRECT_URL` usan `localhost`, `127.0.0.1` o `::1`, y rechaza `NODE_ENV=production`. Esa validación comprueba únicamente el nombre del host: no garantiza que la base sea local, porque un túnel SSH o un reenvío de puertos puede hacer que `localhost` llegue a un PostgreSQL remoto. Antes de ejecutarlo verificá el destino real (por ejemplo, que no haya túneles abiertos hacia otras bases), sobre todo porque sin filtros el seed afecta a todas las cuentas activas; para acotarlo usá `SEED_USER_ID` o `SEED_USER_EMAIL`. Se puede reejecutar para restaurar los ejemplos iniciales y no elimina datos del proyecto.
 
 Al terminar imprime el enlace del Editor y el de lectura compartida. El enlace de lectura muestra dos comentarios de ejemplo (uno abierto y otro resuelto) y permite probar respuestas y resolución. El proyecto también contiene propuestas nuevas y de actualización de entidades, propuestas de estados y relaciones, dos versiones alternativas de escena, una anotación privada y una copia de punto de control.
 

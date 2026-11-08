@@ -307,6 +307,7 @@ const GENERAL_APPLICATION_GUIDE: ApplicationGuide = {
   path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
 };
 
+/** Answers where a function lives in PlumIA and returns the navigation shortcut, or null when the question is not about the application. */
 export function getApplicationGuidance(
   question: string,
   projectId: string,
@@ -352,6 +353,7 @@ export function getApplicationGuidance(
   };
 }
 
+/** Tells whether a question (or a follow-up to an earlier one) asks about using the application. */
 export function isApplicationHelpIntent(
   question: string,
   context: { history?: readonly ApplicationHistoryEntry[] } = {},
@@ -379,6 +381,7 @@ export function isApplicationHelpIntent(
   );
 }
 
+/** Picks the guide whose patterns score highest for the question, if any matches. */
 function findBestGuide(question: string): ApplicationGuide | null {
   let bestGuide: ApplicationGuide | null = null;
   let bestScore = 0;
@@ -398,11 +401,13 @@ function findBestGuide(question: string): ApplicationGuide | null {
   return bestGuide;
 }
 
+/** Tells whether a raw question is about using the application. */
 function isApplicationQuestion(question: string): boolean {
   const normalizedQuestion = normalizeQuestion(question);
   return isApplicationHelp(normalizedQuestion);
 }
 
+/** Tells whether a normalized question mentions the interface and asks for help with it. */
 function isApplicationHelp(question: string): boolean {
   return (
     hasAnyTerm(question, APPLICATION_UI_TERMS) &&
@@ -412,14 +417,17 @@ function isApplicationHelp(question: string): boolean {
   );
 }
 
+/** Tells whether a normalized question asks where to find or how to open something. */
 function isNavigationIntent(question: string): boolean {
   return hasAnyTerm(question, NAVIGATION_PHRASES);
 }
 
+/** True when the value contains any of the terms as a whole phrase. */
 function hasAnyTerm(value: string, terms: readonly string[]): boolean {
   return terms.some((term) => hasWholePhrase(value, term));
 }
 
+/** True when the phrase appears in the value delimited by non-word characters. */
 function hasWholePhrase(value: string, phrase: string): boolean {
   let start = value.indexOf(phrase);
   while (start >= 0) {
@@ -433,6 +441,7 @@ function hasWholePhrase(value: string, phrase: string): boolean {
   return false;
 }
 
+/** True for letters and digits, the characters that continue a word. */
 function isWordCharacter(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -444,6 +453,7 @@ function isWordCharacter(value: string | undefined): boolean {
   return (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
 }
 
+/** Lowercases a question and removes accents so patterns can be matched reliably. */
 function normalizeQuestion(question: string): string {
   return question
     .normalize('NFD')
