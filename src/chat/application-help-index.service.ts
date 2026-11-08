@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { ChatSource } from './domain/chat.types';
-import { isSafeChatRoute } from './domain/chat-navigation';
+import { isSafeChatRoute, resolveHelpSection } from './domain/chat-navigation';
 import {
   APPLICATION_HELP_EMBEDDING_PROVIDER,
   type ApplicationHelpEmbeddingProvider,
@@ -83,6 +83,7 @@ export class ApplicationHelpIndexService implements OnModuleInit {
         '{projectId}',
         encodeURIComponent(projectId),
       );
+      const section = resolveHelpSection({ ...chunk, route });
       return [
         {
           id: `application_help:${chunk.id}`,
@@ -90,6 +91,7 @@ export class ApplicationHelpIndexService implements OnModuleInit {
           label: chunk.breadcrumb,
           excerpt: chunk.content,
           ...(isSafeChatRoute(route) ? { route } : {}),
+          ...(section ? { section } : {}),
         } satisfies ChatSource,
       ];
     });

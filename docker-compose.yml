@@ -14,6 +14,7 @@ services:
       LOCAL_WHISPER_URL: http://whisper:8001
     ports:
       - '3000:3000'
+    command: ['sh', '-c', './node_modules/.bin/prisma migrate deploy && node dist/main']
     volumes:
       - ./firebase-service-account.json:/app/firebase-service-account.json:ro
     depends_on:
@@ -23,6 +24,18 @@ services:
         condition: service_healthy
       whisper:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   postgres:
     image: pgvector/pgvector:pg15
