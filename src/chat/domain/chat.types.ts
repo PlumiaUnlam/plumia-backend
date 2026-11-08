@@ -4,6 +4,28 @@ export type ChatSourceKind =
   | 'timeline'
   | 'application_help';
 
+/**
+ * Parte concreta del editor a la que apunta un acceso directo. El frontend resuelve cada
+ * valor (abre la pestaña o muestra la barra); la lista es cerrada y se valida al leer.
+ */
+export const CHAT_SECTIONS = [
+  'editor-toolbar',
+  'editor-right-wiki',
+  'editor-right-chat',
+  'editor-right-stats',
+  'editor-right-review',
+  'editor-history',
+] as const;
+
+export type ChatSection = (typeof CHAT_SECTIONS)[number];
+
+export function isChatSection(value: unknown): value is ChatSection {
+  return (
+    typeof value === 'string' &&
+    (CHAT_SECTIONS as readonly string[]).includes(value)
+  );
+}
+
 export interface ChatSource {
   id: string;
   kind: ChatSourceKind;
@@ -24,6 +46,7 @@ export interface ChatSource {
   contentHash?: string | null;
   textQuote?: string;
   route?: string;
+  section?: ChatSection;
 }
 
 export interface ChatOpenConflict {
@@ -44,6 +67,7 @@ export interface ChatAction {
   label: string;
   description: string;
   route: string;
+  section?: ChatSection;
 }
 
 export interface ChatThreadRecord {

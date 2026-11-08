@@ -115,4 +115,10 @@ describe('application guide', () => {
       }),
     ).toBeNull();
   });
+
+  it('points the statistics guide to the Stats tab of the editor', () => {
+    expect(
+      getApplicationGuidance('¿Dónde veo las estadísticas?', 'one')?.action,
+    ).toMatchObject({ section: 'editor-right-stats' });
+  });
 });

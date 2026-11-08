@@ -271,7 +271,7 @@ export class AuditService {
           },
         },
       });
-      const ordered = scenes.sort(
+      const ordered = scenes.toSorted(
         (left, right) =>
           left.chapter.book.sortKey.localeCompare(right.chapter.book.sortKey) ||
           left.chapter.sortKey.localeCompare(right.chapter.sortKey) ||

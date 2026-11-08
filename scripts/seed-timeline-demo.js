@@ -1,9 +1,13 @@
 require('dotenv/config');
 
+const { createHash } = require('node:crypto');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-const PROJECT_TITLE = 'Proyecto Demo PlumIA';
+const PROJECT_TITLE = 'PlumIA Demo Integral';
+/** Derives a repeatable reader token scoped to a demo project. */
+const demoReaderToken = (projectId) =>
+  `plumia-local-demo-reader-${sha256(projectId).slice(0, 24)}`;
 const books = [
   [
     '001',
@@ -115,6 +119,7 @@ const books = [
             [
               'Mara Voss alcanzó a Eliana y Adrián junto al puente helado. Al principio se acusaron mutuamente de trabajar para quienes habían roto el sello, pero la luz azul apareció de nuevo sobre las montañas.',
               'Frente a la señal, aceptaron colaborar hasta llegar a la fuente. La alianza era frágil, pero todos sabían que el valle no podía permitirse otra noche sin guardianes.',
+              'Una voz respondió desde el faro apagado. Nora del Faro, la guardiana del norte, bajó los escalones con un mensaje y les ofreció guiarlos hacia la segunda atalaya.',
             ],
           ],
         ],
@@ -401,55 +406,124 @@ const doc = (paragraphs) => ({
 });
 const countWords = (paragraphs) =>
   paragraphs.join(' ').trim().split(/\s+/).length;
+/** Serializes objects with sorted keys so equivalent snapshots hash identically. */
+const stableStringify = (value) => {
+  if (Array.isArray(value))
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+/** Returns a hexadecimal SHA-256 digest for a string value. */
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+/** Hashes a structured value using the seed's stable JSON representation. */
+const contentHash = (value) => sha256(stableStringify(value));
+/** Creates the deterministic source marker used to identify seeded proposals. */
+const demoMarker = (key) => sha256(`plumia-demo:${key}`);
+/** Creates a stable UUID-shaped share slug for a demo project. */
+const demoSlug = (projectId) => {
+  const hash = sha256(`plumia-demo-share:${projectId}`);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+};
 
-async function resolveProject() {
+/** Finds or creates the demo project for each selected active account. */
+async function resolveProjects() {
   if (process.env.SEED_PROJECT_ID) {
     const project = await prisma.project.findFirst({
       where: { id: process.env.SEED_PROJECT_ID, deletedAt: null },
     });
     if (!project)
       throw new Error('SEED_PROJECT_ID no corresponde a un proyecto activo.');
-    return project;
+    if (process.env.SEED_USER_ID && project.userId !== process.env.SEED_USER_ID)
+      throw new Error('SEED_PROJECT_ID no pertenece al SEED_USER_ID indicado.');
+    if (process.env.SEED_USER_EMAIL) {
+      const owner = await prisma.user.findUnique({
+        where: { id: project.userId },
+        select: { email: true },
+      });
+      if (owner?.email.toLowerCase() !== process.env.SEED_USER_EMAIL.trim().toLowerCase())
+        throw new Error('SEED_PROJECT_ID no pertenece al SEED_USER_EMAIL indicado.');
+    }
+    return [project];
   }
-  const title = process.env.SEED_PROJECT_TITLE || PROJECT_TITLE;
-  const found = await prisma.project.findMany({
-    where: {
-      title,
-      deletedAt: null,
-      ...(process.env.SEED_USER_ID ? { userId: process.env.SEED_USER_ID } : {}),
-    },
-    take: 2,
-  });
-  if (found.length === 1) return found[0];
-  if (found.length > 1)
-    throw new Error(
-      `Hay más de un proyecto “${title}”; definí SEED_PROJECT_ID.`,
-    );
+
+  const explicitUser = process.env.SEED_USER_ID || process.env.SEED_USER_EMAIL;
   const users = await prisma.user.findMany({
     where: {
       deletedAt: null,
       ...(process.env.SEED_USER_ID ? { id: process.env.SEED_USER_ID } : {}),
+      ...(process.env.SEED_USER_EMAIL
+        ? { email: process.env.SEED_USER_EMAIL.trim().toLowerCase() }
+        : {}),
     },
-    take: 2,
+    orderBy: { createdAt: 'asc' },
   });
-  if (users.length !== 1)
-    throw new Error('Se necesita un único usuario activo o SEED_USER_ID.');
-  return prisma.project.create({
-    data: {
-      userId: users[0].id,
-      title,
-      description:
-        'Novela fantástica de misterio sobre la memoria y los nombres perdidos.',
-      genre: 'Fantasía de misterio',
-      genreRules: {
-        tone: 'Atmosférico y esperanzador',
-        audience: 'Young adult y adulto',
-      },
-      wordCountTarget: 80000,
-    },
-  });
+  if (explicitUser && users.length !== 1)
+    throw new Error('SEED_USER_ID o SEED_USER_EMAIL no corresponde a una cuenta activa.');
+  if (users.length === 0)
+    throw new Error('No hay cuentas activas para cargar el proyecto demo.');
+
+  const title = process.env.SEED_PROJECT_TITLE || PROJECT_TITLE;
+  const projects = [];
+  for (const user of users) {
+    const found = await prisma.project.findMany({
+      where: { title, userId: user.id, deletedAt: null },
+      take: 2,
+    });
+    if (found.length > 1)
+      throw new Error(
+        `Hay más de un proyecto “${title}” para una cuenta; definí SEED_PROJECT_ID.`,
+      );
+    projects.push(
+      found[0] ??
+        (await prisma.project.create({
+          data: {
+            userId: user.id,
+            title,
+            description:
+              'Novela fantástica de misterio sobre la memoria y los nombres perdidos.',
+            genre: 'Fantasía de misterio',
+            genreRules: {
+              tone: 'Atmosférico y esperanzador',
+              audience: 'Young adult y adulto',
+            },
+            wordCountTarget: 80000,
+          },
+        })),
+    );
+  }
+  return projects;
 }
 
+/** Refuses to seed unless both Prisma URLs point to a local PostgreSQL host. */
+function assertLocalDatabase() {
+  const localHosts = new Set(['localhost', '127.0.0.1', '::1']);
+  for (const [name, value] of [
+    ['DATABASE_URL', process.env.DATABASE_URL],
+    ['DIRECT_URL', process.env.DIRECT_URL],
+  ]) {
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(`${name} debe apuntar a una base PostgreSQL local.`);
+    }
+    const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (
+      !['postgres:', 'postgresql:'].includes(url.protocol) ||
+      !localHosts.has(hostname)
+    )
+      throw new Error(
+        `Seed bloqueado: ${name} debe usar localhost, 127.0.0.1 o ::1.`,
+      );
+  }
+}
+
+/** Creates or refreshes the demo books, chapters and scenes and returns their ids by seed key. */
 async function seedManuscript(projectId) {
   const bookIds = new Map(),
     chapterIds = new Map(),
@@ -520,6 +594,7 @@ async function seedManuscript(projectId) {
   return { bookIds, chapterIds, sceneIds };
 }
 
+/** Seeds the demo Wiki: entities, temporal states, facts and relationships between them. */
 async function seedKnowledge(projectId, sceneIds) {
   const ids = new Map();
   for (const [
@@ -539,6 +614,7 @@ async function seedKnowledge(projectId, sceneIds) {
       attributes,
       source: 'author_manual',
       confidenceScore: 1,
+      userLockedFields: key === 'eliana' ? ['description'] : [],
       isActive: true,
     };
     entity = entity
@@ -643,6 +719,7 @@ async function seedKnowledge(projectId, sceneIds) {
   return ids;
 }
 
+/** Seeds the narrative timeline events, the storyboard arcs and their notes. */
 async function seedPlot(projectId, entityIds, sceneIds, chapterIds) {
   const arcIds = new Map();
   const arcs = [
@@ -801,6 +878,7 @@ const upsertSummary = (
     },
   });
 
+/** Seeds the demo summaries for the books, chapters and scenes. */
 async function seedSummaries(projectId, bookIds, chapterIds, sceneIds) {
   const parents = new Map();
   for (const [key, title, content] of [
@@ -843,6 +921,7 @@ async function seedSummaries(projectId, bookIds, chapterIds, sceneIds) {
     }
 }
 
+/** Seeds writing goals and sessions so the statistics panel has data to show. */
 async function seedActivity(project, sceneIds) {
   for (const [goalType, targetWords] of [
     ['DAILY', 650],
@@ -909,6 +988,35 @@ async function seedActivity(project, sceneIds) {
   }
 }
 
+/**
+ * Las alertas de ejemplo se identificaban solo por su clave (por ejemplo 'demo:linterna'),
+ * compartida entre proyectos. Ahora el fingerprint incluye el proyecto. Si este proyecto
+ * todavía tiene la alerta con la clave antigua, se conserva (con su historial y estado)
+ * pasándola al fingerprint nuevo; si ya existe una nueva, la antigua es una copia de
+ * ejemplo repetida y se elimina para que el listado no muestre el mismo problema dos veces.
+ */
+async function migrateLegacyDemoAlert(projectId, seedKey, fingerprint) {
+  if (seedKey === fingerprint) return;
+  const legacy = await prisma.auditAlert.findFirst({
+    where: { fingerprint: seedKey, projectId },
+    select: { id: true },
+  });
+  if (!legacy) return;
+  const current = await prisma.auditAlert.findUnique({
+    where: { fingerprint },
+    select: { id: true },
+  });
+  if (current) {
+    await prisma.auditAlert.delete({ where: { id: legacy.id } });
+    return;
+  }
+  await prisma.auditAlert.update({
+    where: { id: legacy.id },
+    data: { fingerprint },
+  });
+}
+
+/** Seeds continuity alerts for the project and a sample chat thread. */
 async function seedAuditAndChat(projectId, entityIds, sceneIds) {
   const alerts = [
     [
@@ -940,14 +1048,16 @@ async function seedAuditAndChat(projectId, entityIds, sceneIds) {
     ],
   ];
   for (const [
-    fingerprint,
+    seedKey,
     scene,
     severity,
     category,
     title,
     explanation,
     entity,
-  ] of alerts)
+  ] of alerts) {
+    const fingerprint = `demo:${projectId}:${seedKey.replace(/^demo:/, '')}`;
+    await migrateLegacyDemoAlert(projectId, seedKey, fingerprint);
     await prisma.auditAlert.upsert({
       where: { fingerprint },
       create: {
@@ -980,6 +1090,7 @@ async function seedAuditAndChat(projectId, entityIds, sceneIds) {
         status: 'ACTIVE',
       },
     });
+  }
   let thread = await prisma.chatThread.findFirst({
     where: { projectId, title: 'Ideas para la segunda señal' },
   });
@@ -1005,10 +1116,627 @@ async function seedAuditAndChat(projectId, entityIds, sceneIds) {
     });
 }
 
-async function main() {
-  if (process.env.NODE_ENV === 'production')
-    throw new Error('El seed demo no se ejecuta en producción.');
-  const project = await resolveProject();
+/** Returns the paragraphs of a demo scene by its seed key. */
+function sceneParagraphs(sceneKey) {
+  const scene = books
+    .flatMap((book) => book[2])
+    .flatMap((chapter) => chapter[2])
+    .find((item) => item[0] === sceneKey);
+  if (!scene) throw new Error(`No existe la escena demo “${sceneKey}”.`);
+  return scene[4];
+}
+
+/**
+ * Converts a selection to ProseMirror positions. Each paragraph node adds one position
+ * before and after its text, so the text of paragraph N starts after N + 1 opening tokens
+ * and N closing ones.
+ */
+function proseMirrorRange(paragraphs, selectedText) {
+  let before = 0;
+  for (const paragraph of paragraphs) {
+    const offset = paragraph.indexOf(selectedText);
+    if (offset >= 0) {
+      const from = before + 1 + offset;
+      return { from, to: from + selectedText.length };
+    }
+    before += paragraph.length + 2;
+  }
+  throw new Error(`No se encontró el texto anclado “${selectedText}”.`);
+}
+
+/**
+ * Makes sure the scene has a current, clean chunk and returns the reference proposals need
+ * to be considered up to date (their source chunk and the hash it had when they were made).
+ */
+async function ensureSceneChunk(projectId, sceneId, sceneKey) {
+  const content = sceneParagraphs(sceneKey).join('\n\n');
+  const contentHash = sha256(content);
+  const data = {
+    content,
+    tokenCount: Math.ceil(content.length / 4),
+    contentHash,
+    isDirty: false,
+  };
+  const chunk = await prisma.chunk.upsert({
+    where: { sceneId_chunkIndex: { sceneId, chunkIndex: 0 } },
+    create: { projectId, sceneId, chunkIndex: 0, ...data },
+    update: data,
+  });
+  return { sourceChunkId: chunk.id, sourceChunkHash: contentHash };
+}
+
+/** Creates or refreshes a demo proposal while preserving reviewed proposals. */
+async function upsertPendingSeedProposal(model, key, projectId, data, identity) {
+  const marker = demoMarker(key);
+  // Las propuestas que apuntan a un chunk real usan su hash verdadero: la identidad del
+  // seed se busca por `identity`, y las creadas antes con la marca se reconocen y migran.
+  const existing = identity
+    ? ((await model.findFirst({ where: { projectId, ...identity } })) ??
+      (await model.findFirst({ where: { projectId, sourceChunkHash: marker } })))
+    : await model.findFirst({ where: { projectId, sourceChunkHash: marker } });
+  const proposalData = identity
+    ? { projectId, ...data }
+    : { projectId, sourceChunkHash: marker, ...data };
+  if (!existing) return model.create({ data: proposalData });
+  if (existing.status === 'PENDING')
+    return model.update({
+      where: { id: existing.id },
+      data: proposalData,
+    });
+  return existing;
+}
+
+/** Applies the project settings needed to demonstrate review workflows. */
+async function seedProjectSettings(projectId) {
+  await prisma.projectEntityRecognitionSettings.upsert({
+    where: { projectId },
+    create: {
+      projectId,
+      importantEntityNames: ['Eliana Vale', 'Adrián Rivas', 'Mara Voss'],
+      ignoredEntityNames: ['el valle', 'la noche'],
+    },
+    update: {
+      importantEntityNames: ['Eliana Vale', 'Adrián Rivas', 'Mara Voss'],
+      ignoredEntityNames: ['el valle', 'la noche'],
+    },
+  });
+  await prisma.projectKnowledgeReviewSettings.upsert({
+    where: { projectId },
+    create: {
+      projectId,
+      stateTrackingEnabled: true,
+      stateReviewMode: 'MANUAL',
+      stateConfidenceThreshold: 0.8,
+      relationshipReviewMode: 'MANUAL',
+      relationshipConfidenceThreshold: 0.8,
+      crossChunkAuditMode: 'SCENE_GROUPED',
+    },
+    update: {
+      stateTrackingEnabled: true,
+      stateReviewMode: 'MANUAL',
+      stateConfidenceThreshold: 0.8,
+      relationshipReviewMode: 'MANUAL',
+      relationshipConfidenceThreshold: 0.8,
+      crossChunkAuditMode: 'SCENE_GROUPED',
+    },
+  });
+  await prisma.exportSettings.upsert({
+    where: { projectId },
+    create: {
+      projectId,
+      marginTopCm: 2.2,
+      marginBottomCm: 2.2,
+      marginLeftCm: 2.5,
+      marginRightCm: 2.5,
+      header: {
+        text: 'La Semilla de Luz',
+        alignment: 'center',
+        pageNumber: { enabled: false, format: '1' },
+      },
+      footer: {
+        text: null,
+        alignment: 'right',
+        pageNumber: { enabled: true, format: 'Página {page}' },
+      },
+    },
+    update: {
+      marginTopCm: 2.2,
+      marginBottomCm: 2.2,
+      marginLeftCm: 2.5,
+      marginRightCm: 2.5,
+      header: {
+        text: 'La Semilla de Luz',
+        alignment: 'center',
+        pageNumber: { enabled: false, format: '1' },
+      },
+      footer: {
+        text: null,
+        alignment: 'right',
+        pageNumber: { enabled: true, format: 'Página {page}' },
+      },
+    },
+  });
+}
+
+/** Creates repeatable pending entity, state, and relationship proposals. */
+async function seedReviewProposals(projectId, entityIds, sceneIds) {
+  await upsertPendingSeedProposal(prisma.entityProposal, 'entity:nora-del-faro', projectId, {
+    sceneId: sceneIds.get('alianza'),
+    entityId: null,
+    conflictsWithLocked: false,
+    confidenceScore: 0.91,
+    narrativeOrder: 8,
+    proposedData: {
+      canonicalName: 'Nora del Faro',
+      aliases: ['La guardiana del norte'],
+      type: 'CHARACTER',
+      description: 'Mensajera que conoce la ruta hacia la segunda atalaya.',
+      attributes: { role: 'Mensajera', allegiance: 'desconocida' },
+      imageUrl: null,
+      proposalKind: 'NEW_ENTITY',
+      confidenceScore: 0.91,
+      sourceSceneId: sceneIds.get('alianza'),
+      sourceSceneTitle: 'Una alianza incómoda',
+      evidence: ['Una voz respondió desde el faro apagado.'],
+      normalizedName: 'nora del faro',
+    },
+  });
+  await upsertPendingSeedProposal(prisma.entityProposal, 'entity:eliana-description-conflict', projectId, {
+    sceneId: sceneIds.get('nombres'),
+    entityId: entityIds.get('eliana'),
+    conflictsWithLocked: true,
+    confidenceScore: 0.84,
+    narrativeOrder: 7,
+    proposedData: {
+      canonicalName: 'Eliana Vale',
+      aliases: ['Eliana', 'La cartógrafa'],
+      type: 'CHARACTER',
+      description: 'Cartógrafa que heredó el juramento de proteger la Semilla.',
+      attributes: {
+        role: 'Protagonista',
+        age: 24,
+        motivation: 'Recuperar la memoria de su familia',
+      },
+      imageUrl: null,
+      proposalKind: 'ENTITY_UPDATE',
+      confidenceScore: 0.84,
+      sourceSceneId: sceneIds.get('nombres'),
+      sourceSceneTitle: 'Nombres tachados',
+      evidence: ['El registro une a Eliana con la antigua orden.'],
+      normalizedName: 'eliana vale',
+    },
+  });
+
+  const stateProposals = [
+    {
+      key: 'state:eliana-location',
+      sceneKey: 'alianza',
+      sceneId: sceneIds.get('alianza'),
+      entityId: entityIds.get('eliana'),
+      attributeKey: 'ubicacion',
+      fromValue: 'Estación abandonada',
+      toValue: 'Puente helado',
+      sequenceKind: 'TRANSITION',
+      confidenceScore: 0.89,
+      narrativeOrder: 8,
+      evidence: ['Eliana y Adrián se reúnen junto al puente helado.'],
+    },
+    {
+      key: 'state:adrian-loyalty-uncertain',
+      sceneKey: 'ruta',
+      sceneId: sceneIds.get('ruta'),
+      entityId: entityIds.get('adrian'),
+      attributeKey: 'lealtad',
+      fromValue: 'Oculta',
+      toValue: 'Leal a los Vigilantes',
+      sequenceKind: 'UNCERTAIN',
+      confidenceScore: 0.68,
+      narrativeOrder: 6,
+      evidence: ['Adrián habla de su pasado, pero evita explicar por qué se fue.'],
+    },
+  ];
+  for (const { key, sceneKey, ...data } of stateProposals) {
+    const chunk = await ensureSceneChunk(projectId, data.sceneId, sceneKey);
+    await upsertPendingSeedProposal(
+      prisma.entityStateProposal,
+      key,
+      projectId,
+      { ...data, ...chunk },
+      {
+        sceneId: data.sceneId,
+        entityId: data.entityId,
+        attributeKey: data.attributeKey,
+        toValue: data.toValue,
+      },
+    );
+  }
+
+  const endRelationship = await prisma.relationship.findFirst({
+    where: {
+      projectId,
+      sourceEntityId: entityIds.get('adrian'),
+      targetEntityId: entityIds.get('eliana'),
+      relationType: 'MENTOR',
+    },
+  });
+  const relationshipProposals = [
+    {
+      key: 'relationship:mara-knows-ines',
+      sceneId: sceneIds.get('alianza'),
+      kind: 'CREATE',
+      sourceEntityId: entityIds.get('mara'),
+      targetEntityId: entityIds.get('ines'),
+      relationType: 'KNOWS',
+      description: 'Mara siguió una pista que Inés dejó en el norte.',
+      intensity: 0.55,
+      confidenceScore: 0.82,
+      evidence: ['Mara reconoció el sello que Inés usaba en sus cartas.'],
+    },
+    {
+      key: 'relationship:end-adrian-mentor',
+      sceneId: sceneIds.get('alianza'),
+      relationshipId: endRelationship?.id ?? null,
+      kind: 'END',
+      sourceEntityId: entityIds.get('adrian'),
+      targetEntityId: entityIds.get('eliana'),
+      relationType: 'MENTOR',
+      description: 'Eliana ya no depende de Adrián para leer las marcas.',
+      intensity: 0.35,
+      confidenceScore: 0.74,
+      evidence: ['Eliana interpreta el mapa sin ayuda de Adrián.'],
+    },
+  ];
+  for (const { key, ...data } of relationshipProposals)
+    await upsertPendingSeedProposal(prisma.relationshipProposal, key, projectId, data);
+}
+
+/** Creates or updates the alternate scene drafts used by the demo. */
+async function seedSceneVersions(sceneIds) {
+  const seeds = [
+    {
+      sceneKey: 'guardian',
+      label: 'Alternativa: el guardián recuerda',
+      paragraphs: [
+        'Al final de la escalera, una estatua con el rostro erosionado bloqueaba la puerta de una cámara antigua. Cuando Eliana acercó el papel de tinta azul, el guardián abrió los ojos y preguntó qué verdad estaba dispuesta a conservar.',
+        'Eliana admitió que había visto la señal y que temía que la leyenda fuera cierta. La piedra se apartó lentamente, dejando al descubierto un mapa de rutas que unía la atalaya con el norte.',
+        'Antes de dejarlos pasar, el guardián pronunció el nombre de Inés como si la hubiera esperado durante años.',
+      ],
+    },
+    {
+      sceneKey: 'alianza',
+      label: 'Alternativa: pacto bajo la nieve',
+      paragraphs: [
+        'Mara Voss alcanzó a Eliana y Adrián junto al puente helado. Al principio se acusaron mutuamente de trabajar para quienes habían roto el sello, pero la luz azul apareció de nuevo sobre las montañas.',
+        'Frente a la señal, aceptaron colaborar hasta llegar a la fuente. La alianza era frágil, pero todos sabían que el valle no podía permitirse otra noche sin guardianes.',
+        'Los tres dejaron una marca distinta en el mapa para recordar qué parte del camino confiaban a los demás.',
+      ],
+    },
+  ];
+  for (const seed of seeds) {
+    const sceneId = sceneIds.get(seed.sceneKey);
+    const content = doc(seed.paragraphs);
+    const data = {
+      content,
+      contentHash: contentHash(content),
+      wordCount: countWords(seed.paragraphs),
+    };
+    const existing = await prisma.sceneVersion.findFirst({
+      where: { sceneId, label: seed.label, deletedAt: null },
+    });
+    if (existing)
+      await prisma.sceneVersion.update({ where: { id: existing.id }, data });
+    else
+      await prisma.sceneVersion.create({
+        data: { sceneId, label: seed.label, ...data },
+      });
+  }
+}
+
+/** Builds an ordered immutable snapshot for a project or a selected book. */
+async function buildManuscriptSnapshot(projectId, bookId = null) {
+  const [project, snapshotBooks] = await Promise.all([
+    prisma.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { title: true },
+    }),
+    prisma.book.findMany({
+      where: {
+        projectId,
+        deletedAt: null,
+        ...(bookId ? { id: bookId } : {}),
+      },
+      orderBy: { sortKey: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        chapters: {
+          where: { deletedAt: null },
+          orderBy: { sortKey: 'asc' },
+          select: {
+            id: true,
+            title: true,
+            scenes: {
+              where: { deletedAt: null },
+              orderBy: [{ order: 'asc' }, { sortKey: 'asc' }],
+              select: { id: true, title: true, content: true, wordCount: true },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+  return {
+    schemaVersion: 1,
+    projectId,
+    title: snapshotBooks.length === 1 ? snapshotBooks[0].title : project.title,
+    frozenAt: new Date().toISOString(),
+    books: snapshotBooks.map((book) => ({
+      id: book.id,
+      title: book.title,
+      chapters: book.chapters.map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title,
+        scenes: chapter.scenes.map((scene) => ({
+          id: scene.id,
+          title: scene.title,
+          content:
+            scene.content && typeof scene.content === 'object'
+              ? scene.content
+              : null,
+          wordCount: scene.wordCount,
+        })),
+      })),
+    })),
+  };
+}
+
+/** Saves the demo's project-level manual checkpoint. */
+async function seedProjectVersion(projectId) {
+  const snapshot = await buildManuscriptSnapshot(projectId);
+  const scenes = snapshot.books.flatMap((book) =>
+    book.chapters.flatMap((chapter) => chapter.scenes),
+  );
+  const label = 'Punto de control · Demo Integral';
+  const data = {
+    snapshot,
+    checksumSha256: contentHash(snapshot),
+    wordCount: scenes.reduce((total, scene) => total + scene.wordCount, 0),
+    entityCount: await prisma.entity.count({
+      where: { projectId, deletedAt: null },
+    }),
+    sceneCount: scenes.length,
+  };
+  const existing = await prisma.version.findFirst({
+    where: { projectId, label, type: 'manual' },
+  });
+  if (existing)
+    await prisma.version.update({ where: { id: existing.id }, data });
+  else
+    await prisma.version.create({
+      data: { projectId, label, type: 'manual', ...data },
+    });
+}
+
+/** Seeds versions, a reader link, sample comments, replies, and a private note. */
+async function seedVersionsSharingAndComments(project, bookIds, chapterIds, sceneIds) {
+  await seedSceneVersions(sceneIds);
+  await seedProjectVersion(project.id);
+
+  const sharedSnapshot = await buildManuscriptSnapshot(
+    project.id,
+    bookIds.get('001'),
+  );
+  const sharedScenes = sharedSnapshot.books.flatMap((book) =>
+    book.chapters.flatMap((chapter) => chapter.scenes),
+  );
+  const shareVersionLabel = 'Copia para lectores · Demo Integral';
+  const shareVersionData = {
+    snapshot: sharedSnapshot,
+    checksumSha256: contentHash(sharedSnapshot),
+    wordCount: sharedScenes.reduce((total, scene) => total + scene.wordCount, 0),
+    sceneCount: sharedScenes.length,
+  };
+  let shareVersion = await prisma.version.findFirst({
+    where: { projectId: project.id, label: shareVersionLabel, type: 'shared' },
+  });
+  shareVersion = shareVersion
+    ? await prisma.version.update({
+        where: { id: shareVersion.id },
+        data: shareVersionData,
+      })
+    : await prisma.version.create({
+        data: {
+          projectId: project.id,
+          label: shareVersionLabel,
+          type: 'shared',
+          ...shareVersionData,
+        },
+      });
+
+  const slug = demoSlug(project.id);
+  const readerToken = demoReaderToken(project.id);
+  const share = await prisma.shareLink.upsert({
+    where: { slug },
+    create: {
+      projectId: project.id,
+      bookId: bookIds.get('001'),
+      versionId: shareVersion.id,
+      slug,
+      tokenHash: sha256(readerToken),
+      invitedEmail: project.user.email.toLowerCase(),
+      permission: 'COMMENT',
+      status: 'ACCEPTED',
+      createdById: project.userId,
+      acceptedById: project.userId,
+      acceptedAt: new Date(),
+      allowComments: true,
+      includeWiki: true,
+      maxReaders: 5,
+      readerCount: 1,
+      isActive: true,
+    },
+    update: {
+      bookId: bookIds.get('001'),
+      versionId: shareVersion.id,
+      tokenHash: sha256(readerToken),
+      invitedEmail: project.user.email.toLowerCase(),
+      permission: 'COMMENT',
+      status: 'ACCEPTED',
+      acceptedById: project.userId,
+      acceptedAt: new Date(),
+      allowComments: true,
+      includeWiki: true,
+      maxReaders: 5,
+      readerCount: 1,
+      isActive: true,
+      revokedAt: null,
+    },
+  });
+
+  const commentSeeds = [
+    {
+      sceneKey: 'ventana',
+      chapterKey: '001:001',
+      selectedText: 'la silueta imposible de la antigua atalaya',
+      prefix: 'dibujaba sobre el techo ',
+      suffix: '.',
+      displayName: 'Camila · Lectura beta',
+      body: '¿Podemos conectar esta imagen con los tres pulsos que aparecen después?',
+      status: 'OPEN',
+      reply: 'Sí, voy a sembrar la conexión en la escena de la linterna.',
+    },
+    {
+      sceneKey: 'biblioteca',
+      chapterKey: '001:002',
+      selectedText: 'nombres tachados una y otra vez',
+      prefix: 'En las paredes había ',
+      suffix: ', como si alguien',
+      displayName: 'Diego · Lector beta',
+      body: 'La imagen de los nombres tachados funciona; quizá convenga anticiparla con una pista antes de bajar a la sala.',
+      legacyBodies: [
+        'La revelación funciona; quizá convenga anticipar el apellido una escena antes.',
+      ],
+      status: 'RESOLVED',
+      reply: 'Agregué una pista antes de bajar a la sala. Gracias por marcarlo.',
+    },
+  ];
+  for (const seed of commentSeeds) {
+    const sceneId = sceneIds.get(seed.sceneKey);
+    const { from: anchorFrom, to: anchorTo } = proseMirrorRange(
+      sceneParagraphs(seed.sceneKey),
+      seed.selectedText,
+    );
+    // Si el ejemplo se cargó antes con otro texto, se retira esa versión antigua.
+    for (const legacyBody of seed.legacyBodies ?? [])
+      await prisma.readerComment.deleteMany({
+        where: { shareLinkId: share.id, displayName: seed.displayName, body: legacyBody },
+      });
+    const isResolved = seed.status === 'RESOLVED';
+    const commentData = {
+      shareLinkId: share.id,
+      versionId: shareVersion.id,
+      sceneId,
+      chapterId: chapterIds.get(seed.chapterKey),
+      snapshotSceneId: sceneId,
+      displayName: seed.displayName,
+      body: seed.body,
+      anchorFrom,
+      anchorTo,
+      selectedText: seed.selectedText,
+      prefix: seed.prefix,
+      suffix: seed.suffix,
+      status: seed.status,
+      isVisible: true,
+      resolvedAt: isResolved ? new Date() : null,
+      resolvedById: isResolved ? project.userId : null,
+    };
+    let comment = await prisma.readerComment.findFirst({
+      where: { shareLinkId: share.id, displayName: seed.displayName, body: seed.body },
+    });
+    comment = comment
+      ? await prisma.readerComment.update({
+          where: { id: comment.id },
+          data: commentData,
+        })
+      : await prisma.readerComment.create({ data: commentData });
+
+    const authorName = project.user.displayName || project.user.name;
+    const statusEvents = [
+      { status: 'OPEN', changedByName: seed.displayName, changedById: null },
+      ...(isResolved
+        ? [{ status: 'RESOLVED', changedByName: authorName, changedById: project.userId }]
+        : []),
+    ];
+    for (const event of statusEvents) {
+      const existing = await prisma.readerCommentStatusEvent.findFirst({
+        where: {
+          commentId: comment.id,
+          status: event.status,
+          changedByName: event.changedByName,
+        },
+      });
+      if (!existing)
+        await prisma.readerCommentStatusEvent.create({
+          data: { commentId: comment.id, ...event },
+        });
+    }
+    const reply = await prisma.readerCommentReply.findFirst({
+      where: { commentId: comment.id, body: seed.reply },
+    });
+    if (reply)
+      await prisma.readerCommentReply.update({
+        where: { id: reply.id },
+        data: { displayName: authorName, authorId: project.userId },
+      });
+    else
+      await prisma.readerCommentReply.create({
+        data: {
+          commentId: comment.id,
+          displayName: authorName,
+          authorId: project.userId,
+          body: seed.reply,
+        },
+      });
+  }
+
+  const annotationSceneId = sceneIds.get('mensaje');
+  const annotationBody = 'Revisar el ritmo de la revelación antes de cerrar el capítulo.';
+  const annotation = await prisma.authorAnnotation.findFirst({
+    where: { sceneId: annotationSceneId, authorId: project.userId, body: annotationBody },
+  });
+  const annotationData = {
+    quote: 'La Semilla despierta cuando el valle olvida sus nombres',
+    contextBefore: 'Solo pudo leer una frase antes de que el resto se deshiciera: ',
+    contextAfter: '.',
+    deletedAt: null,
+    resolvedAt: null,
+  };
+  if (annotation)
+    await prisma.authorAnnotation.update({
+      where: { id: annotation.id },
+      data: annotationData,
+    });
+  else
+    await prisma.authorAnnotation.create({
+      data: {
+        sceneId: annotationSceneId,
+        authorId: project.userId,
+        body: annotationBody,
+        ...annotationData,
+      },
+    });
+
+  return { slug, readerToken, shareVersionId: shareVersion.id };
+}
+
+/** Populates one project with the full demo manuscript and feature examples. */
+async function seedProject(resolvedProject) {
+  const project = await prisma.project.findUniqueOrThrow({
+    where: { id: resolvedProject.id },
+    include: {
+      user: { select: { id: true, name: true, displayName: true, email: true } },
+    },
+  });
   await prisma.project.update({
     where: { id: project.id },
     data: {
@@ -1024,10 +1752,18 @@ async function main() {
   });
   const { bookIds, chapterIds, sceneIds } = await seedManuscript(project.id);
   const entityIds = await seedKnowledge(project.id, sceneIds);
+  await seedProjectSettings(project.id);
+  await seedReviewProposals(project.id, entityIds, sceneIds);
   await seedPlot(project.id, entityIds, sceneIds, chapterIds);
   await seedSummaries(project.id, bookIds, chapterIds, sceneIds);
   await seedActivity(project, sceneIds);
   await seedAuditAndChat(project.id, entityIds, sceneIds);
+  const { slug, readerToken } = await seedVersionsSharingAndComments(
+    project,
+    bookIds,
+    chapterIds,
+    sceneIds,
+  );
   const result = await prisma.project.findUnique({
     where: { id: project.id },
     select: {
@@ -1043,12 +1779,43 @@ async function main() {
           summaries: true,
           auditAlerts: true,
           writingSessions: true,
+          entityProposals: true,
+          entityStateProposals: true,
+          relationshipProposals: true,
+          versions: true,
+          shareLinks: true,
         },
       },
     },
   });
-  console.log(`Datos demo cargados en “${result.title}” (${project.id}).`);
-  console.log(result._count);
+  return {
+    id: project.id,
+    title: result.title,
+    counts: result._count,
+    slug,
+    readerToken,
+  };
+}
+
+/** Validates the target and seeds each eligible local account in sequence. */
+async function main() {
+  if (process.env.NODE_ENV === 'production')
+    throw new Error('El seed demo no se ejecuta en producción.');
+  assertLocalDatabase();
+  const projects = await resolveProjects();
+  const seededProjects = [];
+  for (const project of projects)
+    seededProjects.push(await seedProject(project));
+
+  console.log(`Demo cargado para ${seededProjects.length} cuenta(s) local(es).`);
+  for (const project of seededProjects) {
+    console.log(`“${project.title}” (${project.id})`);
+    console.log(project.counts);
+    console.log(`Editor: http://localhost:3001/projects/${project.id}/editor`);
+    console.log(
+      `Lectura compartida: http://localhost:3001/shared/${project.slug}?token=${project.readerToken}`,
+    );
+  }
 }
 
 main()

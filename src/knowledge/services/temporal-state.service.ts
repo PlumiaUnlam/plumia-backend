@@ -136,7 +136,7 @@ export class TemporalStateService {
     ]);
 
     return states
-      .sort(
+      .toSorted(
         (left, right) =>
           (positions.get(left.validFromSceneId) ?? Number.MAX_SAFE_INTEGER) -
             (positions.get(right.validFromSceneId) ??

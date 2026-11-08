@@ -4,80 +4,184 @@ import {
   MAX_EPUB_FILE_SIZE,
   parseEpubArchive,
 } from './epub-import.parser';
-
-async function createEpub(
-  documents: Array<{ id: string; body: string }>,
-  files: Record<string, Buffer | string> = {},
-  navigation?: { href: string; body: string },
-): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
-  zip.file(
-    'META-INF/container.xml',
-    '<container><rootfiles><rootfile full-path="OEBPS/book.opf" /></rootfiles></container>',
-  );
-  const manifest = documents
-    .map(
-      ({ id }) =>
-        `<item id="${id}" href="Text/${id}.xhtml" media-type="application/xhtml+xml" />`,
-    )
-    .join('');
-  const spine = documents.map(({ id }) => `<itemref idref="${id}" />`).join('');
-  const navigationItem = navigation
-    ? `<item id="navigation" href="${navigation.href}" media-type="application/xhtml+xml" properties="nav" />`
-    : '';
-  zip.file(
-    'OEBPS/book.opf',
-    `<package><metadata><title>Libro de prueba</title></metadata><manifest>${navigationItem}${manifest}</manifest><spine>${spine}</spine></package>`,
-  );
-  for (const { id, body } of documents) {
-    zip.file(
-      `OEBPS/Text/${id}.xhtml`,
-      `<html><head><title>Libro de prueba</title></head><body>${body}</body></html>`,
-    );
-  }
-  for (const [path, content] of Object.entries(files)) {
-    zip.file(path, content);
-  }
-  if (navigation) {
-    zip.file(`OEBPS/${navigation.href}`, navigation.body);
-  }
-  return zip.generateAsync({ type: 'nodebuffer' });
-}
-
-function textFrom(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap(textFrom);
-  }
-  if (!value || typeof value !== 'object') {
-    return [];
-  }
-
-  const record = value as Record<string, unknown>;
-  return [
-    ...(typeof record['text'] === 'string' ? [record['text']] : []),
-    ...Object.entries(record)
-      .filter(([key]) => key !== 'text')
-      .flatMap(([, child]) => textFrom(child)),
-  ];
-}
-
-function nodesOfType(value: unknown, type: string): Record<string, unknown>[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => nodesOfType(item, type));
-  }
-  if (!value || typeof value !== 'object') {
-    return [];
-  }
-
-  const record = value as Record<string, unknown>;
-  return [
-    ...(record['type'] === type ? [record] : []),
-    ...Object.values(record).flatMap((child) => nodesOfType(child, type)),
-  ];
-}
+import {
+  createEpub,
+  textFrom,
+  nodesOfType,
+} from '../../../test/fixtures/epub-import';
 
 describe('parseEpubArchive', () => {
+  it('keeps combined chapter titles without a TOC and uses a single fragment title when available', async () => {
+    const body =
+      '<h1 id="one">Capítulo 1</h1><h1>El comienzo</h1><p>Historia.</p>';
+    const withoutToc = await parseEpubArchive(
+      await createEpub([{ id: 'chapter', body }]),
+    );
+    expect(withoutToc.chapters[0]?.title).toBe('Capítulo 1. El comienzo');
+    const withToc = await parseEpubArchive(
+      await createEpub(
+        [{ id: 'chapter', body }],
+        {},
+        {
+          href: 'nav.xhtml',
+          body: '<html><nav><a href="Text/chapter.xhtml#one">Capítulo 1 El comienzo</a></nav></html>',
+        },
+      ),
+    );
+    expect(withToc.chapters[0]?.title).toBe('Capítulo 1 El comienzo');
+  });
+
+  it('skips editorial sections sharing a document with narrative chapters', async () => {
+    const epub = await createEpub([
+      {
+        id: 'combined',
+        body: '<h1>Agradecimientos</h1><p>Gracias a todos.</p><h1>Capítulo 1</h1><p>Primera historia.</p><h1>Créditos</h1><p>Editorial.</p><h1>Capítulo 2</h1><p>Segunda historia.</p>',
+      },
+    ]);
+    const parsed = await parseEpubArchive(epub);
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'Capítulo 1',
+      'Capítulo 2',
+    ]);
+    expect(textFrom(parsed.chapters).join('')).toBe(
+      'Primera historia.Segunda historia.',
+    );
+  });
+
+  it('preserves narrative text at a TOC fragment and scene headings after numbered acts', async () => {
+    const epub = await createEpub(
+      [
+        {
+          id: 'combined',
+          body: '<h1>Acto I</h1><h2>Escena I</h2><p>Diálogo.</p><p id="two">Aquí comienza otro capítulo sin encabezado.</p>',
+        },
+      ],
+      {},
+      {
+        href: 'nav.xhtml',
+        body: '<html><nav><a href="Text/combined.xhtml#two">Capítulo 2</a></nav></html>',
+      },
+    );
+    const parsed = await parseEpubArchive(epub);
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'Acto I',
+      'Capítulo 2',
+    ]);
+    expect(parsed.chapters[0]?.scenes[0]?.title).toBe('Escena I');
+    expect(textFrom(parsed.chapters).join('')).toContain(
+      'Aquí comienza otro capítulo sin encabezado.',
+    );
+  });
+
+  it('uses only the TOC, ignoring landmarks and page numbers targeting the same chapter', async () => {
+    const epub = await createEpub(
+      [
+        {
+          id: 'chapter',
+          body: '<h1>CAPÍTULO 1</h1><h1>El comienzo</h1><p>La historia.</p>',
+        },
+      ],
+      {},
+      {
+        href: 'nav.xhtml',
+        body: '<html xmlns:epub="http://www.idpf.org/2007/ops"><nav epub:type="toc"><a href="Text/chapter.xhtml">Capítulo 1 El comienzo</a></nav><nav epub:type="landmarks"><a href="Text/chapter.xhtml">Beginning</a></nav><nav epub:type="page-list"><a href="Text/chapter.xhtml#p25">25</a></nav></html>',
+      },
+    );
+    const parsed = await parseEpubArchive(epub);
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'Capítulo 1 El comienzo',
+    ]);
+    expect(parsed.chapters[0]?.scenes.map((scene) => scene.title)).toEqual([
+      'Capítulo 1 El comienzo',
+    ]);
+    expect(textFrom(parsed.chapters).join('')).toBe('La historia.');
+  });
+
+  it('preserves spaces, split words, punctuation and inline formatting without introducing spelling changes', async () => {
+    const epub = await createEpub([
+      {
+        id: 'chapter',
+        body: '<h1>Capítulo 1</h1><p><span>Harry</span> <em>Potter</em> era <strong>un</strong> mago. <span>H</span><span>ARRY</span> P<span>OTTER</span>; <i>sí</i>, claro. pa\u00adsaron</p>',
+      },
+    ]);
+    const parsed = await parseEpubArchive(epub);
+    expect(textFrom(parsed.chapters).join('')).toBe(
+      'Harry Potter era un mago. HARRY POTTER; sí, claro. pasaron',
+    );
+    expect(
+      nodesOfType(parsed.chapters, 'text').find(
+        (node) => node['text'] === 'Potter',
+      )?.['marks'],
+    ).toEqual([{ type: 'italic' }]);
+  });
+
+  it('keeps distinct TOC fragment titles in one document', async () => {
+    const epub = await createEpub(
+      [
+        {
+          id: 'chapter',
+          body: '<h2 id="one">Primero</h2><p>Uno.</p><h2 id="two">Segundo</h2><p>Dos.</p>',
+        },
+      ],
+      {},
+      {
+        href: 'nav.xhtml',
+        body: '<html><nav><a href="Text/chapter.xhtml#one">Capítulo 1</a><a href="Text/chapter.xhtml#two">Capítulo 2</a></nav></html>',
+      },
+    );
+    const parsed = await parseEpubArchive(epub);
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'Capítulo 1',
+      'Capítulo 2',
+    ]);
+  });
+
+  it('excludes editorial matter and promotional sample continuations while retaining the actual story', async () => {
+    const epub = await createEpub(
+      [
+        { id: 'titulo1', body: '<p>Edición especial</p>' },
+        {
+          id: 'unknown',
+          body: '<section xmlns:epub="http://www.idpf.org/2007/ops" epub:type="acknowledgments"><p>Gracias a todos.</p></section>',
+        },
+        {
+          id: 'chapter',
+          body: '<h1>Capítulo 1</h1><p>La historia completa.</p>',
+        },
+        { id: 'thanks', body: '<h1>Agradecimientos</h1><p>Gracias.</p>' },
+        { id: 'promo', body: '<p>Otra obra.</p>' },
+        { id: 'sample', body: '<h1>Capítulo 1</h1><p>Otra historia.</p>' },
+        { id: 'continuation', body: '<p>Más del adelanto.</p>' },
+      ],
+      {},
+      {
+        href: 'nav.xhtml',
+        body: '<html><nav><a href="Text/chapter.xhtml">Capítulo 1</a><a href="Text/promo.xhtml">Seguir leyendo</a></nav></html>',
+      },
+    );
+    const parsed = await parseEpubArchive(epub);
+    expect(parsed.chapters).toHaveLength(1);
+    expect(textFrom(parsed.chapters).join('')).toBe('La historia completa.');
+  });
+
+  it('keeps image blocks inside chapters and attaches standalone illustrations without extra chapters', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const epub = await createEpub(
+      [
+        {
+          id: 'chapter',
+          body: '<h1>Capítulo 1</h1><p>La historia.</p><p><img src="../Images/a.png" /></p><hr />',
+        },
+        { id: 'illustration', body: '<p><img src="../Images/a.png" /></p>' },
+      ],
+      { 'OEBPS/Images/a.png': png },
+    );
+    const parsed = await parseEpubArchive(epub);
+    expect(parsed.chapters).toHaveLength(1);
+    expect(nodesOfType(parsed.chapters, 'image')).toHaveLength(2);
+    expect(nodesOfType(parsed.chapters, 'horizontalRule')).toHaveLength(1);
+  });
+
   it('keeps a split chapter together when the next EPUB document starts mid-chapter', async () => {
     const epub = await createEpub([
       {

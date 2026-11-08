@@ -1,7 +1,23 @@
+interface TestServiceContext {
+  service: ProjectKnowledgeReviewService;
+  prisma: {
+    project: { findFirst: jest.Mock };
+    projectKnowledgeReviewSettings: { upsert: jest.Mock };
+    scene: { findMany: jest.Mock };
+    knowledgeAnalysisRun: {
+      findFirst: jest.Mock;
+      create: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+    };
+    outbox: { create: jest.Mock };
+    $transaction: jest.Mock;
+  };
+}
+
 import { ProjectKnowledgeReviewService } from '../../../src/system/project-knowledge-review.service';
 
 describe('ProjectKnowledgeReviewService', () => {
-  const createService = () => {
+  const createService = (): TestServiceContext => {
     const prisma = {
       project: { findFirst: jest.fn().mockResolvedValue({ id: 'project-1' }) },
       projectKnowledgeReviewSettings: { upsert: jest.fn() },

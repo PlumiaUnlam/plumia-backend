@@ -1,10 +1,11 @@
-import type { ChatAction } from './chat.types';
+import type { ChatAction, ChatSection } from './chat.types';
 
 interface ApplicationGuide {
   patterns: readonly GuidePattern[];
   label: string;
   answer: string;
   path: (projectId: string) => string;
+  section?: ChatSection;
 }
 
 interface GuidePattern {
@@ -178,7 +179,7 @@ const GUIDES: ApplicationGuide[] = [
     ],
     label: 'PlumIA · Línea temporal',
     answer:
-      'La Línea Temporal está dentro de Worldbuilding. Abrí Worldbuilding desde la barra inferior izquierda y elegí la pestaña “Línea Temporal”. Te dejo un acceso directo debajo de la respuesta.',
+      'La Línea Temporal está dentro de Worldbuilding. Abrí Worldbuilding desde la barra superior del proyecto y elegí la pestaña “Línea Temporal”. Te dejo un acceso directo debajo de la respuesta.',
     path: (projectId) =>
       `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=timeline`,
   },
@@ -189,7 +190,7 @@ const GUIDES: ApplicationGuide[] = [
     ],
     label: 'PlumIA · Storyboard y notas',
     answer:
-      'Tus notas e ideas están en el Tablero (Storyboard). Podés abrirlo desde la barra inferior izquierda; allí están las tarjetas Kanban y la vista matricial por arco y capítulo.',
+      'Tus notas e ideas están en el Tablero (Storyboard). Podés abrirlo desde la barra superior del proyecto; allí están las tarjetas Kanban y, en escritorio, la vista matricial por arco y capítulo.',
     path: (projectId) =>
       `/projects/${encodeURIComponent(projectId)}/storyboard`,
   },
@@ -218,7 +219,7 @@ const GUIDES: ApplicationGuide[] = [
     ],
     label: 'PlumIA · Editor y manuscrito',
     answer:
-      'El manuscrito se trabaja en el Editor. Desde la barra lateral podés elegir libros, capítulos y escenas; en el panel derecho tenés la Wiki, el chat y las estadísticas. También podés abrir el historial de versiones de la escena desde “Hist.”.',
+      'El manuscrito se trabaja en el Editor. Desde la barra lateral podés elegir libros, capítulos y escenas; en el panel derecho tenés la Wiki, el chat y las estadísticas. También podés abrir el historial de versiones de la escena desde “Historial”.',
     path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
   },
   {
@@ -239,7 +240,7 @@ const GUIDES: ApplicationGuide[] = [
     patterns: [{ pattern: /\b(?:resumenes?|sinopsis)\b/i, weight: 10 }],
     label: 'PlumIA · Resúmenes',
     answer:
-      'Los resúmenes están en Worldbuilding, pestaña “Resúmenes”. Allí podés consultar o generar resúmenes por escena, capítulo, libro o proyecto.',
+      'Los resúmenes están en Worldbuilding, pestaña “Resúmenes”. Allí podés consultar o generar resúmenes por capítulo.',
     path: (projectId) =>
       `/projects/${encodeURIComponent(projectId)}/worldbuilding?tab=summaries`,
   },
@@ -265,8 +266,9 @@ const GUIDES: ApplicationGuide[] = [
     ],
     label: 'PlumIA · Historial de versiones',
     answer:
-      'El historial está dentro del editor. Elegí una escena y abrí “Hist.” en la barra inferior izquierda para ver, nombrar, restaurar o eliminar versiones.',
+      'El historial está dentro del editor. Elegí una escena y abrí “Historial” en la barra inferior izquierda para ver, nombrar, restaurar o eliminar versiones.',
     path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+    section: 'editor-history',
   },
   {
     patterns: [
@@ -278,8 +280,9 @@ const GUIDES: ApplicationGuide[] = [
     ],
     label: 'PlumIA · Auditoría de continuidad',
     answer:
-      'Las alertas de continuidad aparecen en el panel Wiki del Editor, donde podés revisar la evidencia y resolver o descartar cada inconsistencia detectada.',
+      'Las alertas de continuidad aparecen en el panel Wiki del Editor en modo Revisión, donde podés revisar la evidencia y resolver o descartar cada inconsistencia detectada.',
     path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+    section: 'editor-right-review',
   },
   {
     patterns: [
@@ -292,6 +295,7 @@ const GUIDES: ApplicationGuide[] = [
     answer:
       'Las estadísticas están en el panel derecho del Editor, en la pestaña “Stats”, junto a la Wiki y el chat.',
     path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
+    section: 'editor-right-stats',
   },
 ];
 
@@ -303,6 +307,7 @@ const GENERAL_APPLICATION_GUIDE: ApplicationGuide = {
   path: (projectId) => `/projects/${encodeURIComponent(projectId)}/editor`,
 };
 
+/** Answers where a function lives in PlumIA and returns the navigation shortcut, or null when the question is not about the application. */
 export function getApplicationGuidance(
   question: string,
   projectId: string,
@@ -340,6 +345,7 @@ export function getApplicationGuidance(
     label: selectedGuide.label,
     description: 'Abrir esta sección de PlumIA',
     route,
+    ...(selectedGuide.section ? { section: selectedGuide.section } : {}),
   };
   return {
     answer: selectedGuide.answer,
@@ -347,6 +353,7 @@ export function getApplicationGuidance(
   };
 }
 
+/** Tells whether a question (or a follow-up to an earlier one) asks about using the application. */
 export function isApplicationHelpIntent(
   question: string,
   context: { history?: readonly ApplicationHistoryEntry[] } = {},
@@ -374,6 +381,7 @@ export function isApplicationHelpIntent(
   );
 }
 
+/** Picks the guide whose patterns score highest for the question, if any matches. */
 function findBestGuide(question: string): ApplicationGuide | null {
   let bestGuide: ApplicationGuide | null = null;
   let bestScore = 0;
@@ -393,11 +401,13 @@ function findBestGuide(question: string): ApplicationGuide | null {
   return bestGuide;
 }
 
+/** Tells whether a raw question is about using the application. */
 function isApplicationQuestion(question: string): boolean {
   const normalizedQuestion = normalizeQuestion(question);
   return isApplicationHelp(normalizedQuestion);
 }
 
+/** Tells whether a normalized question mentions the interface and asks for help with it. */
 function isApplicationHelp(question: string): boolean {
   return (
     hasAnyTerm(question, APPLICATION_UI_TERMS) &&
@@ -407,14 +417,17 @@ function isApplicationHelp(question: string): boolean {
   );
 }
 
+/** Tells whether a normalized question asks where to find or how to open something. */
 function isNavigationIntent(question: string): boolean {
   return hasAnyTerm(question, NAVIGATION_PHRASES);
 }
 
+/** True when the value contains any of the terms as a whole phrase. */
 function hasAnyTerm(value: string, terms: readonly string[]): boolean {
   return terms.some((term) => hasWholePhrase(value, term));
 }
 
+/** True when the phrase appears in the value delimited by non-word characters. */
 function hasWholePhrase(value: string, phrase: string): boolean {
   let start = value.indexOf(phrase);
   while (start >= 0) {
@@ -428,6 +441,7 @@ function hasWholePhrase(value: string, phrase: string): boolean {
   return false;
 }
 
+/** True for letters and digits, the characters that continue a word. */
 function isWordCharacter(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -439,6 +453,7 @@ function isWordCharacter(value: string | undefined): boolean {
   return (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
 }
 
+/** Lowercases a question and removes accents so patterns can be matched reliably. */
 function normalizeQuestion(question: string): string {
   return question
     .normalize('NFD')

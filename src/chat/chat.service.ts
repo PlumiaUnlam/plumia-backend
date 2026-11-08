@@ -39,6 +39,7 @@ import type {
   ChatThreadPageRecord,
   ChatThreadRecord,
 } from './domain/chat.types';
+import { isChatSection } from './domain/chat.types';
 import {
   CHAT_GENERATION_PROVIDER,
   type ChatGenerationProvider,
@@ -423,7 +424,7 @@ export class ChatService {
       orderBy: { createdAt: 'desc' },
       take: MAX_HISTORY_MESSAGES,
     });
-    const history = historyRows.reverse().map((message) => ({
+    const history = historyRows.toReversed().map((message) => ({
       role: message.role as ChatHistoryEntry['role'],
       content: message.content,
     }));
@@ -2064,6 +2065,7 @@ function parseSource(value: Prisma.JsonValue): ChatSource | null {
     ...(contentHash === undefined ? {} : { contentHash }),
     ...optionalProperty(readString(value, 'textQuote'), 'textQuote'),
     ...(route && isSafeChatRoute(route) ? { route } : {}),
+    ...(isChatSection(value['section']) ? { section: value['section'] } : {}),
   };
 }
 
@@ -2119,7 +2121,8 @@ function isChatAction(value: unknown): value is ChatAction {
     typeof candidate['label'] === 'string' &&
     typeof candidate['description'] === 'string' &&
     typeof candidate['route'] === 'string' &&
-    isSafeChatRoute(candidate['route'])
+    isSafeChatRoute(candidate['route']) &&
+    (candidate['section'] === undefined || isChatSection(candidate['section']))
   );
 }
 

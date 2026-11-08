@@ -18,7 +18,7 @@ export class TemporalViewController {
     @Request() req: AuthenticatedRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Query('sceneId', ParseUUIDPipe) sceneId: string,
-  ) {
+  ): ReturnType<TemporalStateService['getTemporalView']> {
     return this.states.getTemporalView(req.user.id, projectId, sceneId);
   }
 }

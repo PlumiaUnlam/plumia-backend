@@ -496,12 +496,14 @@ export function noteInlinesToHtml(inlines: ExportInline[]): string {
 
 export function inlineText(inlines: ExportInline[]): string {
   return inlines
-    .map((inline) =>
-      inline.kind === 'break'
-        ? '\n'
-        : inline.kind === 'note'
-          ? ''
-          : inline.text,
-    )
+    .map((inline) => {
+      if (inline.kind === 'break') {
+        return '\n';
+      }
+      if (inline.kind === 'note') {
+        return '';
+      }
+      return inline.text;
+    })
     .join('');
 }

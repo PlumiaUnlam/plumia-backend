@@ -1,3 +1,11 @@
+import type {
+  PendingScene,
+  KnowledgeReviewSettingsResponse,
+  KnowledgeAnalysisPreview,
+  KnowledgeAnalysisRunResponse,
+  KnowledgeAnalysisStartResponse,
+  KnowledgeAnalysisRetryResponse,
+} from './project-knowledge-review.types';
 import {
   BadRequestException,
   Injectable,
@@ -13,24 +21,14 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import type { UpdateKnowledgeReviewSettingsDto } from './dto/update-knowledge-review-settings.dto';
 
-interface PendingScene {
-  id: string;
-  title: string | null;
-  order: number;
-  sortKey: string;
-  chapter: {
-    title: string;
-    sortKey: string;
-    book: { title: string; sortKey: string };
-  };
-  chunks: Array<{ id: string; chunkIndex: number; isDirty: boolean }>;
-}
-
 @Injectable()
 export class ProjectKnowledgeReviewService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getSettings(userId: string, projectId: string) {
+  async getSettings(
+    userId: string,
+    projectId: string,
+  ): Promise<KnowledgeReviewSettingsResponse> {
     await this.assertProjectAccess(userId, projectId);
     const settings = await this.prisma.projectKnowledgeReviewSettings.upsert({
       where: { projectId },
@@ -44,7 +42,7 @@ export class ProjectKnowledgeReviewService {
     userId: string,
     projectId: string,
     dto: UpdateKnowledgeReviewSettingsDto,
-  ) {
+  ): Promise<KnowledgeReviewSettingsResponse> {
     await this.assertProjectAccess(userId, projectId);
     const settings = await this.prisma.projectKnowledgeReviewSettings.upsert({
       where: { projectId },
@@ -69,7 +67,10 @@ export class ProjectKnowledgeReviewService {
     return this.toSettingsResponse(settings);
   }
 
-  async previewAnalysis(userId: string, projectId: string) {
+  async previewAnalysis(
+    userId: string,
+    projectId: string,
+  ): Promise<KnowledgeAnalysisPreview> {
     await this.assertProjectAccess(userId, projectId);
     const scenes = await this.getPendingScenes(projectId);
     const reviewSettings =
@@ -229,7 +230,10 @@ export class ProjectKnowledgeReviewService {
     };
   }
 
-  async startAnalysis(userId: string, projectId: string) {
+  async startAnalysis(
+    userId: string,
+    projectId: string,
+  ): Promise<KnowledgeAnalysisStartResponse> {
     await this.assertProjectAccess(userId, projectId);
     return this.prisma.$transaction(
       async (tx) => {
@@ -295,7 +299,11 @@ export class ProjectKnowledgeReviewService {
     );
   }
 
-  async retryFailed(userId: string, projectId: string, runId: string) {
+  async retryFailed(
+    userId: string,
+    projectId: string,
+    runId: string,
+  ): Promise<KnowledgeAnalysisRetryResponse> {
     await this.assertProjectAccess(userId, projectId);
     const previous = await this.prisma.knowledgeAnalysisRun.findFirst({
       where: { id: runId, projectId },
@@ -354,7 +362,11 @@ export class ProjectKnowledgeReviewService {
     });
   }
 
-  async getRun(userId: string, projectId: string, runId: string) {
+  async getRun(
+    userId: string,
+    projectId: string,
+    runId: string,
+  ): Promise<KnowledgeAnalysisRunResponse> {
     await this.assertProjectAccess(userId, projectId);
     const run = await this.prisma.knowledgeAnalysisRun.findFirst({
       where: { id: runId, projectId },
@@ -409,7 +421,7 @@ export class ProjectKnowledgeReviewService {
   private async getRunWith(
     client: PrismaService | Prisma.TransactionClient,
     runId: string,
-  ) {
+  ): Promise<KnowledgeAnalysisRunResponse> {
     const run = await client.knowledgeAnalysisRun.findUniqueOrThrow({
       where: { id: runId },
       include: {
@@ -475,7 +487,7 @@ export class ProjectKnowledgeReviewService {
     relationshipConfidenceThreshold: Prisma.Decimal;
     crossChunkAuditMode: CrossChunkAuditMode;
     updatedAt: Date;
-  }) {
+  }): KnowledgeReviewSettingsResponse {
     return {
       stateTrackingEnabled: settings.stateTrackingEnabled,
       stateReviewMode: settings.stateReviewMode,
