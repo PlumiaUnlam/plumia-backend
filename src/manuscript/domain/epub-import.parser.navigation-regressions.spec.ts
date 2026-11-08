@@ -51,6 +51,29 @@ describe('EPUB navigation regressions', () => {
     expect(parsed.chapters[0]?.scenes).toHaveLength(1);
   });
 
+  it('keeps excluding editorial text after a paragraph destination and a subheading', async () => {
+    const parsed = await parseEpubArchive(
+      await createEpub(
+        [
+          {
+            id: 'story',
+            body: '<p id="credits">Credits</p><h2 id="contributors">Contributors</h2><p>Editorial names.</p><h1 id="chapter-one">Chapter 1</h1><p>The story begins.</p>',
+          },
+        ],
+        {},
+        {
+          href: 'nav.xhtml',
+          body: '<html><nav epub:type="toc"><a href="Text/story.xhtml#credits">Credits</a><a href="Text/story.xhtml#contributors">Contributors</a><a href="Text/story.xhtml#chapter-one">Chapter 1</a></nav></html>',
+        },
+      ),
+    );
+
+    expect(parsed.chapters.map((chapter) => chapter.title)).toEqual([
+      'Chapter 1',
+    ]);
+    expect(textFrom(parsed.chapters)).toEqual(['The story begins.']);
+  });
+
   it('uses the meaningful TOC title when a document repeats the book title before its narrative heading', async () => {
     const parsed = await parseEpubArchive(
       await createEpub(
@@ -145,10 +168,14 @@ describe('EPUB navigation regressions', () => {
         [
           {
             id: 'story',
-            body: '<h1>La historia</h1><p>Texto intacto.</p><img src="../Images/image001" /><img src="../Images/notimage" /><img src="https://example.com/image001" /><img src="//example.com/image001" />',
+            body: '<h1>La historia</h1><p>Texto intacto.</p><img src="../Images/image001" /><img src="../Images/cover.image" /><img src="../Images/notimage" /><img src="https://example.com/image001" /><img src="//example.com/image001" />',
           },
         ],
-        { 'OEBPS/Images/image001': png, 'OEBPS/Images/notimage': 'plain text' },
+        {
+          'OEBPS/Images/image001': png,
+          'OEBPS/Images/cover.image': png,
+          'OEBPS/Images/notimage': 'plain text',
+        },
       ),
     );
 
@@ -158,8 +185,13 @@ describe('EPUB navigation regressions', () => {
         contentType: 'image/png',
         extension: 'png',
       }),
+      expect.objectContaining({
+        buffer: png,
+        contentType: 'image/png',
+        extension: 'png',
+      }),
     ]);
-    expect(nodesOfType(parsed.chapters, 'image')).toHaveLength(1);
+    expect(nodesOfType(parsed.chapters, 'image')).toHaveLength(2);
     expect(parsed.skippedImages).toBe(3);
     expect(textFrom(parsed.chapters)).toEqual(['Texto intacto.']);
   });

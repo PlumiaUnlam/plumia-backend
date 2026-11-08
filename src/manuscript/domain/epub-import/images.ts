@@ -33,14 +33,6 @@ export function imageSourceKey(documentPath: string, source: string): string {
   return archivePath(documentPath, source);
 }
 
-function imageTypeFromSource(
-  source: string,
-): { contentType: string; extension: string } | null {
-  const withoutQuery = source.split(/[?#]/, 1)[0] ?? source;
-  const extension = /\.[^./]+$/u.exec(withoutQuery)?.[0]?.toLowerCase();
-  return extension ? (IMAGE_TYPES[extension] ?? null) : null;
-}
-
 function dataImage(source: string): Buffer | null {
   const match = /^data:(image\/(?:jpeg|png|webp|avif));([^,]*),(.*)$/is.exec(
     source,
@@ -115,16 +107,14 @@ function imageTypeFromBytes(
   return null;
 }
 
+/** Reads bounded local image entries while rejecting remote references. */
 async function loadArchiveImageBuffer(
   zip: JSZip,
   source: string,
   key: string,
   budget: DecompressionBudget,
 ): Promise<Buffer | null> {
-  if (
-    /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source) ||
-    (!imageTypeFromSource(key) && /\.[^./]+$/u.test(key))
-  ) {
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source)) {
     return null;
   }
 

@@ -14,6 +14,7 @@ const entries = readFileSync(
 )
   .trim()
   .split('\n')
+  .filter((line) => line.trim().length > 0)
   .map((line) => JSON.parse(line) as HelpEntry);
 
 describe('writer-facing application help', () => {

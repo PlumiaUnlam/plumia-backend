@@ -27,10 +27,8 @@ services:
     healthcheck:
       test:
         [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://127.0.0.1:3000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+          'CMD-SHELL',
+          'if [ "$${APP_ROLE:-all}" = "worker" ]; then kill -0 1; else node -e "fetch(''http://127.0.0.1:'' + (process.env.PORT ?? ''3000'') + ''/health'').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"; fi',
         ]
       interval: 10s
       timeout: 5s

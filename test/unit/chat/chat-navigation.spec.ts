@@ -41,6 +41,32 @@ describe('chat navigation', () => {
     });
   });
 
+  it('prioritizes a relevant editor section over a more specific route', () => {
+    const sources: ChatSource[] = [
+      {
+        id: 'application_help:wiki',
+        kind: 'application_help',
+        label: 'PlumIA › Worldbuilding',
+        excerpt: 'Wiki',
+        route: '/projects/one/worldbuilding?tab=wiki',
+      },
+      {
+        id: 'application_help:review',
+        kind: 'application_help',
+        label: 'PlumIA › Editor › Modo Revisión',
+        excerpt: 'Revisión',
+        route: '/projects/one/editor',
+        section: 'editor-right-review',
+      },
+    ];
+
+    expect(buildNavigationAction(sources)).toMatchObject({
+      label: 'Modo Revisión',
+      route: '/projects/one/editor',
+      section: 'editor-right-review',
+    });
+  });
+
   it('never creates a navigation action from a work source or external route', () => {
     const sources: ChatSource[] = [
       {

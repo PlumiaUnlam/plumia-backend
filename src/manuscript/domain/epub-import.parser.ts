@@ -214,6 +214,19 @@ async function parseSpineDocument(
   );
 }
 
+/** Identifies a narrative chapter boundary that resumes after a non-heading editorial target. */
+function isReliableNarrativeBoundary(
+  block: XmlElement,
+  title: string,
+): boolean {
+  const normalizedTitle = normalizedLabel(title);
+  return (
+    block.name === 'h1' ||
+    /^(?:act|acto|capitulo|chapter|parte|part)\b/u.test(normalizedTitle) ||
+    leadingRomanChapterNumber(title) !== null
+  );
+}
+
 /** Filters TOC-labeled editorial ranges while allowing explicit narrative destinations to resume. */
 function filterNavigationSections(
   blocks: XmlElement[],
@@ -232,9 +245,22 @@ function filterNavigationSections(
     if (key) {
       promotion.excluded = book.promotionalTargets.has(key);
       const title = book.navigationTitles.get(key)!;
-      editorialLevel = isExcludedMatterLabel(title) ? level : null;
+      if (isExcludedMatterLabel(title)) {
+        editorialLevel = level;
+      } else if (
+        editorialLevel !== 7 ||
+        isReliableNarrativeBoundary(block, title)
+      ) {
+        editorialLevel = null;
+      }
+    } else if (
+      editorialLevel === 7 &&
+      isReliableNarrativeBoundary(block, textContent(block))
+    ) {
+      editorialLevel = null;
     } else if (
       editorialLevel !== null &&
+      editorialLevel < 7 &&
       level <= editorialLevel &&
       level < 7
     ) {

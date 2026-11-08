@@ -89,6 +89,7 @@ export function resolveHelpSection(chunk: {
   return undefined;
 }
 
+/** Selects the most relevant cited help destination, then the most specific route. */
 export function buildNavigationAction(
   citedSources: readonly ChatSource[],
 ): ChatAction | null {
@@ -101,9 +102,9 @@ export function buildNavigationAction(
     )
     .sort(
       (left, right) =>
-        routeSpecificity(right.route ?? '') +
-        (right.section ? 1 : 0) -
-        (routeSpecificity(left.route ?? '') + (left.section ? 1 : 0)),
+        Number(Boolean(right.section)) - Number(Boolean(left.section)) ||
+        routeSpecificity(right.route ?? '') -
+          routeSpecificity(left.route ?? ''),
     )[0];
   if (!source?.route) {
     return null;

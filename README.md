@@ -96,7 +96,7 @@ cp .env.example .env
 
 Abrí `.env` y completá los valores de desarrollo que correspondan:
 
-- **Firebase Authentication:** completá `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`, o usá una cuenta de servicio en un archivo local `firebase-service-account.json`. El ejemplo ya apunta a ese archivo mediante `GOOGLE_APPLICATION_CREDENTIALS=./firebase-service-account.json`. **Docker Compose requiere el archivo JSON** porque lo monta dentro del contenedor; las variables inline se pueden usar al ejecutar el backend con Node fuera de Docker. En Firebase, habilitá el proveedor de inicio de sesión por correo y contraseña. Google es opcional si se va a usar ese método de acceso.
+- **Firebase Authentication:** completá `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`, o usá una cuenta de servicio en un archivo local `firebase-service-account.json`. El ejemplo ya apunta a ese archivo mediante `GOOGLE_APPLICATION_CREDENTIALS=./firebase-service-account.json`. Si usás las credenciales inline con Node, comentá esa variable en `.env` y quitá `GOOGLE_APPLICATION_CREDENTIALS` del entorno del proceso (por ejemplo, con `unset GOOGLE_APPLICATION_CREDENTIALS` en Bash). **Docker Compose requiere el archivo JSON** porque lo monta dentro del contenedor. En Firebase, habilitá el proveedor de inicio de sesión por correo y contraseña. Google es opcional si se va a usar ese método de acceso.
 - **Cloudflare R2:** completá `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_IMAGES_BUCKET` y `R2_PUBLIC_URL`. El backend necesita esta configuración para iniciar porque el servicio de almacenamiento se crea al arrancar. Configurá el bucket y su URL pública según las credenciales e infraestructura de PlumIA.
 - **Clave de cifrado:** `ENCRYPTION_KEY` permite guardar de forma cifrada las claves de IA que el usuario agregue desde la aplicación. Generá una y guardala como un secreto:
 
@@ -147,6 +147,14 @@ Instalá y ejecutá Docker. Si usás Windows, Docker Desktop debe estar iniciado
 
 ### 2. Levantar backend y servicios
 
+Si el volumen `pgdata` ya contiene una base creada con `prisma db push` y sin historial de migraciones, preparala antes de iniciar Compose. Definí `SHADOW_DATABASE_URL` para una base shadow separada y descartable; compará la base con el estado final de `prisma/migrations`:
+
+```bash
+pnpm exec prisma migrate diff --from-migrations ./prisma/migrations --to-url "$DATABASE_URL" --shadow-database-url "$SHADOW_DATABASE_URL"
+```
+
+Reconciliá cualquier diferencia sin borrar los datos. Cuando el esquema existente coincida con el estado final de las migraciones, registrá las migraciones ya reflejadas, en orden, con `pnpm exec prisma migrate resolve --applied <migration_name>` y verificá el resultado con `pnpm exec prisma migrate status`. No marques una migración como aplicada si sus cambios no están presentes; luego `prisma migrate deploy` podrá continuar con las pendientes.
+
 ```bash
 cd ~/proyectos/plumia/plumia-backend
 docker compose up -d --build
@@ -190,7 +198,7 @@ cd ~/proyectos/plumia/plumia-backend
 docker compose down
 ```
 
-`docker compose down` conserva los volúmenes con los datos de PostgreSQL, Redis y el modelo de Whisper. **No uses `docker compose down -v` salvo que quieras borrar esos datos locales.**
+`docker compose down` conserva los volúmenes con los datos de PostgreSQL, Redis y el modelo de Whisper. Conservar el volumen de Redis no garantiza conservar todos los trabajos: si el guardado tarda más de diez segundos, Compose puede detener Redis antes de que termine y se podrían perder trabajos recientes o exportaciones pendientes. **No uses `docker compose down -v` salvo que quieras borrar esos datos locales.**
 
 ## Opción B: ejecutar API y frontend con Node; usar Docker para infraestructura
 
@@ -205,6 +213,18 @@ cd ~/proyectos/plumia/plumia-backend
 docker compose up -d postgres redis whisper
 ```
 
+Desde Ubuntu/WSL, comprobá que PostgreSQL acepte conexiones en el puerto publicado (requiere el cliente PostgreSQL):
+
+```bash
+pg_isready -h 127.0.0.1 -p 5432 -U plumia -d plumia_development
+```
+
+Si el contenedor `api` de la opción A sigue activo, detenelo antes de levantar la API con Node para evitar que compitan por el puerto `3000`:
+
+```bash
+docker compose stop api
+```
+
 En esta modalidad el backend corre en Ubuntu/WSL, así que las direcciones del `.env` son las del host: PostgreSQL en `127.0.0.1:5432`, Redis en `localhost:6379` y Whisper en `http://127.0.0.1:8001`.
 
 ### 2. Instalar y preparar el backend
@@ -217,7 +237,7 @@ pnpm exec prisma migrate deploy
 pnpm start:dev
 ```
 
-La API queda en **[http://localhost:3000](http://localhost:3000)**. `migrate deploy` aplica las migraciones pendientes sin reiniciar ni vaciar la base de datos.
+Esperá a que `pnpm exec prisma migrate deploy` finalice correctamente antes de iniciar la API. La API queda en **[http://localhost:3000](http://localhost:3000)**. `migrate deploy` aplica las migraciones pendientes sin reiniciar ni vaciar la base de datos.
 
 ### 3. Ejecutar el frontend
 
@@ -263,15 +283,18 @@ No hace falta clonar repositorios ni configurar servicios locales. Abrí **[http
 
 ### Cargar contenido de demostración para desarrollo
 
-Después de iniciar sesión al menos una vez para que exista el usuario, podés crear un proyecto de demostración con manuscrito, Wiki, relaciones, línea de tiempo, storyboard, resúmenes, alertas y actividad de escritura:
+Después de iniciar sesión al menos una vez para que exista el usuario, podés cargar un proyecto local de prueba con manuscrito, Wiki, relaciones, estados temporales, eventos, tablero, resúmenes, análisis, chat, actividad, propuestas pendientes, versiones alternativas, anotaciones privadas, exportación y lectura compartida con comentarios:
 
 ```bash
-cd ~/proyectos/plumia/plumia-backend
+cd /home/pc-luis/Organizacion-PlumIA/plumia-backend
 pnpm install --frozen-lockfile
+pnpm exec prisma generate
 pnpm seed:demo
 ```
 
-El script usa `Proyecto Demo PlumIA` si ya existe; de lo contrario, lo crea para el único usuario activo. Si hay varios usuarios o proyectos, podés indicar `SEED_PROJECT_ID` o `SEED_USER_ID` en el entorno. El seed es idempotente y no se ejecuta con `NODE_ENV=production`.
+Sin filtros, el seed crea o actualiza un proyecto `PlumIA Demo Integral` para cada cuenta activa de la base local, y los proyectos quedan asociados a sus dueños. `SEED_USER_ID` o `SEED_USER_EMAIL` limitan la carga a una sola cuenta; `SEED_PROJECT_ID` selecciona un proyecto. El seed solo se ejecuta si `DATABASE_URL` y `DIRECT_URL` usan `localhost`, `127.0.0.1` o `::1`, y rechaza `NODE_ENV=production`. Se puede reejecutar para restaurar los ejemplos iniciales; no elimina datos del proyecto ni permite apuntar a una base remota.
+
+Al terminar imprime el enlace del Editor y el de lectura compartida. El enlace de lectura muestra dos comentarios de ejemplo (uno abierto y otro resuelto) y permite probar respuestas y resolución. El proyecto también contiene propuestas nuevas y de actualización de entidades, propuestas de estados y relaciones, dos versiones alternativas de escena, una anotación privada y una copia de punto de control.
 
 ## Comandos útiles de desarrollo
 
