@@ -58,6 +58,7 @@ interface XmlElement {
   name: string;
   attributes: Record<string, string>;
   children: XmlNode[];
+  boundaryIds?: string[];
 }
 type XmlNode = XmlText | XmlElement;
 
@@ -353,6 +354,7 @@ function marksForElement(
   return inheritedMarks;
 }
 
+/** Converts inline XML while preserving text order, marks and hard breaks. */
 function inlineNodes(
   nodes: XmlNode[],
   inheritedMarks: Record<string, unknown>[] = [],
@@ -382,7 +384,28 @@ function inlineNodes(
     const marks = marksForElement(node, inheritedMarks);
     result.push(...inlineNodes(node.children, marks));
   }
-  return result;
+  return collapseInlineWhitespace(result);
+}
+
+/** Collapses adjacent spaces across marks without moving text across hard breaks. */
+function collapseInlineWhitespace(
+  nodes: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  let previousEndsWithSpace = false;
+  return nodes.filter((node) => {
+    if (typeof node['text'] !== 'string') {
+      previousEndsWithSpace = false;
+      return true;
+    }
+    if (previousEndsWithSpace) {
+      node['text'] = node['text'].replace(/^ /u, '');
+    }
+    const text = node['text'] as string;
+    if (text) {
+      previousEndsWithSpace = text.endsWith(' ');
+    }
+    return Boolean(text);
+  });
 }
 
 function numberWidth(value: string | undefined): number | null {
@@ -857,6 +880,7 @@ function imagesOutsideDividers(
   );
 }
 
+/** Reads EPUB 3 chapter labels without mixing in landmarks or pagination. */
 function navigationTitles(
   root: XmlElement,
   navPath: string,
@@ -865,11 +889,12 @@ function navigationTitles(
   const navs = elements(root, 'nav');
   const toc = navs.find((nav) => semanticTypes(nav).includes('toc'));
   // Page lists and landmarks are separate navigation aids, never chapter titles.
-  const roots = toc
-    ? [toc]
-    : navs.length
-      ? navs.filter((nav) => !semanticTypes(nav).length)
-      : [root];
+  let roots = navs.filter((nav) => !semanticTypes(nav).length);
+  if (toc) {
+    roots = [toc];
+  } else if (!navs.length) {
+    roots = [root];
+  }
   for (const link of roots.flatMap((nav) => elements(nav, 'a'))) {
     const href = attribute(link, 'href');
     const label = textContent(link).trim();
@@ -880,6 +905,7 @@ function navigationTitles(
   return titles;
 }
 
+/** Records a unique destination, skipping only malformed URI fragments. */
 function addNavigationTitle(
   titles: Map<string, string>,
   base: string,
@@ -888,12 +914,23 @@ function addNavigationTitle(
 ): void {
   const path = archivePath(base, href);
   const fragment = href.split('#')[1];
-  const key = fragment ? `${path}#${decodeURIComponent(fragment)}` : path;
+  let key = path;
+  if (fragment) {
+    try {
+      key = `${path}#${decodeURIComponent(fragment)}`;
+    } catch (error) {
+      if (error instanceof URIError) {
+        return;
+      }
+      throw error;
+    }
+  }
   if (!titles.has(key)) {
     titles.set(key, normalizeWhitespace(label).trim());
   }
 }
 
+/** Reads EPUB 2 navPoint destinations and labels in navigation order. */
 function ncxTitles(root: XmlElement, navPath: string): Map<string, string> {
   const titles = new Map<string, string>();
   for (const point of elements(root, 'navpoint')) {
@@ -908,12 +945,18 @@ function ncxTitles(root: XmlElement, navPath: string): Map<string, string> {
   return titles;
 }
 
+interface EpubNavigation {
+  titles: Map<string, string>;
+  promotionalTargets: Set<string>;
+}
+
+/** Loads optional navigation while preserving archive-budget failures. */
 async function tocTitles(
   zip: JSZip,
   opfPath: string,
   manifest: XmlElement[],
   budget: DecompressionBudget,
-): Promise<Map<string, string>> {
+): Promise<EpubNavigation> {
   const navItem = manifest.find((item) =>
     (attribute(item, 'properties') ?? '').split(/\s+/u).includes('nav'),
   );
@@ -923,21 +966,150 @@ async function tocTitles(
   const item = navItem ?? ncxItem;
   const href = item ? attribute(item, 'href') : undefined;
   if (!item || !href) {
-    return new Map<string, string>();
+    return { titles: new Map(), promotionalTargets: new Set() };
   }
 
   const navPath = archivePath(opfPath, href);
   try {
     const root = parseXml(await readArchiveText(zip, navPath, budget));
-    return item === navItem
-      ? navigationTitles(root, navPath)
-      : ncxTitles(root, navPath);
+    const titles =
+      item === navItem
+        ? navigationTitles(root, navPath)
+        : ncxTitles(root, navPath);
+    return {
+      titles,
+      promotionalTargets: promotionalNavigationTargets(root, navPath, titles),
+    };
   } catch (error) {
     if (error instanceof EpubArchiveLimitError) {
       throw error;
     }
-    return new Map<string, string>();
+    return { titles: new Map(), promotionalTargets: new Set() };
   }
+}
+
+const PROMOTIONAL_LABELS = new Set([
+  'seguir leyendo',
+  'read on',
+  'extracto',
+  'adelanto',
+  'preview',
+  'sample',
+]);
+
+/** Recognizes navigation labels that introduce promotional inserts. */
+function isPromotionalLabel(label: string): boolean {
+  return PROMOTIONAL_LABELS.has(normalizedLabel(label));
+}
+
+/** Reads explicit TOC nesting so sample chapters cannot resume the main narrative. */
+function nestedPromotionalTargets(root: XmlElement, path: string): Set<string> {
+  const targets = new Set<string>();
+  const visit = (node: XmlNode, inherited: boolean): void => {
+    if (node.kind === 'text') {
+      return;
+    }
+    const entries = directNavigationEntry(node, path);
+    const promotional =
+      inherited || [...entries.values()].some(isPromotionalLabel);
+    if (promotional) {
+      for (const key of entries.keys()) {
+        targets.add(key);
+      }
+    }
+    for (const child of node.children) {
+      visit(child, promotional);
+    }
+  };
+  visit(root, false);
+  return targets;
+}
+
+/** Reads only the current list item/navPoint, leaving nested entries to the traversal. */
+function directNavigationEntry(
+  node: XmlElement,
+  path: string,
+): Map<string, string> {
+  const entries = new Map<string, string>();
+  if (node.name !== 'li' && node.name !== 'navpoint') {
+    return entries;
+  }
+  const children = node.children.filter(
+    (child): child is XmlElement => child.kind === 'element',
+  );
+  const target = children.find(
+    (child) => child.name === (node.name === 'li' ? 'a' : 'content'),
+  );
+  const label =
+    node.name === 'li'
+      ? target
+      : children.find((child) => child.name === 'navlabel');
+  const href = target
+    ? attribute(target, node.name === 'li' ? 'href' : 'src')
+    : undefined;
+  if (label && href) {
+    addNavigationTitle(entries, path, href, textContent(label));
+  }
+  return entries;
+}
+
+/** Reads a leading Arabic or Roman chapter number from a TOC label. */
+function navigationChapterNumber(title: string): number | null {
+  const match = /^(?:capitulo\s+|chapter\s+)?(\d+)(?:[.)]|\s|$)/u.exec(
+    normalizedLabel(title),
+  );
+  return match ? Number(match[1]) : leadingRomanChapterNumber(title);
+}
+
+/** Bounds flat promotional inserts by the next main chapter, respecting nested sample entries. */
+function promotionalNavigationTargets(
+  root: XmlElement,
+  path: string,
+  titles: Map<string, string>,
+): Set<string> {
+  const targets = nestedPromotionalTargets(root, path);
+  let inPromotion = false;
+  let previousNumber: number | null = null;
+  for (const [key, title] of titles) {
+    const explicitPromotion = targets.has(key) || isPromotionalLabel(title);
+    const number = navigationChapterNumber(title);
+    if (explicitPromotion) {
+      inPromotion = true;
+    } else if (
+      inPromotion &&
+      resumesMainNarrative(title, number, previousNumber)
+    ) {
+      inPromotion = false;
+    }
+    if (inPromotion) {
+      targets.add(key);
+    } else if (number !== null) {
+      previousNumber = number;
+    }
+  }
+  return targets;
+}
+
+/** Recognizes later main entries while avoiding restarted excerpt numbering. */
+function resumesMainNarrative(
+  title: string,
+  number: number | null,
+  previousNumber: number | null,
+): boolean {
+  if (isExcludedMatterLabel(title)) {
+    return false;
+  }
+  if (previousNumber === null) {
+    return true;
+  }
+  if (number !== null) {
+    return number > previousNumber;
+  }
+  // Flat TOCs can label an excerpt with its other book's title followed by "Chapter 1".
+  const excerptNumber = /\b(?:capitulo|chapter)\s+(\d+)\b/u.exec(
+    normalizedLabel(title),
+  );
+  return !excerptNumber || Number(excerptNumber[1]) > previousNumber;
 }
 
 function fallbackTitle(path: string): string {
@@ -950,11 +1122,14 @@ function fallbackTitle(path: string): string {
   }
 }
 
+/** Selects a title only from retained narrative blocks. */
 function chapterTitleFromDocument(
-  root: XmlElement,
+  blocks: XmlElement[],
   bookTitle: string,
 ): string | null {
-  const headings = [...elements(root, 'h1'), ...elements(root, 'h2')];
+  const headings = blocks.filter(
+    (block) => block.name === 'h1' || block.name === 'h2',
+  );
   const matchingBookTitle = headings.find(
     (heading) =>
       normalizedLabel(textContent(heading)) === normalizedLabel(bookTitle),
@@ -970,8 +1145,7 @@ function chapterTitleFromDocument(
     }
   }
 
-  const body = elements(root, 'body')[0] ?? root;
-  for (const block of contentBlocks(body)) {
+  for (const block of blocks) {
     const title = normalizeWhitespace(textContent(block)).trim();
     if (
       title &&
@@ -1014,6 +1188,7 @@ const CONTENT_CONTAINERS = new Set([
   'section',
 ]);
 
+/** Flattens narrative containers while preserving IDs at their first block. */
 function contentBlocks(root: XmlElement): XmlElement[] {
   const result: XmlElement[] = [];
   const visit = (node: XmlNode): void => {
@@ -1028,17 +1203,79 @@ function contentBlocks(root: XmlElement): XmlElement[] {
       return;
     }
     if (CONTENT_CONTAINERS.has(node.name)) {
+      const firstIndex = result.length;
       for (const child of node.children) {
         visit(child);
+      }
+      const firstBlock = result[firstIndex];
+      const id = attribute(node, 'id');
+      if (firstBlock && id) {
+        firstBlock.boundaryIds = [...(firstBlock.boundaryIds ?? []), id];
       }
       return;
     }
     result.push(node);
   };
 
-  visit(root);
+  const retained = pruneExcludedMatter(root);
+  if (retained) {
+    visit(retained);
+  }
+  return filterEditorialHeadings(carryEmptyAnchors(result));
+}
+
+/** Moves empty anchor destinations onto the next visible block without creating filler scenes. */
+function carryEmptyAnchors(blocks: XmlElement[]): XmlElement[] {
+  const retained: XmlElement[] = [];
+  let pendingIds: string[] = [];
+  for (const block of blocks) {
+    if (
+      !normalizeWhitespace(textContent(block)).trim() &&
+      !elements(block, 'img').length &&
+      block.name !== 'hr'
+    ) {
+      pendingIds.push(...blockIds(block));
+      continue;
+    }
+    retained.push({
+      ...block,
+      boundaryIds: [...pendingIds, ...(block.boundaryIds ?? [])],
+    });
+    pendingIds = [];
+  }
+  if (pendingIds.length) {
+    retained.push({
+      kind: 'element',
+      name: 'span',
+      attributes: {},
+      children: [],
+      boundaryIds: pendingIds,
+    });
+  }
+  return retained;
+}
+
+/** Removes semantic editorial descendants even inside lists, quotes and inline spans. */
+function pruneExcludedMatter(node: XmlNode): XmlNode | null {
+  if (node.kind === 'text') {
+    return node;
+  }
+  if (isExcludedMatter(node)) {
+    return null;
+  }
+  return {
+    ...node,
+    children: node.children.flatMap((child) => {
+      const retained = pruneExcludedMatter(child);
+      return retained ? [retained] : [];
+    }),
+  };
+}
+
+/** Keeps an editorial heading's outer level until its complete section ends. */
+function filterEditorialHeadings(blocks: XmlElement[]): XmlElement[] {
   let excludedHeadingLevel: number | null = null;
-  return result.filter((block) => {
+  return blocks.filter((block) => {
     const headingLevel = /^h[1-6]$/u.test(block.name)
       ? Number(block.name.slice(1))
       : null;
@@ -1049,7 +1286,10 @@ function contentBlocks(root: XmlElement): XmlElement[] {
       ) {
         excludedHeadingLevel = null;
       }
-      if (isExcludedMatterLabel(textContent(block))) {
+      if (
+        excludedHeadingLevel === null &&
+        isExcludedMatterLabel(textContent(block))
+      ) {
         excludedHeadingLevel = headingLevel;
       }
     }
@@ -1134,6 +1374,20 @@ function isGenericNavigationTitle(value: string | undefined): boolean {
   );
 }
 
+/** Excludes identified editorial documents before importing their content. */
+/** Quita los dígitos finales sin regex con retroceso (evita backtracking cuadrático). */
+function stripTrailingDigits(value: string): string {
+  let end = value.length;
+  while (
+    end > 0 &&
+    value.charCodeAt(end - 1) >= 48 &&
+    value.charCodeAt(end - 1) <= 57
+  ) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function isFrontMatterDocument(
   path: string,
   navigationTitle: string | undefined,
@@ -1148,11 +1402,8 @@ function isFrontMatterDocument(
   })();
   const normalizedPath = normalizedLabel(decodedPath).replaceAll('\\', '/');
   const fileName = normalizedPath.split('/').pop() ?? normalizedPath;
-  if (
-    /^(?:cover(?:page)?|title(?:page)?|portada|cubierta|titulo|nav|toc|contents?|about|acerca|colophon|copyright|elejandria|sinopsis|synopsis|info|autor|author|dedicatoria|dedication|acknowledg(?:e)?ments?|agradecimientos|credits|creditos)(?:\d+)?(?:[._-]|$)/u.test(
-      fileName,
-    )
-  ) {
+  const fileStem = stripTrailingDigits(fileName.split(/[._-]/u, 1)[0]!);
+  if (EDITORIAL_FILE_STEMS.has(fileStem)) {
     return true;
   }
 
@@ -1201,11 +1452,79 @@ function isExcludedMatter(node: XmlElement): boolean {
   return semanticTypes(node).some((type) => EXCLUDED_MATTER_TYPES.has(type));
 }
 
+/** Matches normalized editorial labels without a complex alternation regex. */
 function isExcludedMatterLabel(value: string): boolean {
-  return /^(?:cover|cubierta|portada|title(?: page)?|titulo|acerca(?: del autor)?|about(?: the author)?|autor|author|sinopsis|synopsis|dedicatoria|dedication|agradecimientos|acknowledg(?:e)?ments|indice|contents|table of contents|(?:pagina de )?creditos|credits|copyright|colofon|colophon|pottermore publishing|tambien por|also by|seguir leyendo|read on)$/u.test(
-    normalizedLabel(value),
-  );
+  return EDITORIAL_LABELS.has(normalizedLabel(value));
 }
+
+const EDITORIAL_FILE_STEMS = new Set([
+  'cover',
+  'coverpage',
+  'title',
+  'titlepage',
+  'portada',
+  'cubierta',
+  'titulo',
+  'nav',
+  'toc',
+  'content',
+  'contents',
+  'about',
+  'acerca',
+  'colophon',
+  'copyright',
+  'elejandria',
+  'sinopsis',
+  'synopsis',
+  'info',
+  'autor',
+  'author',
+  'dedicatoria',
+  'dedication',
+  'acknowledgment',
+  'acknowledgments',
+  'acknowledgement',
+  'acknowledgements',
+  'agradecimientos',
+  'credits',
+  'creditos',
+]);
+
+const EDITORIAL_LABELS = new Set([
+  'cover',
+  'cubierta',
+  'portada',
+  'title',
+  'title page',
+  'titulo',
+  'acerca',
+  'acerca del autor',
+  'about',
+  'about the author',
+  'autor',
+  'author',
+  'sinopsis',
+  'synopsis',
+  'dedicatoria',
+  'dedication',
+  'agradecimientos',
+  'acknowledgments',
+  'acknowledgements',
+  'indice',
+  'contents',
+  'table of contents',
+  'creditos',
+  'pagina de creditos',
+  'credits',
+  'copyright',
+  'colofon',
+  'colophon',
+  'pottermore publishing',
+  'tambien por',
+  'also by',
+  'seguir leyendo',
+  'read on',
+]);
 
 interface ContentBoundary {
   kind: 'chapter' | 'scene';
@@ -1333,6 +1652,7 @@ function semanticChapterBoundary(
   return null;
 }
 
+/** Infers chapter and scene boundaries from supported heading conventions. */
 function structuralBoundary(
   block: XmlElement,
   index: number,
@@ -1346,36 +1666,9 @@ function structuralBoundary(
     return null;
   }
 
-  // A number and its subtitle often occupy two headings in a single chapter.
-  const next = blocks[index + 1];
-  if (
-    /^(?:capitulo|chapter|acto|act|parte|part)\s+(?:\d+|[ivxlcdm]+|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)$/u.test(
-      label,
-    ) &&
-    next &&
-    /^h[1-6]$/u.test(next.name)
-  ) {
-    const subtitle = normalizeWhitespace(textContent(next)).trim();
-    if (
-      subtitle &&
-      subtitle.length <= 180 &&
-      !startsWithBoundaryNumber(
-        normalizedLabel(subtitle),
-        CHAPTER_PREFIXES,
-        CHAPTER_ORDINALS,
-      ) &&
-      !startsWithBoundaryNumber(
-        normalizedLabel(subtitle),
-        SCENE_PREFIXES,
-        SCENE_ORDINALS,
-      )
-    ) {
-      return {
-        kind: 'chapter',
-        title: `${text}. ${subtitle}`,
-        consumeNext: true,
-      };
-    }
+  const combined = combinedHeadingBoundary(text, label, blocks[index + 1]);
+  if (combined) {
+    return combined;
   }
 
   if (startsWithBoundaryNumber(label, CHAPTER_PREFIXES, CHAPTER_ORDINALS)) {
@@ -1402,6 +1695,62 @@ function structuralBoundary(
   }
 
   return semanticChapterBoundary(block, label, bookTitle, text);
+}
+
+const CARDINAL_CHAPTER_NUMBERS = new Set([
+  'uno',
+  'dos',
+  'tres',
+  'cuatro',
+  'cinco',
+  'seis',
+  'siete',
+  'ocho',
+  'nueve',
+  'diez',
+]);
+
+/** Joins a bare chapter number to its subtitle; explicit TOC boundaries are resolved later. */
+function combinedHeadingBoundary(
+  text: string,
+  label: string,
+  next: XmlElement | undefined,
+): ContentBoundary | null {
+  const parts = label.split(' ');
+  if (
+    parts.length !== 2 ||
+    !CHAPTER_PREFIXES.has(parts[0]!) ||
+    !next ||
+    !/^h[1-6]$/u.test(next.name)
+  ) {
+    return null;
+  }
+  const number = parts[1]!;
+  if (
+    !/^\d+$/u.test(number) &&
+    !isRomanNumeral(number) &&
+    !CARDINAL_CHAPTER_NUMBERS.has(number)
+  ) {
+    return null;
+  }
+  const subtitle = normalizeWhitespace(textContent(next)).trim();
+  if (
+    !subtitle ||
+    subtitle.length > 180 ||
+    startsWithBoundaryNumber(
+      normalizedLabel(subtitle),
+      CHAPTER_PREFIXES,
+      CHAPTER_ORDINALS,
+    ) ||
+    startsWithBoundaryNumber(
+      normalizedLabel(subtitle),
+      SCENE_PREFIXES,
+      SCENE_ORDINALS,
+    )
+  ) {
+    return null;
+  }
+  return { kind: 'chapter', title: `${text}. ${subtitle}`, consumeNext: true };
 }
 
 function meaningfulNavigationTitle(value: string | undefined): string | null {
@@ -1467,6 +1816,7 @@ interface LogicalChapterState {
   preludeBlocks: XmlElement[];
 }
 
+/** Removes publication preambles while retaining narrative images and dividers. */
 function contentBlocksWithoutPreamble(
   sourceBlocks: XmlElement[],
   bookTitle: string,
@@ -1578,6 +1928,7 @@ function finishLogicalChapters(
   flushLogicalChapter(state, documentPath, catalog);
 }
 
+/** Builds logical chapters from retained blocks and explicit TOC destinations. */
 function logicalChapters(
   sourceBlocks: XmlElement[],
   documentPath: string,
@@ -1595,30 +1946,17 @@ function logicalChapters(
     isRomanNumeral(normalizeWhitespace(textContent(block)).trim()),
   ).length;
 
-  const boundaries = blocks.map((block, index) => {
-    const boundary = structuralBoundary(
+  const boundaries = blocks.map((block, index) =>
+    resolveContentBoundary(
       block,
       index,
       blocks,
       bookTitle,
       romanChapterCount,
-    );
-    const ids = [attribute(block, 'id'), ...allElementIds(block)];
-    const title = ids
-      .map((id) => (id ? navigation.get(`${documentPath}#${id}`) : undefined))
-      .find(Boolean);
-    return title && !isExcludedMatterLabel(title)
-      ? {
-          ...boundary,
-          kind: 'chapter' as const,
-          title,
-          preserveBlock:
-            !boundary &&
-            !/^h[1-6]$/u.test(block.name) &&
-            normalizedLabel(textContent(block)) !== normalizedLabel(title),
-        }
-      : boundary;
-  });
+      documentPath,
+      navigation,
+    ),
+  );
   if (!boundaries.some(Boolean)) {
     return [
       {
@@ -1645,42 +1983,128 @@ function logicalChapters(
     if (index > 0 && boundaries[index - 1]?.consumeNext) {
       continue;
     }
-    if (boundary) {
-      processChapterBoundary(
-        state,
-        boundary,
-        defaultTitle,
-        documentPath,
-        catalog,
-      );
-      if (boundary.preserveBlock) {
-        state.currentSceneBlocks.push(block);
-      }
-      continue;
-    }
-    if (state.currentChapter) {
-      state.currentSceneBlocks.push(block);
-    } else {
-      state.preludeBlocks.push(block);
-    }
+    processLogicalBlock(
+      state,
+      block,
+      boundary,
+      defaultTitle,
+      documentPath,
+      catalog,
+    );
   }
 
   finishLogicalChapters(state, defaultTitle, documentPath, catalog);
 
+  applyDocumentNavigationTitle(
+    state.chapters,
+    defaultTitle,
+    navigation.get(documentPath),
+  );
+  return state.chapters;
+}
+
+/** Returns identifiers preserved at this block's start, including flattened containers. */
+function blockIds(block: XmlElement): string[] {
+  const ownId = attribute(block, 'id');
+  return [
+    ...(block.boundaryIds ?? []),
+    ...(ownId ? [ownId] : []),
+    ...allElementIds(block),
+  ];
+}
+
+/** Resolves a block or flattened-container ID to its TOC title. */
+function blockNavigationTitle(
+  block: XmlElement,
+  path: string,
+  navigation: Map<string, string>,
+): string | undefined {
+  return blockIds(block)
+    .map((id) => navigation.get(`${path}#${id}`))
+    .find(Boolean);
+}
+
+/** Gives explicit TOC destinations precedence over inferred paired headings. */
+function resolveContentBoundary(
+  block: XmlElement,
+  index: number,
+  blocks: XmlElement[],
+  bookTitle: string,
+  romanCount: number,
+  path: string,
+  navigation: Map<string, string>,
+): ContentBoundary | null {
+  let boundary = structuralBoundary(
+    block,
+    index,
+    blocks,
+    bookTitle,
+    romanCount,
+  );
+  const next = blocks[index + 1];
   if (
-    state.chapters.length === 1 &&
-    meaningfulNavigationTitle(navigation.get(documentPath))
+    boundary?.consumeNext &&
+    next &&
+    blockNavigationTitle(next, path, navigation)
   ) {
-    const chapter = state.chapters[0]!;
-    const previousTitle = chapter.title;
-    chapter.title = defaultTitle.slice(0, 200);
-    for (const scene of chapter.scenes) {
-      if (scene.title === previousTitle) {
-        scene.title = chapter.title;
-      }
+    boundary = {
+      kind: 'chapter',
+      title: normalizeWhitespace(textContent(block)).trim(),
+    };
+  }
+  const title = blockNavigationTitle(block, path, navigation);
+  if (!title || isExcludedMatterLabel(title)) {
+    return boundary;
+  }
+  return {
+    ...boundary,
+    kind: 'chapter',
+    title,
+    preserveBlock:
+      !boundary &&
+      !/^h[1-6]$/u.test(block.name) &&
+      normalizedLabel(textContent(block)) !== normalizedLabel(title),
+  };
+}
+
+/** Advances chapter state while retaining prose used as an anchor destination. */
+function processLogicalBlock(
+  state: LogicalChapterState,
+  block: XmlElement,
+  boundary: ContentBoundary | null | undefined,
+  defaultTitle: string,
+  path: string,
+  catalog: ImageCatalog,
+): void {
+  if (boundary) {
+    processChapterBoundary(state, boundary, defaultTitle, path, catalog);
+    if (boundary.preserveBlock) {
+      state.currentSceneBlocks.push(block);
+    }
+  } else if (state.currentChapter) {
+    state.currentSceneBlocks.push(block);
+  } else {
+    state.preludeBlocks.push(block);
+  }
+}
+
+/** Applies a meaningful document-level title to its single logical chapter. */
+function applyDocumentNavigationTitle(
+  chapters: EpubImportChapter[],
+  title: string,
+  navigationTitle: string | undefined,
+): void {
+  if (chapters.length !== 1 || !meaningfulNavigationTitle(navigationTitle)) {
+    return;
+  }
+  const chapter = chapters[0]!;
+  const previousTitle = chapter.title;
+  chapter.title = title.slice(0, 200);
+  for (const scene of chapter.scenes) {
+    if (scene.title === previousTitle) {
+      scene.title = chapter.title;
     }
   }
-  return state.chapters;
 }
 
 function allElementIds(node: XmlElement): string[] {
@@ -1700,6 +2124,7 @@ interface EpubPackage {
   manifestById: Map<string, XmlElement>;
   spineItems: XmlElement[];
   navigationTitles: Map<string, string>;
+  promotionalTargets: Set<string>;
 }
 
 async function loadEpubArchive(
@@ -1740,6 +2165,7 @@ async function loadEpubArchive(
   return zip;
 }
 
+/** Loads package metadata, manifest, spine and navigation from the container. */
 async function readEpubPackage(
   zip: JSZip,
   budget: DecompressionBudget,
@@ -1769,13 +2195,14 @@ async function readEpubPackage(
       .map((item) => [attribute(item, 'id') ?? '', item] as const)
       .filter(([id]) => id),
   );
-  const navigationTitles = await tocTitles(zip, opfPath, manifest, budget);
+  const navigation = await tocTitles(zip, opfPath, manifest, budget);
   return {
     opfPath,
     title,
     manifestById,
     spineItems: elements(spine, 'itemref'),
-    navigationTitles,
+    navigationTitles: navigation.titles,
+    promotionalTargets: navigation.promotionalTargets,
   };
 }
 
@@ -1802,6 +2229,7 @@ function spineItemPath(
   return archivePath(opfPath, href);
 }
 
+/** Filters and imports one spine document with its navigation scope. */
 async function parseSpineDocument(
   zip: JSZip,
   itemref: XmlElement,
@@ -1809,6 +2237,7 @@ async function parseSpineDocument(
   opfPath: string,
   catalog: ImageCatalog,
   budget: DecompressionBudget,
+  promotion: PromotionState,
 ): Promise<EpubImportChapter[]> {
   const path = spineItemPath(itemref, packageData, opfPath);
   if (!path) {
@@ -1817,13 +2246,23 @@ async function parseSpineDocument(
   const source = await readArchiveText(zip, path, budget);
   const root = parseXml(source);
   const navigationTitle = packageData.navigationTitles.get(path);
+  if (navigationTitle) {
+    promotion.excluded = packageData.promotionalTargets.has(path);
+  }
   if (isFrontMatterDocument(path, navigationTitle, root)) {
     return [];
   }
 
-  await catalogImages(zip, root, path, catalog, budget);
   const body = elements(root, 'body')[0] ?? root;
-  const documentTitle = chapterTitleFromDocument(root, packageData.title);
+  const blocks = filterNavigationSections(
+    contentBlocks(body),
+    path,
+    packageData,
+    promotion,
+  );
+  const retainedRoot: XmlElement = { ...body, children: blocks };
+  await catalogImages(zip, retainedRoot, path, catalog, budget);
+  const documentTitle = chapterTitleFromDocument(blocks, packageData.title);
   const chapterTitle = preferredChapterTitle(
     navigationTitle,
     documentTitle,
@@ -1831,13 +2270,47 @@ async function parseSpineDocument(
     path,
   );
   return logicalChapters(
-    contentBlocks(body),
+    blocks,
     path,
     catalog,
     packageData.title,
     chapterTitle,
     packageData.navigationTitles,
   );
+}
+
+interface PromotionState {
+  excluded: boolean;
+}
+
+/** Filters TOC-labeled editorial ranges while allowing explicit narrative destinations to resume. */
+function filterNavigationSections(
+  blocks: XmlElement[],
+  path: string,
+  book: EpubPackage,
+  promotion: PromotionState,
+): XmlElement[] {
+  let editorialLevel: number | null = null;
+  return blocks.filter((block) => {
+    const key = blockIds(block)
+      .map((id) => `${path}#${id}`)
+      .find((id) => book.navigationTitles.has(id));
+    const level = /^h[1-6]$/u.test(block.name)
+      ? Number(block.name.slice(1))
+      : 7;
+    if (key) {
+      promotion.excluded = book.promotionalTargets.has(key);
+      const title = book.navigationTitles.get(key)!;
+      editorialLevel = isExcludedMatterLabel(title) ? level : null;
+    } else if (
+      editorialLevel !== null &&
+      level <= editorialLevel &&
+      level < 7
+    ) {
+      editorialLevel = null;
+    }
+    return !promotion.excluded && editorialLevel === null;
+  });
 }
 
 function mergeLeadingIntroduction(
@@ -1872,6 +2345,7 @@ function mergeLeadingIntroduction(
   }
 }
 
+/** Imports spine documents sequentially and preserves standalone illustrations. */
 async function parseSpine(
   zip: JSZip,
   opfPath: string,
@@ -1880,27 +2354,9 @@ async function parseSpine(
   budget: DecompressionBudget,
 ): Promise<EpubImportChapter[]> {
   const chapters: EpubImportChapter[] = [];
-  let promotionalTail = false;
+  const promotion: PromotionState = { excluded: false };
+  const leadingIllustrations: EpubImportChapter[] = [];
   await mapSequentially(packageData.spineItems, async (itemref) => {
-    const path = spineItemPath(itemref, packageData, opfPath);
-    const label = path
-      ? normalizedLabel(packageData.navigationTitles.get(path))
-      : '';
-    if (
-      [
-        'seguir leyendo',
-        'read on',
-        'extracto',
-        'adelanto',
-        'preview',
-        'sample',
-      ].includes(label)
-    ) {
-      promotionalTail = true;
-    }
-    if (promotionalTail) {
-      return;
-    }
     const documentChapters = await parseSpineDocument(
       zip,
       itemref,
@@ -1908,6 +2364,7 @@ async function parseSpine(
       opfPath,
       catalog,
       budget,
+      promotion,
     );
     // Standalone illustration pages belong to the preceding text, not a filler chapter.
     if (
@@ -1921,19 +2378,43 @@ async function parseSpine(
         for (const scene of documentChapters[0]!.scenes) {
           appendContent(previous.content, scene.content);
         }
+      } else {
+        leadingIllustrations.push(...documentChapters);
       }
       return;
     }
+    prependLeadingIllustrations(leadingIllustrations, documentChapters);
     mergeLeadingIntroduction(chapters, documentChapters);
     chapters.push(...documentChapters);
     if (chapters.length > 500) {
       throw new EpubImportError('El EPUB supera el máximo de 500 capítulos.');
     }
   });
+  chapters.push(...leadingIllustrations);
   if (!chapters.length) {
     throw new EpubImportError('No se encontró texto importable en el EPUB.');
   }
   return chapters;
+}
+
+/** Buffers illustration pages until a first scene can own them, preserving reading order. */
+function prependLeadingIllustrations(
+  pending: EpubImportChapter[],
+  chapters: EpubImportChapter[],
+): void {
+  const first = chapters[0]?.scenes[0];
+  if (!first || !pending.length) {
+    return;
+  }
+  const content: Record<string, unknown> = { type: 'doc', content: [] };
+  for (const chapter of pending) {
+    for (const scene of chapter.scenes) {
+      appendContent(content, scene.content);
+    }
+  }
+  appendContent(content, first.content);
+  first.content = content;
+  pending.length = 0;
 }
 
 function documentHasText(value: unknown): boolean {
