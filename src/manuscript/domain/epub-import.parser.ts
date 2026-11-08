@@ -44,6 +44,8 @@ const XML_PARSER = new XMLParser({
   parseTagValue: false,
   parseAttributeValue: false,
   htmlEntities: true,
+  // Spaces around inline elements belong to the prose, including whitespace-only nodes.
+  trimValues: false,
 });
 
 interface XmlText {
@@ -290,7 +292,7 @@ async function readArchiveText(
 }
 
 function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/gu, ' ');
+  return value.replace(/[\u00ad\u200b\ufeff]/gu, '').replace(/\s+/gu, ' ');
 }
 
 function trimInlineEdges(nodes: Record<string, unknown>[]): void {
@@ -860,14 +862,36 @@ function navigationTitles(
   navPath: string,
 ): Map<string, string> {
   const titles = new Map<string, string>();
-  for (const link of elements(root, 'a')) {
+  const navs = elements(root, 'nav');
+  const toc = navs.find((nav) => semanticTypes(nav).includes('toc'));
+  // Page lists and landmarks are separate navigation aids, never chapter titles.
+  const roots = toc
+    ? [toc]
+    : navs.length
+      ? navs.filter((nav) => !semanticTypes(nav).length)
+      : [root];
+  for (const link of roots.flatMap((nav) => elements(nav, 'a'))) {
     const href = attribute(link, 'href');
     const label = textContent(link).trim();
     if (href && label) {
-      titles.set(archivePath(navPath, href), label);
+      addNavigationTitle(titles, navPath, href, label);
     }
   }
   return titles;
+}
+
+function addNavigationTitle(
+  titles: Map<string, string>,
+  base: string,
+  href: string,
+  label: string,
+): void {
+  const path = archivePath(base, href);
+  const fragment = href.split('#')[1];
+  const key = fragment ? `${path}#${decodeURIComponent(fragment)}` : path;
+  if (!titles.has(key)) {
+    titles.set(key, normalizeWhitespace(label).trim());
+  }
 }
 
 function ncxTitles(root: XmlElement, navPath: string): Map<string, string> {
@@ -878,7 +902,7 @@ function ncxTitles(root: XmlElement, navPath: string): Map<string, string> {
     const contentSrc = content ? attribute(content, 'src') : undefined;
     const label = navLabel ? textContent(navLabel).trim() : '';
     if (contentSrc && label) {
-      titles.set(archivePath(navPath, contentSrc), label);
+      addNavigationTitle(titles, navPath, contentSrc, label);
     }
   }
   return titles;
@@ -996,6 +1020,9 @@ function contentBlocks(root: XmlElement): XmlElement[] {
     if (node.kind !== 'element') {
       return;
     }
+    if (isExcludedMatter(node)) {
+      return;
+    }
     if (CONTENT_BLOCK_NAMES.has(node.name)) {
       result.push(node);
       return;
@@ -1010,7 +1037,24 @@ function contentBlocks(root: XmlElement): XmlElement[] {
   };
 
   visit(root);
-  return result;
+  let excludedHeadingLevel: number | null = null;
+  return result.filter((block) => {
+    const headingLevel = /^h[1-6]$/u.test(block.name)
+      ? Number(block.name.slice(1))
+      : null;
+    if (headingLevel !== null) {
+      if (
+        excludedHeadingLevel !== null &&
+        headingLevel <= excludedHeadingLevel
+      ) {
+        excludedHeadingLevel = null;
+      }
+      if (isExcludedMatterLabel(textContent(block))) {
+        excludedHeadingLevel = headingLevel;
+      }
+    }
+    return excludedHeadingLevel === null;
+  });
 }
 
 function isBoilerplateText(value: string): boolean {
@@ -1077,7 +1121,7 @@ function appendContent(
 }
 
 function normalizedLabel(value: string | undefined): string {
-  return (value ?? '')
+  return normalizeWhitespace(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/gu, '')
     .trim()
@@ -1105,7 +1149,7 @@ function isFrontMatterDocument(
   const normalizedPath = normalizedLabel(decodedPath).replaceAll('\\', '/');
   const fileName = normalizedPath.split('/').pop() ?? normalizedPath;
   if (
-    /^(?:cover(?:page)?|title(?:page)?|portada|titulo|nav|toc|contents?|about|acerca|colophon|copyright|elejandria)(?:[._-]|$)/u.test(
+    /^(?:cover(?:page)?|title(?:page)?|portada|cubierta|titulo|nav|toc|contents?|about|acerca|colophon|copyright|elejandria|sinopsis|synopsis|info|autor|author|dedicatoria|dedication|acknowledg(?:e)?ments?|agradecimientos|credits|creditos)(?:\d+)?(?:[._-]|$)/u.test(
       fileName,
     )
   ) {
@@ -1113,13 +1157,14 @@ function isFrontMatterDocument(
   }
 
   const label = normalizedLabel(navigationTitle);
-  if (
-    ['cover', 'portada', 'title', 'titulo', 'acerca', 'about'].includes(label)
-  ) {
+  if (isExcludedMatterLabel(label) || isExcludedMatter(root)) {
     return true;
   }
 
   const body = elements(root, 'body')[0] ?? root;
+  if (isExcludedMatter(body)) {
+    return true;
+  }
   const visibleText = contentBlocks(body)
     .map((block) => textContent(block))
     .join(' ');
@@ -1127,10 +1172,46 @@ function isFrontMatterDocument(
   return isBoilerplateText(visibleText) && wordCount < 180;
 }
 
+function semanticTypes(node: XmlElement): string[] {
+  return (attribute(node, 'type') ?? '')
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter(Boolean);
+}
+
+const EXCLUDED_MATTER_TYPES = new Set([
+  'cover',
+  'titlepage',
+  'copyright-page',
+  'toc',
+  'landmarks',
+  'page-list',
+  'dedication',
+  'acknowledgments',
+  'colophon',
+  'contributors',
+  'biography',
+  'bibliography',
+  'index',
+  'rearnotes',
+  'endnotes',
+]);
+
+function isExcludedMatter(node: XmlElement): boolean {
+  return semanticTypes(node).some((type) => EXCLUDED_MATTER_TYPES.has(type));
+}
+
+function isExcludedMatterLabel(value: string): boolean {
+  return /^(?:cover|cubierta|portada|title(?: page)?|titulo|acerca(?: del autor)?|about(?: the author)?|autor|author|sinopsis|synopsis|dedicatoria|dedication|agradecimientos|acknowledg(?:e)?ments|indice|contents|table of contents|(?:pagina de )?creditos|credits|copyright|colofon|colophon|pottermore publishing|tambien por|also by|seguir leyendo|read on)$/u.test(
+    normalizedLabel(value),
+  );
+}
+
 interface ContentBoundary {
   kind: 'chapter' | 'scene';
   title: string;
   consumeNext?: boolean;
+  preserveBlock?: boolean;
 }
 
 const CHAPTER_PREFIXES = new Set([
@@ -1182,7 +1263,7 @@ const SCENE_ORDINALS = new Set([
   'octava',
   'octavo',
 ]);
-const NAMED_CHAPTERS = new Set(['personajes', 'dedicatoria', 'prologo']);
+const NAMED_CHAPTERS = new Set(['personajes', 'prologo']);
 
 function startsWithBoundaryNumber(
   label: string,
@@ -1263,6 +1344,38 @@ function structuralBoundary(
   const label = normalizedLabel(text);
   if (!text || isBoilerplateText(text) || isYear(text)) {
     return null;
+  }
+
+  // A number and its subtitle often occupy two headings in a single chapter.
+  const next = blocks[index + 1];
+  if (
+    /^(?:capitulo|chapter|acto|act|parte|part)\s+(?:\d+|[ivxlcdm]+|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)$/u.test(
+      label,
+    ) &&
+    next &&
+    /^h[1-6]$/u.test(next.name)
+  ) {
+    const subtitle = normalizeWhitespace(textContent(next)).trim();
+    if (
+      subtitle &&
+      subtitle.length <= 180 &&
+      !startsWithBoundaryNumber(
+        normalizedLabel(subtitle),
+        CHAPTER_PREFIXES,
+        CHAPTER_ORDINALS,
+      ) &&
+      !startsWithBoundaryNumber(
+        normalizedLabel(subtitle),
+        SCENE_PREFIXES,
+        SCENE_ORDINALS,
+      )
+    ) {
+      return {
+        kind: 'chapter',
+        title: `${text}. ${subtitle}`,
+        consumeNext: true,
+      };
+    }
   }
 
   if (startsWithBoundaryNumber(label, CHAPTER_PREFIXES, CHAPTER_ORDINALS)) {
@@ -1360,7 +1473,10 @@ function contentBlocksWithoutPreamble(
 ): XmlElement[] {
   const blocks = sourceBlocks.filter((block) => {
     const text = normalizeWhitespace(textContent(block)).trim();
-    return text && !isBoilerplateText(text);
+    return (
+      (text || elements(block, 'img').length > 0 || block.name === 'hr') &&
+      !isBoilerplateText(text)
+    );
   });
   if (!blocks.length) {
     return [];
@@ -1394,7 +1510,10 @@ function flushLogicalScene(
     return;
   }
   state.currentChapter.scenes.push({
-    title: state.currentSceneTitle,
+    title:
+      state.currentSceneTitle === 'Texto'
+        ? state.currentChapter.title
+        : state.currentSceneTitle,
     content: parseContentGroup(state.currentSceneBlocks, documentPath, catalog),
   });
   state.currentSceneBlocks = [];
@@ -1465,6 +1584,7 @@ function logicalChapters(
   catalog: ImageCatalog,
   bookTitle: string,
   defaultTitle: string,
+  navigation: Map<string, string>,
 ): EpubImportChapter[] {
   const blocks = contentBlocksWithoutPreamble(sourceBlocks, bookTitle);
   if (!blocks.length) {
@@ -1475,16 +1595,37 @@ function logicalChapters(
     isRomanNumeral(normalizeWhitespace(textContent(block)).trim()),
   ).length;
 
-  const boundaries = blocks.map((block, index) =>
-    structuralBoundary(block, index, blocks, bookTitle, romanChapterCount),
-  );
+  const boundaries = blocks.map((block, index) => {
+    const boundary = structuralBoundary(
+      block,
+      index,
+      blocks,
+      bookTitle,
+      romanChapterCount,
+    );
+    const ids = [attribute(block, 'id'), ...allElementIds(block)];
+    const title = ids
+      .map((id) => (id ? navigation.get(`${documentPath}#${id}`) : undefined))
+      .find(Boolean);
+    return title && !isExcludedMatterLabel(title)
+      ? {
+          ...boundary,
+          kind: 'chapter' as const,
+          title,
+          preserveBlock:
+            !boundary &&
+            !/^h[1-6]$/u.test(block.name) &&
+            normalizedLabel(textContent(block)) !== normalizedLabel(title),
+        }
+      : boundary;
+  });
   if (!boundaries.some(Boolean)) {
     return [
       {
         title: defaultTitle,
         scenes: [
           {
-            title: 'Texto',
+            title: defaultTitle,
             content: parseContentGroup(blocks, documentPath, catalog),
           },
         ],
@@ -1512,6 +1653,9 @@ function logicalChapters(
         documentPath,
         catalog,
       );
+      if (boundary.preserveBlock) {
+        state.currentSceneBlocks.push(block);
+      }
       continue;
     }
     if (state.currentChapter) {
@@ -1523,10 +1667,31 @@ function logicalChapters(
 
   finishLogicalChapters(state, defaultTitle, documentPath, catalog);
 
-  if (state.chapters.length === 1 && defaultTitle) {
-    state.chapters[0]!.title = defaultTitle.slice(0, 200);
+  if (
+    state.chapters.length === 1 &&
+    meaningfulNavigationTitle(navigation.get(documentPath))
+  ) {
+    const chapter = state.chapters[0]!;
+    const previousTitle = chapter.title;
+    chapter.title = defaultTitle.slice(0, 200);
+    for (const scene of chapter.scenes) {
+      if (scene.title === previousTitle) {
+        scene.title = chapter.title;
+      }
+    }
   }
   return state.chapters;
+}
+
+function allElementIds(node: XmlElement): string[] {
+  return node.children.flatMap((child) =>
+    child.kind === 'element'
+      ? [
+          ...(attribute(child, 'id') ? [attribute(child, 'id')!] : []),
+          ...allElementIds(child),
+        ]
+      : [],
+  );
 }
 
 interface EpubPackage {
@@ -1671,6 +1836,7 @@ async function parseSpineDocument(
     catalog,
     packageData.title,
     chapterTitle,
+    packageData.navigationTitles,
   );
 }
 
@@ -1714,7 +1880,27 @@ async function parseSpine(
   budget: DecompressionBudget,
 ): Promise<EpubImportChapter[]> {
   const chapters: EpubImportChapter[] = [];
+  let promotionalTail = false;
   await mapSequentially(packageData.spineItems, async (itemref) => {
+    const path = spineItemPath(itemref, packageData, opfPath);
+    const label = path
+      ? normalizedLabel(packageData.navigationTitles.get(path))
+      : '';
+    if (
+      [
+        'seguir leyendo',
+        'read on',
+        'extracto',
+        'adelanto',
+        'preview',
+        'sample',
+      ].includes(label)
+    ) {
+      promotionalTail = true;
+    }
+    if (promotionalTail) {
+      return;
+    }
     const documentChapters = await parseSpineDocument(
       zip,
       itemref,
@@ -1723,6 +1909,21 @@ async function parseSpine(
       catalog,
       budget,
     );
+    // Standalone illustration pages belong to the preceding text, not a filler chapter.
+    if (
+      documentChapters.length === 1 &&
+      documentChapters[0]!.scenes.every(
+        (scene) => !documentHasText(scene.content),
+      )
+    ) {
+      const previous = chapters.at(-1)?.scenes.at(-1);
+      if (previous) {
+        for (const scene of documentChapters[0]!.scenes) {
+          appendContent(previous.content, scene.content);
+        }
+      }
+      return;
+    }
     mergeLeadingIntroduction(chapters, documentChapters);
     chapters.push(...documentChapters);
     if (chapters.length > 500) {
@@ -1733,6 +1934,18 @@ async function parseSpine(
     throw new EpubImportError('No se encontró texto importable en el EPUB.');
   }
   return chapters;
+}
+
+function documentHasText(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(documentHasText);
+  }
+  const node = asRecord(value);
+  return (
+    node !== null &&
+    ((typeof node['text'] === 'string' && Boolean(node['text'].trim())) ||
+      documentHasText(node['content']))
+  );
 }
 
 export async function parseEpubArchive(buffer: Buffer): Promise<ParsedEpub> {
