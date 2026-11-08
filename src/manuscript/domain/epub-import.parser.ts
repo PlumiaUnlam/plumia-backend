@@ -181,8 +181,16 @@ async function parseSpineDocument(
   }
 
   const body = elements(root, 'body')[0] ?? root;
+  const editorialContainerIds = new Set(
+    [...packageData.navigationTitles]
+      .filter(
+        ([key, title]) =>
+          key.startsWith(`${path}#`) && isExcludedMatterLabel(title),
+      )
+      .map(([key]) => key.slice(path.length + 1)),
+  );
   const blocks = filterNavigationSections(
-    contentBlocks(body),
+    contentBlocks(body, editorialContainerIds),
     path,
     packageData,
     promotion,

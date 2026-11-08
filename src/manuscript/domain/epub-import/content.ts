@@ -38,15 +38,19 @@ export function chapterTitleFromDocument(
     (heading) =>
       normalizedLabel(textContent(heading)) === normalizedLabel(bookTitle),
   );
-  if (matchingBookTitle) {
-    return normalizeWhitespace(textContent(matchingBookTitle)).trim();
-  }
-
   for (const heading of headings) {
     const title = normalizeWhitespace(textContent(heading)).trim();
-    if (title && !isBoilerplateText(title) && !isYear(title)) {
+    if (
+      title &&
+      normalizedLabel(title) !== normalizedLabel(bookTitle) &&
+      !isBoilerplateText(title) &&
+      !isYear(title)
+    ) {
       return title;
     }
+  }
+  if (matchingBookTitle) {
+    return normalizeWhitespace(textContent(matchingBookTitle)).trim();
   }
 
   for (const block of blocks) {
@@ -93,7 +97,10 @@ const CONTENT_CONTAINERS = new Set([
 ]);
 
 /** Flattens narrative containers while preserving IDs at their first block. */
-export function contentBlocks(root: XmlElement): XmlElement[] {
+export function contentBlocks(
+  root: XmlElement,
+  editorialContainerIds: ReadonlySet<string> = new Set(),
+): XmlElement[] {
   const result: XmlElement[] = [];
   const visit = (node: XmlNode): void => {
     if (node.kind !== 'element') {
@@ -121,7 +128,7 @@ export function contentBlocks(root: XmlElement): XmlElement[] {
     result.push(node);
   };
 
-  const retained = pruneExcludedMatter(root);
+  const retained = pruneExcludedMatter(root, editorialContainerIds);
   if (retained) {
     visit(retained);
   }
@@ -160,17 +167,24 @@ function carryEmptyAnchors(blocks: XmlElement[]): XmlElement[] {
 }
 
 /** Removes semantic editorial descendants even inside lists, quotes and inline spans. */
-function pruneExcludedMatter(node: XmlNode): XmlNode | null {
+function pruneExcludedMatter(
+  node: XmlNode,
+  editorialContainerIds: ReadonlySet<string>,
+): XmlNode | null {
   if (node.kind === 'text') {
     return node;
   }
-  if (isExcludedMatter(node)) {
+  if (
+    isExcludedMatter(node) ||
+    (CONTENT_CONTAINERS.has(node.name) &&
+      editorialContainerIds.has(attribute(node, 'id') ?? ''))
+  ) {
     return null;
   }
   return {
     ...node,
     children: node.children.flatMap((child) => {
-      const retained = pruneExcludedMatter(child);
+      const retained = pruneExcludedMatter(child, editorialContainerIds);
       return retained ? [retained] : [];
     }),
   };
@@ -209,11 +223,7 @@ export function preferredChapterTitle(
 ): string {
   const navigation = meaningfulNavigationTitle(navigationTitle);
   const document = documentTitle?.trim();
-  if (
-    document &&
-    normalizedLabel(document) === normalizedLabel(bookTitle) &&
-    navigation
-  ) {
+  if (document && normalizedLabel(document) === normalizedLabel(bookTitle)) {
     return document;
   }
   if (navigation) {
@@ -230,10 +240,12 @@ export function contentBlocksWithoutPreamble(
   sourceBlocks: XmlElement[],
   bookTitle: string,
 ): XmlElement[] {
-  const blocks = sourceBlocks.filter((block) => {
+  const blocks = filterPreservingAnchors(sourceBlocks, (block) => {
     const text = normalizeWhitespace(textContent(block)).trim();
     return (
-      (text || elements(block, 'img').length > 0 || block.name === 'hr') &&
+      (text.length > 0 ||
+        elements(block, 'img').length > 0 ||
+        block.name === 'hr') &&
       !isBoilerplateText(text)
     );
   });
@@ -246,7 +258,7 @@ export function contentBlocksWithoutPreamble(
       !isYear(text) && normalizedLabel(text) !== normalizedLabel(bookTitle)
     );
   });
-  return blocks.filter((block, index) => {
+  return filterPreservingAnchors(blocks, (block, index) => {
     if (index > 2) {
       return true;
     }
@@ -257,4 +269,25 @@ export function contentBlocksWithoutPreamble(
       normalizedLabel(text) !== normalizedLabel(bookTitle)
     );
   });
+}
+
+/** Transfers destinations from discarded preamble text to the next retained block. */
+function filterPreservingAnchors(
+  blocks: XmlElement[],
+  keep: (block: XmlElement, index: number) => boolean,
+): XmlElement[] {
+  const retained: XmlElement[] = [];
+  let pendingIds: string[] = [];
+  for (const [index, block] of blocks.entries()) {
+    if (!keep(block, index)) {
+      pendingIds.push(...blockIds(block));
+      continue;
+    }
+    retained.push({
+      ...block,
+      boundaryIds: [...pendingIds, ...(block.boundaryIds ?? [])],
+    });
+    pendingIds = [];
+  }
+  return retained;
 }

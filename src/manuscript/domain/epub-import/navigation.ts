@@ -106,8 +106,8 @@ export async function tocTitles(
     return { titles: new Map(), promotionalTargets: new Set() };
   }
 
-  const navPath = archivePath(opfPath, href);
   try {
+    const navPath = archivePath(opfPath, href);
     const root = parseXml(await readArchiveText(zip, navPath, budget));
     const titles =
       item === navItem

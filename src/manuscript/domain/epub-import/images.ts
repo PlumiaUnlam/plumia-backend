@@ -123,7 +123,7 @@ async function loadArchiveImageBuffer(
 ): Promise<Buffer | null> {
   if (
     /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(source) ||
-    !imageTypeFromSource(key)
+    (!imageTypeFromSource(key) && /\.[^./]+$/u.test(key))
   ) {
     return null;
   }
