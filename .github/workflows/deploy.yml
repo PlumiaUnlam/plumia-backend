@@ -1,0 +1,108 @@
+name: Deploy Azure
+
+# Despliega la API y el worker a Azure Container Apps en cada push a main,
+# después de correr el CI completo. También se puede lanzar a mano desde Actions.
+# Solo usa eventos push/workflow_dispatch: nunca corre con código de forks.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC contra Azure (sin secretos de larga duración)
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-plumia
+  ACR_NAME: acrplumia5638
+  IMAGE_NAME: plumia-backend
+  APPS: api-plumia worker-plumia
+  HEALTH_URL: https://api-plumia.ashycliff-547c5766.eastus2.azurecontainerapps.io/health
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build, migrate & deploy
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: production
+    # Nunca dos deploys a la vez; el segundo espera al primero.
+    concurrency:
+      group: deploy-azure
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Calcular tag de la imagen
+        id: meta
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          echo "image=${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build & push de la imagen
+        run: |
+          az acr login --name "$ACR_NAME"
+          docker build -t "${{ steps.meta.outputs.image }}" .
+          docker push "${{ steps.meta.outputs.image }}"
+
+      # Las migraciones van antes del deploy: el código nuevo puede necesitar
+      # las tablas nuevas, y el código viejo tolera migraciones aditivas.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: pnpm exec prisma migrate deploy
+
+      # El entorno Express de Container Apps no recrea el contenedor si solo
+      # cambia la imagen; alternar CPU/memoria fuerza una revisión nueva.
+      - name: Actualizar Container Apps
+        run: |
+          for APP in $APPS; do
+            CPU=$(az containerapp show -n "$APP" -g "$RESOURCE_GROUP" \
+              --query 'properties.template.containers[0].resources.cpu' -o tsv)
+            if [ "$CPU" = "0.5" ]; then NEW_CPU=0.75; NEW_MEM=1.5Gi; else NEW_CPU=0.5; NEW_MEM=1Gi; fi
+            echo "▶ $APP: $CPU vCPU → $NEW_CPU vCPU, imagen ${{ steps.meta.outputs.image }}"
+            az containerapp update -n "$APP" -g "$RESOURCE_GROUP" \
+              --image "${{ steps.meta.outputs.image }}" \
+              --cpu "$NEW_CPU" --memory "$NEW_MEM" \
+              --output none
+          done
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$HEALTH_URL" | grep -q '"ok"'; then
+              echo "✔ API saludable"; exit 0
+            fi
+            echo "Esperando a la API ($i/30)…"; sleep 10
+          done
+          echo "✖ La API no respondió OK en 5 minutos" >&2
+          exit 1
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "### Deploy Azure"
+            echo "- Imagen: \`${{ steps.meta.outputs.image }}\`"
+            echo "- Apps: $APPS"
+          } >> "$GITHUB_STEP_SUMMARY"
