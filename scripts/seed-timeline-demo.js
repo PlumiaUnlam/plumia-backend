@@ -24,7 +24,7 @@ const books = [
             'DONE',
             [
               'A las tres y catorce de la madrugada, Eliana abrió los ojos antes de que sonara el reloj del pasillo. Una luz azul pulsaba detrás de los postigos y dibujaba sobre el techo la silueta imposible de la antigua atalaya.',
-              'La torre llevaba cerrada desde antes de que naciera su abuelo. Sin embargo, cada destello parecía responder a su respiración. Eliana tomó la linterna de emergencia y salió antes de poder convencerse de que seguía soñando.',
+              'La torre llevaba cerrada desde antes de que naciera su abuelo. Sin embargo, cada destello parecía responder a su respiración. En casa siempre habían dicho que la linterna de latón perteneció a Inés Vale. Eliana la tomó y salió antes de poder convencerse de que seguía soñando.',
             ],
           ],
           [
@@ -81,8 +81,8 @@ const books = [
             'El sello roto',
             'IN_PROGRESS',
             [
-              'Una carta llegó al Archivo antes del amanecer. El sello de los Vigilantes estaba quebrado y el papel olía a humo frío. Adrián reconoció la marca de un puesto abandonado en la ruta del norte.',
-              'La advertencia era breve: alguien había encontrado una segunda luz azul y estaba borrando los nombres de quienes intentaban seguirla. Eliana decidió que no podía esperar a que el Consejo cerrara el Archivo.',
+              'Una carta llegó al Archivo antes del amanecer. El sello de los Vigilantes estaba quebrado y el papel olía a humo frío. Adrián reconoció la marca de un puesto abandonado en la ruta del norte. Al pie, un registro del Consejo aseguraba que Adrián nunca había pertenecido a los Vigilantes del Valle.',
+              'La advertencia era breve: alguien había encontrado una segunda luz azul y estaba borrando los nombres de quienes intentaban seguirla. Eliana decidió que no podía esperar a que el Consejo cerrara el Archivo. En el margen, el parte de los Vigilantes fijaba la segunda señal en la noche del martes.',
             ],
           ],
           [
@@ -108,7 +108,7 @@ const books = [
             'DRAFT',
             [
               'En una estación abandonada encontraron un registro de familias del valle. Cada vez que aparecía el símbolo de la Semilla de Luz, el nombre había sido raspado con violencia hasta romper el papel.',
-              'Adrián descubrió entre las marcas el apellido de la madre de Eliana. Alguien llevaba décadas ocultando que su familia había protegido la atalaya antes de que los Vigilantes desaparecieran.',
+              'Adrián descubrió entre las marcas el apellido de la madre de Eliana. Alguien llevaba décadas ocultando que su familia había protegido la atalaya antes de que los Vigilantes desaparecieran. El registro también atribuía la linterna de latón a Mara Voss y aclaraba que nunca había pertenecido a Inés Vale.',
             ],
           ],
           [
@@ -117,7 +117,7 @@ const books = [
             'Una alianza incómoda',
             'DRAFT',
             [
-              'Mara Voss alcanzó a Eliana y Adrián junto al puente helado. Al principio se acusaron mutuamente de trabajar para quienes habían roto el sello, pero la luz azul apareció de nuevo sobre las montañas.',
+              'Mara Voss alcanzó a Eliana y Adrián junto al puente helado. Al principio se acusaron mutuamente de trabajar para quienes habían roto el sello, pero la luz azul apareció de nuevo sobre las montañas la noche del jueves, dos días después de la fecha que consignaba el parte.',
               'Frente a la señal, aceptaron colaborar hasta llegar a la fuente. La alianza era frágil, pero todos sabían que el valle no podía permitirse otra noche sin guardianes.',
               'Una voz respondió desde el faro apagado. Nora del Faro, la guardiana del norte, bajó los escalones con un mensaje y les ofreció guiarlos hacia la segunda atalaya.',
             ],
@@ -1019,75 +1019,130 @@ async function migrateLegacyDemoAlert(projectId, seedKey, fingerprint) {
 /** Seeds continuity alerts for the project and a sample chat thread. */
 async function seedAuditAndChat(projectId, entityIds, sceneIds) {
   const alerts = [
-    [
-      'demo:linterna',
-      'nombres',
-      'MEDIUM',
-      'CONTINUITY',
-      'La procedencia de la linterna cambia',
-      'Decidir cuándo descubre Eliana que perteneció a Inés.',
-      'linterna',
-    ],
-    [
-      'demo:adrian',
-      'ruta',
-      'HIGH',
-      'CHARACTER',
-      'La lealtad de Adrián necesita una pista previa',
-      'Preparar su confesión en el capítulo anterior.',
-      'adrian',
-    ],
-    [
-      'demo:signal',
-      'alianza',
-      'LOW',
-      'TIMELINE',
-      'La segunda señal no tiene fecha precisa',
-      'Precisar la fecha para ordenar la cronología.',
-      'senal',
-    ],
+    {
+      seedKey: 'demo:linterna',
+      entityKey: 'linterna',
+      entityName: 'Linterna de emergencia',
+      field: 'procedencia',
+      currentValue: 'Perteneció a Inés Vale',
+      observedValue: 'El registro la atribuye a Mara Voss',
+      first: {
+        sceneKey: 'ventana',
+        quote:
+          'En casa siempre habían dicho que la linterna de latón perteneció a Inés Vale.',
+      },
+      second: {
+        sceneKey: 'nombres',
+        quote:
+          'El registro también atribuía la linterna de latón a Mara Voss y aclaraba que nunca había pertenecido a Inés Vale.',
+      },
+      severity: 'MEDIUM',
+      title: 'La linterna tiene dos procedencias incompatibles',
+      explanation:
+        'El recuerdo familiar atribuye la linterna a Inés, pero el registro encontrado por Adrián se la atribuye a Mara Voss.',
+      confidence: 0.91,
+    },
+    {
+      seedKey: 'demo:adrian',
+      entityKey: 'adrian',
+      entityName: 'Adrián Rivas',
+      field: 'pertenencia',
+      currentValue: 'Nunca perteneció a los Vigilantes del Valle',
+      observedValue: 'Perteneció a los Vigilantes del Valle',
+      first: {
+        sceneKey: 'sello',
+        quote:
+          'Al pie, un registro del Consejo aseguraba que Adrián nunca había pertenecido a los Vigilantes del Valle.',
+      },
+      second: {
+        sceneKey: 'ruta',
+        quote:
+          'Durante la marcha, Adrián confesó que había pertenecido a los Vigilantes del Valle.',
+      },
+      severity: 'HIGH',
+      title: 'El registro niega la pertenencia de Adrián a los Vigilantes',
+      explanation:
+        'El registro del Consejo contradice la confesión posterior de Adrián sobre su pertenencia a la orden.',
+      confidence: 0.94,
+    },
+    {
+      seedKey: 'demo:signal',
+      entityKey: 'senal',
+      entityName: 'La señal azul',
+      field: 'fecha',
+      currentValue: 'Noche del martes',
+      observedValue: 'Noche del jueves',
+      first: {
+        sceneKey: 'sello',
+        quote:
+          'En el margen, el parte de los Vigilantes fijaba la segunda señal en la noche del martes.',
+      },
+      second: {
+        sceneKey: 'alianza',
+        quote:
+          'la luz azul apareció de nuevo sobre las montañas la noche del jueves, dos días después de la fecha que consignaba el parte.',
+      },
+      severity: 'MEDIUM',
+      title: 'El parte y el avistamiento datan distinto la segunda señal',
+      explanation:
+        'El parte la fecha el martes, mientras que el grupo vuelve a verla el jueves.',
+      confidence: 0.88,
+    },
   ];
-  for (const [
-    seedKey,
-    scene,
-    severity,
-    category,
-    title,
-    explanation,
-    entity,
-  ] of alerts) {
-    const fingerprint = `demo:${projectId}:${seedKey.replace(/^demo:/, '')}`;
-    await migrateLegacyDemoAlert(projectId, seedKey, fingerprint);
+  for (const alert of alerts) {
+    const fingerprint = `demo:${projectId}:${alert.seedKey.replace(/^demo:/, '')}`;
+    await migrateLegacyDemoAlert(projectId, alert.seedKey, fingerprint);
+    const firstEvidence = await ensureDemoAlertEvidence(
+      projectId,
+      sceneIds,
+      alert.first.sceneKey,
+      alert.first.quote,
+      'first',
+    );
+    const secondEvidence = await ensureDemoAlertEvidence(
+      projectId,
+      sceneIds,
+      alert.second.sceneKey,
+      alert.second.quote,
+      'second',
+    );
+    const entityId = entityIds.get(alert.entityKey);
+    if (!entityId) {
+      throw new Error(`No existe la entidad demo “${alert.entityKey}”.`);
+    }
+    const sourceConflict = {
+      entityId,
+      entityName: alert.entityName,
+      field: alert.field,
+      currentValue: alert.currentValue,
+      observedValue: alert.observedValue,
+      evidence: [alert.first.quote, alert.second.quote],
+      sourceChunkId: firstEvidence.chunkId,
+      sourceChunkHash: firstEvidence.chunkHash,
+      supportingChunks: [firstEvidence, secondEvidence],
+    };
+    const data = {
+      sceneId: secondEvidence.sceneId,
+      sourceChunkId: firstEvidence.chunkId,
+      sourceChunkHash: firstEvidence.chunkHash,
+      ruleCode: 'CROSS_SCENE_CONTRADICTION',
+      detectionLevel: 'INTER_SCENE',
+      severity: alert.severity,
+      category: 'CONTINUITY',
+      title: alert.title,
+      description: alert.explanation,
+      explanation: alert.explanation,
+      confidence: alert.confidence,
+      sourceConflict,
+    };
     await prisma.auditAlert.upsert({
       where: { fingerprint },
-      create: {
-        fingerprint,
-        projectId,
-        sceneId: sceneIds.get(scene),
-        detectionLevel: 'INTER_SCENE',
-        severity,
-        category,
-        title,
-        description: explanation,
-        explanation,
-        confidence: 0.86,
-        sourceConflict: {
-          entityId: entityIds.get(entity),
-          entityName: title,
-          field: 'continuidad',
-          currentValue: 'Versión inicial',
-          observedValue: 'Versión posterior',
-          evidence: [title],
-        },
-      },
+      create: { fingerprint, projectId, ...data },
       update: {
-        sceneId: sceneIds.get(scene),
-        severity,
-        category,
-        title,
-        description: explanation,
-        explanation,
+        ...data,
         status: 'ACTIVE',
+        resolvedAt: null,
+        resolvedById: null,
       },
     });
   }
@@ -1163,6 +1218,29 @@ async function ensureSceneChunk(projectId, sceneId, sceneKey) {
     update: data,
   });
   return { sourceChunkId: chunk.id, sourceChunkHash: contentHash };
+}
+
+/** Stores a quote only when it exists in the selected scene and returns its source metadata. */
+async function ensureDemoAlertEvidence(projectId, sceneIds, sceneKey, quote, side) {
+  const sceneId = sceneIds.get(sceneKey);
+  if (!sceneId) throw new Error(`No existe la escena demo “${sceneKey}”.`);
+  const content = sceneParagraphs(sceneKey).join('\n\n');
+  const evidencePosition = content.indexOf(quote);
+  if (evidencePosition < 0) {
+    throw new Error(
+      `La evidencia de “${sceneKey}” no aparece en el texto del proyecto demo.`,
+    );
+  }
+  const chunk = await ensureSceneChunk(projectId, sceneId, sceneKey);
+  return {
+    chunkId: chunk.sourceChunkId,
+    chunkHash: chunk.sourceChunkHash,
+    chunkIndex: 0,
+    sceneId,
+    side,
+    evidence: [quote],
+    evidencePositions: [evidencePosition],
+  };
 }
 
 /** Creates or refreshes a demo proposal while preserving reviewed proposals. */
