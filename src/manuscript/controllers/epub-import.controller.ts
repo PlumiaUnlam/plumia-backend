@@ -43,9 +43,9 @@ function parseProjectInput(value: unknown): CreateProjectDto {
 
   const title =
     typeof parsed['title'] === 'string' ? parsed['title'].trim() : '';
-  if (!title || title.length > 200) {
+  if (!title || title.length > 100) {
     throw new BadRequestException(
-      'El nombre del proyecto debe tener entre 1 y 200 caracteres.',
+      'El nombre del proyecto debe tener entre 1 y 100 caracteres.',
     );
   }
 

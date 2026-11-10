@@ -122,7 +122,7 @@ describe('EpubImportController', () => {
     ['a non-object project payload', '[]'],
     ['a title that is not text', JSON.stringify({ title: 42 })],
     ['an empty project title', JSON.stringify({ title: '   ' })],
-    ['a title over the limit', JSON.stringify({ title: 'x'.repeat(201) })],
+    ['a title over the limit', JSON.stringify({ title: 'x'.repeat(101) })],
     [
       'a genre over the limit',
       JSON.stringify({ title: 'Proyecto', genre: 'x'.repeat(101) }),

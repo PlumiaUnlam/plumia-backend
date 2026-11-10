@@ -56,6 +56,19 @@ describe('Project endpoints e2e', () => {
 
     await request(ctx.server)
       .post('/projects')
+      .set(ctx.auth())
+      .send({ title: 'x'.repeat(101) })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          message: expect.arrayContaining([
+            'El nombre del proyecto no puede superar los 100 caracteres.',
+          ]),
+        });
+      });
+
+    await request(ctx.server)
+      .post('/projects')
       .send({ title: 'Project' })
       .expect(401);
   });

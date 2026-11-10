@@ -11,7 +11,9 @@ import {
 export class CreateProjectDto {
   @IsString()
   @IsNotEmpty()
-  @MaxLength(200)
+  @MaxLength(100, {
+    message: 'El nombre del proyecto no puede superar los 100 caracteres.',
+  })
   title!: string;
 
   @IsString()
