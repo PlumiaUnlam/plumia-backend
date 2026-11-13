@@ -220,25 +220,95 @@ describe('EntityExtractionClient user credentials', () => {
     });
   });
 
-  it('keeps embeddings on the server client', async () => {
+  it('keeps embeddings on the server embedding chain', async () => {
+    mockEmbedContent.mockResolvedValue({
+      embeddings: [{ values: Array.from({ length: 1_536 }, () => 0.1) }],
+    });
     const { client, userApiKeys } = createClient(
       {
+        GEMINI_API_KEY: 'server-key',
         ENTITY_EXTRACTION_API_KEY: 'server-key',
         ENTITY_EXTRACTION_MODEL: 'gemini-test',
-        ENTITY_EXTRACTION_EMBEDDING_MODEL: 'embedding-test',
+        ENTITY_EXTRACTION_EMBEDDING_MODEL: 'gemini-embedding-2',
       },
       'user-key',
     );
 
-    await client.createEmbedding('texto');
+    expect(client.hasEmbeddingModel()).toBe(true);
+    await expect(client.createEmbedding('texto')).resolves.toHaveLength(1_536);
 
     expect(
       userApiKeys.getExtractionProviderConfiguration,
     ).not.toHaveBeenCalled();
-    expect(mockEmbedContent).toHaveBeenCalledWith({
-      model: 'embedding-test',
-      contents: 'texto',
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'server-key' }),
+    );
+    expect(mockEmbedContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'gemini-embedding-2',
+        contents: [{ role: 'user', parts: [{ text: 'texto' }] }],
+      }),
+    );
+  });
+
+  it('skips the similarity stage when it is not enabled', async () => {
+    const { client } = createClient({ GEMINI_API_KEY: 'server-key' });
+
+    expect(client.hasEmbeddingModel()).toBe(false);
+    await expect(client.createEmbedding('texto')).resolves.toBeNull();
+    expect(mockEmbedContent).not.toHaveBeenCalled();
+  });
+
+  it('falls back through the server chain when the selected model fails', async () => {
+    mockAnthropicCreate.mockRejectedValue(
+      Object.assign(new Error('overloaded'), { status: 529 }),
+    );
+    const { client } = createClient({
+      ENTITY_EXTRACTION_PROVIDER: 'anthropic',
+      ANTHROPIC_API_KEY: 'anthropic-key',
+      GEMINI_API_KEY: 'gemini-free-key',
     });
+
+    await expect(client.extractEntities(input)).resolves.toEqual({
+      entities: [],
+      stateChanges: [],
+      relationships: [],
+      inconsistencies: [],
+    });
+
+    // claude-opus-5 (selected) and claude-sonnet-5-5 (chain) failed first.
+    expect(mockAnthropicCreate).toHaveBeenCalledTimes(2);
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'gemini-free-key' }),
+    );
+    expect(mockGenerateContent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gemini-3.6-flash' }),
+    );
+  });
+
+  it('keeps the fallbacks of a personal key on that same key', async () => {
+    mockGenerateContent
+      .mockRejectedValueOnce(Object.assign(new Error('Quota'), { status: 429 }))
+      .mockResolvedValueOnce({ text: emptyResponse });
+    const { client } = createClient(
+      {
+        GEMINI_API_KEY: 'server-key',
+        ENTITY_EXTRACTION_API_KEY: 'server-key',
+        ANTHROPIC_API_KEY: 'anthropic-key',
+      },
+      'user-key',
+    );
+
+    await client.extractEntities(input);
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateContent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: 'gemini-3.6-flash' }),
+    );
+    expect(GoogleGenAI).not.toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'server-key' }),
+    );
+    expect(mockAnthropicCreate).not.toHaveBeenCalled();
   });
 
   it('prefers the user Gemini key over the Anthropic server provider', async () => {
@@ -312,6 +382,7 @@ describe('EntityExtractionClient user credentials', () => {
 
     expect(mockAnthropicCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'claude-custom-model' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) as unknown }),
     );
     expect(mockGenerateContent).not.toHaveBeenCalled();
     const Anthropic = (

@@ -1,9 +1,7 @@
 import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { AnthropicChatGenerationAdapter } from './adapters/anthropic-chat-generation.adapter';
-import { GeminiChatGenerationAdapter } from './adapters/gemini-chat-generation.adapter';
-import { GeminiEmbeddingAdapter } from './adapters/gemini-embedding.adapter';
-import { GeminiApplicationHelpEmbeddingAdapter } from './adapters/gemini-application-help-embedding.adapter';
+import { AiApplicationHelpEmbeddingAdapter } from './adapters/ai-application-help-embedding.adapter';
+import { AiChatGenerationAdapter } from './adapters/ai-chat-generation.adapter';
+import { AiEmbeddingAdapter } from './adapters/ai-embedding.adapter';
 import { PgApplicationHelpStore } from './adapters/pg-application-help-store.adapter';
 import { PgVectorStore } from './adapters/pg-vector-store.adapter';
 import { PrismaStaleChunkStore } from './adapters/prisma-stale-chunk-store.adapter';
@@ -30,29 +28,21 @@ import { VECTOR_STORE } from './ports/vector-store.port';
     ChatConflictService,
     ChatEmbeddingIndexService,
     ApplicationHelpIndexService,
-    GeminiChatGenerationAdapter,
+    // The fallback chains live in the LLM router (AI_CHAT_*_CHAIN).
+    AiChatGenerationAdapter,
     {
       provide: CHAT_GENERATION_PROVIDER,
-      inject: [ConfigService],
-      // CHAT_PROVIDER: gemini (default) | anthropic
-      useFactory: (config: ConfigService) =>
-        config.get<string>('CHAT_PROVIDER')?.trim().toLowerCase() ===
-        'anthropic'
-          ? new AnthropicChatGenerationAdapter(config)
-          : new GeminiChatGenerationAdapter(config),
+      useExisting: AiChatGenerationAdapter,
     },
-    { provide: CHAT_INTENT_PROVIDER, useExisting: GeminiChatGenerationAdapter },
+    { provide: CHAT_INTENT_PROVIDER, useExisting: AiChatGenerationAdapter },
     {
       provide: CHAT_EVIDENCE_VERIFIER,
-      useExisting: GeminiChatGenerationAdapter,
+      useExisting: AiChatGenerationAdapter,
     },
-    {
-      provide: EMBEDDING_PROVIDER,
-      useClass: GeminiEmbeddingAdapter,
-    },
+    { provide: EMBEDDING_PROVIDER, useClass: AiEmbeddingAdapter },
     {
       provide: APPLICATION_HELP_EMBEDDING_PROVIDER,
-      useClass: GeminiApplicationHelpEmbeddingAdapter,
+      useClass: AiApplicationHelpEmbeddingAdapter,
     },
     {
       provide: STALE_CHUNK_STORE,

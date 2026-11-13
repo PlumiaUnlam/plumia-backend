@@ -14,7 +14,13 @@ export interface ChatEvidenceVerificationInput {
 }
 
 export interface ChatEvidenceVerificationResult {
+  /** True only when every claim is supported. */
   supported: boolean;
+  /**
+   * Indexes (in `claims`) of the claims judged supported one by one. When some
+   * claims fail, the chat keeps only these instead of discarding the answer.
+   */
+  supportedClaimIndexes?: number[];
   inputTokens: number;
   outputTokens: number;
 }

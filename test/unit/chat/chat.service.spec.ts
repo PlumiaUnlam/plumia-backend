@@ -621,6 +621,52 @@ describe('ChatService', () => {
     });
   });
 
+  it('keeps only the claims the verifier supports one by one', async () => {
+    prismaMock.chunk.findMany.mockResolvedValue([
+      manuscriptChunk('chunk-work', 'Maren llegó al archivo con la llave.'),
+    ]);
+    generator.generate.mockResolvedValue({
+      answer: '',
+      sourceIds: ['manuscript:chunk-work'],
+      claims: [
+        {
+          text: 'Maren nació en el archivo.',
+          evidence: [
+            {
+              sourceId: 'manuscript:chunk-work',
+              quote: 'Maren llegó al archivo',
+            },
+          ],
+        },
+        {
+          text: 'Maren llevaba la llave.',
+          evidence: [
+            { sourceId: 'manuscript:chunk-work', quote: 'con la llave' },
+          ],
+        },
+      ],
+      inputTokens: 30,
+      outputTokens: 8,
+    });
+    evidenceVerifier.verify.mockResolvedValue({
+      supported: false,
+      supportedClaimIndexes: [1],
+      inputTokens: 15,
+      outputTokens: 2,
+    });
+
+    const result = await service.sendMessage('user-1', thread.id, {
+      content: '¿Qué sabemos de Maren?',
+    });
+
+    expect(result.assistantMessage.content).toContain(
+      'Maren llevaba la llave.',
+    );
+    expect(result.assistantMessage.content).not.toContain('nació');
+    expect(result.assistantMessage.content).toContain('[1]');
+    expect(result.assistantMessage.sources).toHaveLength(1);
+  });
+
   it('warns about a relevant open inconsistency and exposes a review action', async () => {
     prismaMock.chunk.findMany.mockResolvedValue([
       manuscriptChunk('chunk-conflict', 'Maren estaba en el archivo.'),

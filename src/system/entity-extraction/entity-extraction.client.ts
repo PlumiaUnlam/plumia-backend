@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenAI } from '@google/genai';
-import Anthropic from '@anthropic-ai/sdk';
+import { EmbeddingRouter } from '../../ai/embedding-router.service';
+import { LlmRouter } from '../../ai/llm-router.service';
+import type { LlmStep } from '../../ai/ai.types';
 import { UserApiKeyService } from '../../user/user-api-key.service';
+import type { AiProvider } from '../../user/ai-provider-settings.types';
 import { CROSS_CHUNK_INCONSISTENCY_PROMPT } from './prompts/cross-chunk-inconsistency.prompt';
 import { CROSS_CHUNK_INCONSISTENCY_SCHEMA } from './prompts/cross-chunk-inconsistency.schema';
 import { CONTINUITY_CHECKPOINT_PROMPT } from './prompts/continuity-checkpoint.prompt';
@@ -25,57 +27,39 @@ import {
   ANTHROPIC_CONTINUITY_CHECKPOINT_SCHEMA,
 } from './entity-extraction.schemas';
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-
-const DEFAULT_ANTHROPIC_EFFORT = 'medium';
-
-const ANTHROPIC_MAX_TOKENS = 16_000;
-
-// Models that accept server-side refusal fallbacks (`fallbacks: "default"`).
-const ANTHROPIC_FALLBACK_MODELS = new Set([
-  'claude-opus-5',
-  'claude-sonnet-5',
-  'claude-haiku-4-5-20251001',
-]);
-
-type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-
-/** Where a generation call goes: a Gemini client (server or user key) or Claude. */
-type GenerationTarget =
-  | { provider: 'gemini'; ai: GoogleGenAI; model: string }
-  | { provider: 'anthropic'; ai: Anthropic; model: string };
+/**
+ * Fallbacks with a user's own key stay on that key and provider: a personal
+ * key must never silently switch to the server credentials.
+ */
+const USER_KEY_FALLBACK_MODELS: Record<AiProvider, string[]> = {
+  gemini: [
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+  ],
+  anthropic: ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'],
+};
 
 @Injectable()
 export class EntityExtractionClient {
   private readonly logger = new Logger(EntityExtractionClient.name);
-  private readonly ai: GoogleGenAI;
-  private readonly anthropicEffort: AnthropicEffort;
-  private readonly embeddingModel: string;
-  private readonly timeoutMs: number;
+  private readonly router: LlmRouter;
+  private readonly embeddings: EmbeddingRouter;
+  private readonly embeddingEnabled: boolean;
+
   constructor(
     private readonly config: ConfigService,
     private readonly userApiKeys: UserApiKeyService,
+    @Optional() router?: LlmRouter,
+    @Optional() embeddings?: EmbeddingRouter,
   ) {
-    this.anthropicEffort = this.config
-      .get<string>('ENTITY_EXTRACTION_EFFORT', DEFAULT_ANTHROPIC_EFFORT)
-      .trim() as AnthropicEffort;
-    const apiKey = this.config
-      .get<string>('ENTITY_EXTRACTION_API_KEY', '')
-      .trim();
-    this.embeddingModel = this.config
-      .get<string>('ENTITY_EXTRACTION_EMBEDDING_MODEL', '')
-      .trim();
-    this.timeoutMs = Number(
-      this.config.get<string>(
-        'ENTITY_EXTRACTION_TIMEOUT_MS',
-        `${DEFAULT_TIMEOUT_MS}`,
-      ),
+    this.router = router ?? new LlmRouter(config);
+    this.embeddings = embeddings ?? new EmbeddingRouter(config);
+    // Any non-empty value enables the similarity stage; vectors always come
+    // from the embedding router (the indexed embedding model).
+    this.embeddingEnabled = Boolean(
+      this.config.get<string>('ENTITY_EXTRACTION_EMBEDDING_MODEL', '').trim(),
     );
-
-    this.ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: { timeout: this.timeoutMs },
-    });
   }
 
   /** User-specific models and keys are resolved for each queued scene. */
@@ -84,7 +68,7 @@ export class EntityExtractionClient {
   }
 
   hasEmbeddingModel(): boolean {
-    return Boolean(this.embeddingModel);
+    return this.embeddingEnabled && this.embeddings.isConfigured();
   }
 
   async extractEntities(input: {
@@ -99,12 +83,7 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractionResponse> {
-    const target = await this.getGenerationTarget(input.userId);
-    this.logger.debug(
-      `Running extraction with ${target.provider} model ${target.model}`,
-    );
-
-    const parsed = await this.generateJson<ExtractionResponse>(target, {
+    const parsed = await this.generateJson<ExtractionResponse>(input.userId, {
       systemPrompt: ENTITY_EXTRACTION_PROMPT,
       payload: JSON.stringify({
         sceneText: input.sceneText,
@@ -146,10 +125,9 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractedCrossChunkInconsistency[]> {
-    const target = await this.getGenerationTarget(input.userId);
     const parsed = await this.generateJson<{
       contradictions?: ExtractedCrossChunkInconsistency[];
-    }>(target, {
+    }>(input.userId, {
       systemPrompt: CROSS_CHUNK_INCONSISTENCY_PROMPT,
       payload: JSON.stringify({
         firstChunk: input.firstText,
@@ -178,10 +156,9 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractedCrossChunkInconsistency[]> {
-    const target = await this.getGenerationTarget(input.userId);
     const parsed = await this.generateJson<{
       contradictions?: ExtractedCrossChunkInconsistency[];
-    }>(target, {
+    }>(input.userId, {
       systemPrompt: SCENE_GROUP_AUDIT_PROMPT,
       payload: JSON.stringify({
         chunks: input.chunks,
@@ -210,9 +187,8 @@ export class EntityExtractionClient {
     }>;
     temporalContext?: TemporalAuditContext;
   }): Promise<ExtractedContinuityCheckpoint> {
-    const target = await this.getGenerationTarget(input.userId);
     const parsed = await this.generateJson<ExtractedContinuityCheckpoint>(
-      target,
+      input.userId,
       {
         systemPrompt: CONTINUITY_CHECKPOINT_PROMPT,
         payload: JSON.stringify({
@@ -236,34 +212,13 @@ export class EntityExtractionClient {
     };
   }
 
-  private async getGenerationTarget(
-    userId?: string,
-  ): Promise<GenerationTarget> {
-    const configuration =
-      await this.userApiKeys.getExtractionProviderConfiguration(userId);
-    if (configuration.provider === 'anthropic') {
-      return {
-        provider: 'anthropic',
-        ai: new Anthropic({
-          apiKey: configuration.apiKey,
-          timeout: this.timeoutMs,
-        }),
-        model: configuration.model,
-      };
-    }
-
-    return {
-      provider: 'gemini',
-      ai: new GoogleGenAI({
-        apiKey: configuration.apiKey,
-        httpOptions: { timeout: this.timeoutMs },
-      }),
-      model: configuration.model,
-    };
-  }
-
+  /**
+   * The model the user (or the server) picked goes first. With a personal key
+   * the fallbacks stay on that key; with server credentials the extraction
+   * chain follows (Claude, OpenRouter, Gemini free tier).
+   */
   private async generateJson<T>(
-    target: GenerationTarget,
+    userId: string | undefined,
     request: {
       systemPrompt: string;
       payload: string;
@@ -272,74 +227,52 @@ export class EntityExtractionClient {
       label: string;
     },
   ): Promise<T> {
-    const content =
-      target.provider === 'anthropic'
-        ? await this.generateWithAnthropic(target.ai, target.model, request)
-        : await this.generateWithGemini(target.ai, target.model, request);
-    this.logger.debug(`${request.label} response: ${content}`);
-    return this.safeParseJson<T>(content || '{}');
-  }
+    const configuration =
+      await this.userApiKeys.getExtractionProviderConfiguration(userId);
+    const isUserKey = configuration.credentialSource === 'USER';
+    const selected: LlmStep = {
+      provider: configuration.provider,
+      model: configuration.model,
+      apiKey: configuration.apiKey,
+      credential: isUserKey ? 'user' : 'server',
+    };
+    const plan = isUserKey
+      ? {
+          steps: [
+            selected,
+            ...USER_KEY_FALLBACK_MODELS[configuration.provider].map(
+              (model): LlmStep => ({ ...selected, model }),
+            ),
+          ],
+        }
+      : { leadingSteps: [selected] };
 
-  private async generateWithGemini(
-    ai: GoogleGenAI,
-    model: string,
-    request: { systemPrompt: string; payload: string; geminiSchema: unknown },
-  ): Promise<string> {
-    const response = await ai.models.generateContent({
-      model,
-      contents: [{ role: 'user', parts: [{ text: request.payload }] }],
-      config: {
-        systemInstruction: request.systemPrompt,
+    const result = await this.router.generateJson<T>({
+      useCase: 'extraction',
+      request: {
+        schemaName: request.label.toLowerCase().replace(/[^a-z0-9]+/gu, '_'),
+        system: request.systemPrompt,
+        user: request.payload,
+        schema: request.geminiSchema as Record<string, unknown>,
+        closedSchema: request.anthropicSchema,
         temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseJsonSchema: request.geminiSchema,
       },
+      parse: (text) => {
+        const value = JSON.parse(text) as unknown;
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new TypeError(`${request.label} returned invalid JSON`);
+        }
+        return value as T;
+      },
+      ...plan,
     });
-    return response.text ?? '{}';
+    this.logger.debug(
+      `${request.label} answered by ${result.provider}:${result.model}`,
+    );
+    return result.value;
   }
 
-  private async generateWithAnthropic(
-    ai: Anthropic,
-    model: string,
-    request: {
-      systemPrompt: string;
-      payload: string;
-      anthropicSchema: Record<string, unknown>;
-      label: string;
-    },
-  ): Promise<string> {
-    const response = await ai.beta.messages.create({
-      model,
-      max_tokens: ANTHROPIC_MAX_TOKENS,
-      system: request.systemPrompt,
-      messages: [{ role: 'user', content: request.payload }],
-      output_config: {
-        effort: this.anthropicEffort,
-        format: { type: 'json_schema', schema: request.anthropicSchema },
-      },
-      ...(ANTHROPIC_FALLBACK_MODELS.has(model)
-        ? {
-            betas: ['server-side-fallback-2026-07-01'],
-            fallbacks: 'default' as const,
-          }
-        : {}),
-    });
-
-    if (response.stop_reason === 'refusal') {
-      throw new Error(
-        `${request.label} refused by ${response.model} (${response.stop_details?.category ?? 'unknown'})`,
-      );
-    }
-    if (response.stop_reason === 'max_tokens') {
-      throw new Error(`${request.label} response truncated (max_tokens)`);
-    }
-
-    return response.content
-      .map((block) => (block.type === 'text' ? block.text : ''))
-      .join('');
-  }
-
-  /** Claude returns `attributes` as key/value pairs (see toAnthropicSchema). */
+  /** Strict schemas return `attributes` as key/value pairs (see toAnthropicSchema). */
   private foldAnthropicAttributes(parsed: ExtractionResponse): void {
     for (const entity of parsed.entities ?? []) {
       const pairs = entity.attributes as unknown;
@@ -355,31 +288,10 @@ export class EntityExtractionClient {
   }
 
   async createEmbedding(text: string): Promise<number[] | null> {
-    if (!this.embeddingModel) {
+    if (!this.hasEmbeddingModel()) {
       return null;
     }
-
-    this.logger.debug(`Running embeddings with model ${this.embeddingModel}`);
-
-    const response = await this.ai.models.embedContent({
-      model: this.embeddingModel,
-      contents: text,
-    });
-
-    return response.embeddings?.[0]?.values ?? null;
-  }
-
-  private safeParseJson<T>(value: string): T {
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      const start = value.indexOf('{');
-      const end = value.lastIndexOf('}');
-      if (start !== -1 && end > start) {
-        return JSON.parse(value.slice(start, end + 1)) as T;
-      }
-
-      throw new Error('Entity extraction returned invalid JSON');
-    }
+    const [embedding] = await this.embeddings.embed([text]);
+    return embedding ?? null;
   }
 }

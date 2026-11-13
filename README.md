@@ -104,7 +104,7 @@ Abrí `.env` y completá los valores de desarrollo que correspondan:
   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   ```
 
-- **Proveedores de IA:** completá las claves que vayas a usar, por ejemplo `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` o `FAL_API_KEY`. Son necesarias para sus funciones correspondientes, como chat, resúmenes, análisis, embeddings o generación de imágenes. También se pueden configurar claves personales desde los ajustes de IA de la aplicación; para guardarlas se necesita `ENCRYPTION_KEY`.
+- **Proveedores de IA:** completá `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY` y `GEMINI_API_KEY` (y `FAL_API_KEY` para imágenes). Chat, resúmenes, análisis y embeddings recorren una cadena de fallback centralizada en `src/ai/` (Anthropic, después modelos de otros proveedores vía OpenRouter y, como último recurso, la capa gratis de Gemini); los pasos sin key se saltean y cada cadena se puede cambiar con `AI_<CASO>_CHAIN` (ver `.env.example`). También se pueden configurar claves personales desde los ajustes de IA de la aplicación; para guardarlas se necesita `ENCRYPTION_KEY`.
 - **Base de datos y Redis:** para la instalación local sugerida, el `.env.example` ya usa PostgreSQL en `127.0.0.1:5432` y Redis en `localhost:6379`. Si cambiás puertos o usás servicios remotos, actualizá `DATABASE_URL`, `DIRECT_URL` y `REDIS_URL`.
 
 Si usás archivo de Firebase, colocalo en `plumia-backend/firebase-service-account.json`. El archivo está excluido de Git. En Docker Compose se monta como solo lectura dentro del contenedor.

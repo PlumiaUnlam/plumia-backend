@@ -698,7 +698,7 @@ export class ChatService {
       return this.persistNoEvidence(context, domain, conflicts);
     }
 
-    const groundedResponse = buildGroundedResponse(result, sources);
+    let groundedResponse = buildGroundedResponse(result, sources);
     if (groundedResponse.sources.length > 0) {
       const verification = await this.evidenceVerifier.verify({
         question: context.question,
@@ -713,7 +713,22 @@ export class ChatService {
       context.usage.inputTokens += verification.inputTokens;
       context.usage.outputTokens += verification.outputTokens;
       if (!verification.supported) {
-        return this.persistNoEvidence(context, domain, conflicts);
+        // Keep only the claims the verifier accepted one by one; without any,
+        // answer as if there were no evidence (the previous behaviour).
+        const kept = new Set(verification.supportedClaimIndexes ?? []);
+        const supportedClaims = result.claims.filter((_claim, index) =>
+          kept.has(index),
+        );
+        if (supportedClaims.length === 0) {
+          return this.persistNoEvidence(context, domain, conflicts);
+        }
+        groundedResponse = buildGroundedResponse(
+          { ...result, claims: supportedClaims },
+          sources,
+        );
+        if (groundedResponse.sources.length === 0) {
+          return this.persistNoEvidence(context, domain, conflicts);
+        }
       }
     }
 
