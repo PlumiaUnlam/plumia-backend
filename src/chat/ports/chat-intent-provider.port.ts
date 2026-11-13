@@ -11,10 +11,16 @@ export type ChatIntent =
   | 'unsafe'
   | 'creative';
 
+/** Datos de la obra abierta; ayudan a reconocer preguntas sobre sus entidades. */
+export interface ChatWorkContext {
+  entityNames: string[];
+}
+
 export interface ChatIntentInput {
   question: string;
   history: ChatHistoryEntry[];
   helpHint: boolean;
+  workContext?: ChatWorkContext;
   signal?: AbortSignal;
 }
 

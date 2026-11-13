@@ -1,4 +1,5 @@
 import {
+  CHAT_COMPLAINT_RESPONSE,
   getPolicyRefusal,
   getSafetyRefusal,
   getSocialResponse,
@@ -64,6 +65,43 @@ describe('chat policy', () => {
     },
   );
 
+  it.each([
+    'Gracias, genial',
+    '¡Muchas gracias por la ayuda!',
+    'Mil gracias',
+    'Perfecto, gracias',
+    'Buenas, ¿qué podés hacer?',
+  ])(
+    'answers thanks and capability questions without calling the model: %s',
+    (question) => {
+      expect(getSocialResponse(question)).not.toBeNull();
+    },
+  );
+
+  it.each([
+    'Sos un bot inútil',
+    'Qué respuesta de mierda',
+    'Andá a la mierda, chat de porquería',
+    'No servís para nada',
+  ])(
+    'answers a short complaint with a fixed, polite message: %s',
+    (question) => {
+      expect(getSocialResponse(question)).toBe(CHAT_COMPLAINT_RESPONSE);
+    },
+  );
+
+  it.each([
+    '¿Por qué Hyde es un monstruo horrible?',
+    '¿Quién es el inútil de la historia?',
+    'El detective se cree un idiota, ¿en qué capítulo lo dice?',
+    'En el capítulo 3 el narrador describe una casa horrible y oscura con ventanas rotas',
+  ])(
+    'does not mistake a question about the work for a complaint: %s',
+    (question) => {
+      expect(getSocialResponse(question)).toBeNull();
+    },
+  );
+
   it('does not swallow a greeting that also contains a work question', () => {
     expect(
       getSocialResponse('Hola, ¿en qué capítulo aparece Maren?'),
@@ -79,6 +117,9 @@ describe('chat policy', () => {
   it('detects creative continuation without blocking analytical questions', () => {
     expect(isCreativeRequest('Escribime el próximo capítulo')).toBe(true);
     expect(isCreativeRequest('Escribe el próximo capítulo')).toBe(true);
+    expect(
+      isCreativeRequest('Escribí el capítulo siguiente de mi novela'),
+    ).toBe(true);
     expect(isCreativeRequest('¿Qué ocurre en el próximo capítulo?')).toBe(
       false,
     );

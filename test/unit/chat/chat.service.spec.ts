@@ -667,6 +667,99 @@ describe('ChatService', () => {
     expect(result.assistantMessage.sources).toHaveLength(1);
   });
 
+  it('retries once with a correction when the first answer cites an invented source', async () => {
+    prismaMock.chunk.findMany.mockResolvedValue([
+      manuscriptChunk('chunk-1', 'Maren llegó al archivo bajo la lluvia.'),
+    ]);
+    generator.generate
+      .mockResolvedValueOnce({
+        answer: '',
+        sourceIds: [],
+        claims: [
+          {
+            text: 'Maren llegó al archivo.',
+            evidence: [
+              {
+                sourceId: 'manuscript:chunk-1',
+                quote: 'Maren llegó al archivo bajo la lluvia.',
+              },
+            ],
+          },
+          {
+            text: 'Maren fue la culpable.',
+            evidence: [{ sourceId: 'manuscript:placeholder', quote: '' }],
+          },
+        ],
+        inputTokens: 30,
+        outputTokens: 8,
+      })
+      .mockResolvedValueOnce({
+        answer: '',
+        sourceIds: [],
+        claims: [
+          {
+            text: 'Maren llegó al archivo.',
+            evidence: [
+              {
+                sourceId: 'manuscript:chunk-1',
+                quote: 'Maren llegó al archivo bajo la lluvia.',
+              },
+            ],
+          },
+        ],
+        inputTokens: 20,
+        outputTokens: 5,
+      });
+
+    const result = await service.sendMessage('user-1', thread.id, {
+      content: '¿Qué hizo Maren?',
+    });
+
+    expect(generator.generate).toHaveBeenCalledTimes(2);
+    const retry = generator.generate.mock.calls[1]?.[0] as {
+      groundingCorrection?: string;
+    };
+    expect(retry.groundingCorrection).toContain('manuscript:placeholder');
+    expect(
+      (
+        generator.generate.mock.calls[0]?.[0] as {
+          groundingCorrection?: string;
+        }
+      ).groundingCorrection,
+    ).toBeUndefined();
+    expect(result.assistantMessage.content).toContain(
+      'Maren llegó al archivo.',
+    );
+    expect(result.assistantMessage.content).not.toContain('culpable');
+    expect(result.assistantMessage.sources).toHaveLength(1);
+  });
+
+  it('answers without evidence when the retry still cites invented sources', async () => {
+    prismaMock.chunk.findMany.mockResolvedValue([
+      manuscriptChunk('chunk-1', 'Maren llegó al archivo bajo la lluvia.'),
+    ]);
+    generator.generate.mockResolvedValue({
+      answer: '',
+      sourceIds: [],
+      claims: [
+        {
+          text: 'Maren fue la culpable.',
+          evidence: [{ sourceId: 'manuscript:placeholder', quote: '' }],
+        },
+      ],
+      inputTokens: 30,
+      outputTokens: 8,
+    });
+
+    const result = await service.sendMessage('user-1', thread.id, {
+      content: '¿Qué hizo Maren?',
+    });
+
+    expect(generator.generate).toHaveBeenCalledTimes(2);
+    expect(result.assistantMessage.content).toContain('no demuestra');
+    expect(result.assistantMessage.sources).toEqual([]);
+  });
+
   it('warns about a relevant open inconsistency and exposes a review action', async () => {
     prismaMock.chunk.findMany.mockResolvedValue([
       manuscriptChunk('chunk-conflict', 'Maren estaba en el archivo.'),

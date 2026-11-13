@@ -15,6 +15,8 @@ export interface ChatGenerationInput {
   openConflicts?: ChatOpenConflict[];
   expectedDomain?: 'work' | 'application_help';
   workQuestionType?: WorkQuestionType;
+  /** Why the previous answer was rejected; only set on the single retry. */
+  groundingCorrection?: string;
   signal?: AbortSignal;
 }
 

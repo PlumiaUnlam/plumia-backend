@@ -104,6 +104,9 @@ ${JSON.stringify({
       : { occurrenceCount: source.occurrenceCount }),
   })),
   openConflicts: input.openConflicts ?? [],
+  ...(input.groundingCorrection
+    ? { reviewerNote: input.groundingCorrection }
+    : {}),
 })}`;
 }
 

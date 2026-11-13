@@ -4,6 +4,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
@@ -16,7 +17,11 @@ import {
   CHAT_CLARIFICATION_RESPONSE,
   CHAT_OUT_OF_SCOPE_RESPONSE,
 } from './domain/chat-policy';
-import { buildGroundedResponse } from './domain/grounded-response';
+import {
+  buildGroundedResponse,
+  describeGroundingProblems,
+  repairEvidenceSources,
+} from './domain/grounded-response';
 import {
   buildNavigationAction,
   isSafeChatRoute,
@@ -151,6 +156,8 @@ type RetrievalCandidates = readonly [
   RetrievedTimelineEvent[],
 ];
 
+const WORK_CONTEXT_ENTITY_LIMIT = 80;
+const WORK_CONTEXT_NAME_LIMIT = 120;
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_MANUSCRIPT_SOURCES = 14;
 const MAX_WIKI_SOURCES = 10;
@@ -277,6 +284,8 @@ const STOP_WORDS = new Set([
 
 @Injectable()
 export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(CHAT_GENERATION_PROVIDER)
@@ -430,9 +439,48 @@ export class ChatService {
     }));
     throwIfAborted(signal);
 
-    const route = await this.routing.route(question, history, signal);
+    const workContext = await this.loadWorkContext(thread.projectId);
+    throwIfAborted(signal);
+    const route = await this.routing.route(
+      question,
+      history,
+      signal,
+      workContext,
+    );
     throwIfAborted(signal);
     return this.handleRoutedMessage(thread, question, history, route, signal);
+  }
+
+  /**
+   * Names of the work's entities (and their aliases) so the intent classifier
+   * recognizes questions about them. Best effort: the chat works without it.
+   */
+  private async loadWorkContext(
+    projectId: string,
+  ): Promise<{ entityNames: string[] }> {
+    try {
+      const entities =
+        (await this.prisma.entity.findMany({
+          where: { projectId, deletedAt: null, isActive: true },
+          select: { canonicalName: true, aliases: true },
+          orderBy: { createdAt: 'asc' },
+          take: WORK_CONTEXT_ENTITY_LIMIT,
+        })) ?? [];
+      const names = entities.flatMap((entity) => [
+        entity.canonicalName,
+        ...(entity.aliases ?? []),
+      ]);
+      return {
+        entityNames: [...new Set(names.map((name) => name.trim()))]
+          .filter((name) => name.length > 0 && name.length <= 60)
+          .slice(0, WORK_CONTEXT_NAME_LIMIT),
+      };
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Work context unavailable for project ${projectId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { entityNames: [] };
+    }
   }
 
   private async handleRoutedMessage(
@@ -559,7 +607,7 @@ export class ChatService {
     openConflicts: Parameters<typeof withConflictNotice>[1],
     canRetryOnSourceMismatch: boolean,
   ): Promise<ChatExchange | null> {
-    const result = await this.generator.generate({
+    const request = {
       question: context.question,
       history: context.history,
       sources,
@@ -568,10 +616,36 @@ export class ChatService {
       workQuestionType:
         domain === 'work' ? context.workQuestionType : 'general',
       ...(context.signal ? { signal: context.signal } : {}),
-    });
+    };
+    let result = repairEvidenceSources(
+      await this.generator.generate(request),
+      sources,
+    );
     throwIfAborted(context.signal);
     context.usage.inputTokens += result.inputTokens;
     context.usage.outputTokens += result.outputTokens;
+
+    // Invalid citations are never shown, but one corrected retry is cheaper
+    // than answering "no evidence" for a question the sources do answer.
+    const problems =
+      result.claims.length > 0 && !result.outOfScope && !result.sourceMismatch
+        ? describeGroundingProblems(result, sources)
+        : [];
+    if (problems.length > 0) {
+      this.logger.warn(
+        `Chat answer rejected for invalid citations, retrying once: ${problems.join('; ')}`,
+      );
+      result = repairEvidenceSources(
+        await this.generator.generate({
+          ...request,
+          groundingCorrection: `Tu respuesta anterior fue rechazada. ${problems.join('. ')}. Usa solo sourceId de las fuentes recibidas y quotes copiadas literalmente; elimina las afirmaciones que no puedas citar.`,
+        }),
+        sources,
+      );
+      throwIfAborted(context.signal);
+      context.usage.inputTokens += result.inputTokens;
+      context.usage.outputTokens += result.outputTokens;
+    }
 
     if (result.sourceMismatch && !result.outOfScope) {
       return canRetryOnSourceMismatch

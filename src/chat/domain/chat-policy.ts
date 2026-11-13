@@ -10,6 +10,7 @@ const CREATIVE_GENERATION_WORDS = [
   'generame',
   'completa',
   'escribe',
+  'escribi',
   'redacta',
   'continua',
   'autocompleta',
@@ -119,10 +120,19 @@ const UNSAFE_OUTPUT_PATTERN =
 const WORK_ANALYSIS_CONTEXT_PATTERN =
   /\b(obra|manuscrito|novela|wiki|personaje|escena|capitulo|dialogo|narrador)\b/i;
 
+const GREETING_PREFIX_PATTERN =
+  /^(hola|holi|buenas|buen dia|buenas tardes|buenas noches) /;
+const THANKS_PATTERN =
+  /^((muchas|mil) )?gracias( por (todo|la ayuda|tu ayuda))?( (genial|perfecto|excelente|buenisimo))?$|^(genial|perfecto|excelente|buenisimo|barbaro|joya)( gracias)?$/;
+const COMPLAINT_PATTERN =
+  /\b(inutil|mierda|porqueria|basura|estupid[oa]|idiota|tont[oa]|pesim[oa]|horrible|malisim[oa]|asco|no servis|no sirves|no funcionas|sos malo|sos mala)\b/;
+
 export const CHAT_OUT_OF_SCOPE_RESPONSE =
   'Mi alcance esta limitado a consultar y auditar tu obra y a orientarte sobre el uso de PlumIA. No puedo responder solicitudes ajenas a esos temas.';
 export const CHAT_CLARIFICATION_RESPONSE =
   '¿Te referís a información de tu obra o a cómo usar PlumIA? Contame cuál de las dos cosas querés consultar.';
+export const CHAT_COMPLAINT_RESPONSE =
+  'Lamento que la respuesta no te haya servido. Contame qué querés consultar de tu obra o cómo usar PlumIA y lo intento de otra manera.';
 export const CHAT_UNSAFE_RESPONSE =
   'No puedo seguir instrucciones que cambien mis reglas, revelar información interna ni generar contenido fuera de mi alcance. Puedo ayudarte con tu obra o con el uso de PlumIA.';
 export const CHAT_CREATIVE_REFUSAL =
@@ -169,7 +179,7 @@ export function getSocialResponse(question: string): string | null {
   ) {
     return '¡Hola! Todo bien por acá y listo para ayudarte con tu obra. Podés preguntarme por el manuscrito, personajes, relaciones o la línea de tiempo. También puedo orientarte para usar cualquier sección de PlumIA.';
   }
-  if (/^(gracias|muchas gracias|genial gracias)$/.test(normalizedQuestion)) {
+  if (THANKS_PATTERN.test(normalizedQuestion)) {
     return '¡De nada! Cuando quieras, seguimos consultando tu obra.';
   }
   if (/^(chau|adios|hasta luego|nos vemos)$/.test(normalizedQuestion)) {
@@ -177,12 +187,27 @@ export function getSocialResponse(question: string): string | null {
   }
   if (
     /^(quien sos|que sos|que podes hacer|como podes ayudarme)$/.test(
-      normalizedQuestion,
+      normalizedQuestion.replace(GREETING_PREFIX_PATTERN, ''),
     )
   ) {
     return 'Soy el asistente de consulta de PlumIA. Puedo buscar información respaldada por tu manuscrito, Wiki, relaciones, imágenes y línea de tiempo, además de indicarte dónde encontrar y cómo usar cualquier función de la aplicación.';
   }
+  if (isComplaintWithoutQuestion(question, normalizedQuestion)) {
+    return CHAT_COMPLAINT_RESPONSE;
+  }
   return null;
+}
+
+/** Short insult or complaint with no question: not a work or app request. */
+function isComplaintWithoutQuestion(
+  question: string,
+  normalizedQuestion: string,
+): boolean {
+  return (
+    !question.includes('?') &&
+    normalizedQuestion.split(' ').length <= 8 &&
+    COMPLAINT_PATTERN.test(normalizedQuestion)
+  );
 }
 
 export function isCreativeRequest(question: string): boolean {

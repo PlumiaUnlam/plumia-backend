@@ -151,6 +151,7 @@ export class AiChatGenerationAdapter
             content: entry.content.slice(0, 1_000),
           })),
           helpHint: input.helpHint,
+          ...(input.workContext ? { workContext: input.workContext } : {}),
         }),
         schema: INTENT_SCHEMA,
         temperature: 0,

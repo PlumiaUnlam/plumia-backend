@@ -13,6 +13,7 @@ import {
 import {
   CHAT_INTENT_PROVIDER,
   type ChatIntentProvider,
+  type ChatWorkContext,
 } from './ports/chat-intent-provider.port';
 import type { ChatHistoryEntry } from './ports/chat-generation-provider.port';
 import type { WorkQuestionType } from './domain/work-question-type';
@@ -48,6 +49,7 @@ export class ChatRoutingService {
     question: string,
     history: ChatHistoryEntry[],
     signal?: AbortSignal,
+    workContext?: ChatWorkContext,
   ): Promise<ChatRoute> {
     const safetyRefusal = getSafetyRefusal(question);
     if (safetyRefusal) {
@@ -69,6 +71,9 @@ export class ChatRoutingService {
       question,
       history,
       helpHint,
+      ...(workContext && workContext.entityNames.length > 0
+        ? { workContext }
+        : {}),
       ...(signal ? { signal } : {}),
     });
     const usage = {

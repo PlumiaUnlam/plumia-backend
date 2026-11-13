@@ -64,7 +64,7 @@ function anthropicResponse(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    model: 'claude-opus-5-5',
+    model: 'claude-sonnet-5-5',
     stop_reason: 'end_turn',
     stop_details: null,
     content: [{ type: 'text', text: JSON.stringify(value) }],
@@ -131,7 +131,7 @@ describe('AiChatGenerationAdapter', () => {
       Record<string, unknown>,
     ];
     expect(request).toMatchObject({
-      model: 'claude-opus-5-5',
+      model: 'claude-sonnet-5-5',
       output_config: {
         effort: 'low',
         format: {
@@ -241,7 +241,7 @@ describe('AiChatGenerationAdapter', () => {
     const requests = mockGenerateContent.mock.calls as Array<[GeminiRequest]>;
     expect(requests.map(([request]) => request.model)).toEqual([
       'gemini-3.6-flash',
-      'gemini-3.5-flash',
+      'gemini-3.1-flash-lite',
     ]);
   });
 
@@ -383,7 +383,7 @@ describe('AiChatGenerationAdapter', () => {
         helpHint: false,
       }),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(3);
   });
 
   it('verifies all claims in one structured call using their cited quotes', async () => {

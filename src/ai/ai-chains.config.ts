@@ -22,35 +22,42 @@ import {
  */
 export const DEFAULT_LLM_CHAINS: Record<LlmUseCase, string> = {
   chat_answer: [
-    'anthropic:claude-opus-5-5',
+    'anthropic:claude-sonnet-5-5',
     'openrouter:anthropic/claude-sonnet-5.5',
     'openrouter:openai/gpt-6.1-sol',
     'openrouter:google/gemini-3.8-flash',
     'openrouter:deepseek/deepseek-v4-pro',
     'openrouter:openrouter/free',
     'gemini:gemini-3.6-flash',
+    'gemini:gemini-3.1-flash-lite',
     'gemini:gemini-3.5-flash',
+    'gemini:gemini-3.8-flash',
   ].join(','),
   chat_intent: [
     'anthropic:claude-haiku-5-5',
+    'openrouter:anthropic/claude-haiku-5.5',
     'openrouter:google/gemini-3.6-flash',
     'openrouter:openai/gpt-5.4-mini',
     'openrouter:deepseek/deepseek-v4-flash',
     'openrouter:openrouter/free',
     'gemini:gemini-3.6-flash',
     'gemini:gemini-3.5-flash-lite',
+    'gemini:gemini-3.1-flash-lite',
   ].join(','),
   chat_verify: [
     'anthropic:claude-haiku-5-5',
+    'openrouter:anthropic/claude-haiku-5.5',
     'openrouter:google/gemini-3.6-flash',
     'openrouter:openai/gpt-5.4-mini',
     'openrouter:deepseek/deepseek-v4-flash',
     'openrouter:openrouter/free',
     'gemini:gemini-3.6-flash',
     'gemini:gemini-3.5-flash-lite',
+    'gemini:gemini-3.1-flash-lite',
   ].join(','),
   summary: [
     'anthropic:claude-haiku-5-5',
+    'openrouter:anthropic/claude-haiku-5.5',
     'openrouter:google/gemini-3.1-flash-lite',
     'openrouter:openai/gpt-5.4-mini',
     'openrouter:mistralai/mistral-small-2603',
@@ -68,6 +75,7 @@ export const DEFAULT_LLM_CHAINS: Record<LlmUseCase, string> = {
     'openrouter:openrouter/free',
     'gemini:gemini-3.6-flash',
     'gemini:gemini-3.1-flash-lite',
+    'gemini:gemini-3.8-flash',
   ].join(','),
 };
 
